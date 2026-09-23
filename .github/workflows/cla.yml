@@ -1,0 +1,48 @@
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+name: CLA signatures
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+# Serialise writes for each PR. The script scans all current comments so a
+# replaced pending event does not discard a still-present acceptance comment.
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  cla:
+    name: Record and verify CLA
+    if: >-
+      github.repository == 'SNatangelo/Callimachus' &&
+      (github.event_name == 'pull_request_target' ||
+       (github.event.issue.pull_request &&
+        (github.event.comment.body == 'recheck' ||
+         github.event.comment.body == 'I have read and accept the Callimachus CLA v1.1 for my own contributions.')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read trusted workflow code only
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, pinned 2026-09-23
+        with:
+          repository: SNatangelo/Callimachus
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/cla
+          sparse-checkout-cone-mode: false
+      - name: Archive and verify acceptances
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLA_ARCHIVE_TOKEN: ${{ secrets.CLA_ARCHIVE_TOKEN }}
+          CLA_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: python3 .github/cla/cla_bot.py
