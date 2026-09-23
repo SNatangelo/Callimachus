@@ -240,13 +240,22 @@ def execute(public: API, private: API, event: dict, env: dict):
                 missing.append(login)
         # The bot comment discloses no data retrieved from the private archive.
         state_text = ("Awaiting acceptance: " + ", ".join("@" + x for x in sorted(missing))) if missing else "All identified contributors are covered by the configured check."
-        body = (f"{MARKER}\n## Callimachus CLA v{VERSION}\n\n{state_text}\n\n"
-                f"Read the [exact agreement]({document_url}) before accepting. For contributions whose rights you personally own, post this exact comment:\n\n"
-                f"```text\n{SIGN}\n```\n\n"
-                "You retain copyright and permit alternative licensing, including paid proprietary licensing, subject to the agreement's public-source commitment. "
-                "Your acceptance comment is public; the automated evidence archive is private. Do not post email addresses, legal names or employer documents here. "
-                "For employer/company-owned work, arrange verified written acceptance privately with hello@callimachus.science; a green check does not establish employer authority. "
-                "Comment `recheck` to run the check again.\n")
+        if missing:
+            body = (f"{MARKER}\n## CLA signature required\n\n"
+                    "Thanks for contributing to Callimachus. Before this PR can be merged:\n\n"
+                    f"1. **Read the [Callimachus CLA v{VERSION}]({document_url}).**\n"
+                    "2. If you agree **and you personally own the rights to your contribution**, copy the exact sentence below.\n"
+                    "3. Post it as a new comment in this pull request.\n\n"
+                    f"```text\n{SIGN}\n```\n\n"
+                    f"**Waiting for:** {', '.join('@' + x for x in sorted(missing))}\n\n"
+                    "You keep the copyright in your contribution. The CLA permits the maintainer to distribute it under the public AGPL licence and under alternative licences, including paid proprietary licences, subject to the CLA terms.\n\n"
+                    "**If your employer or another organisation owns the rights to this contribution, do not use the sentence above.** Contact hello@callimachus.science so the actual rights holder can provide the required authorisation.\n\n"
+                    "The acceptance comment is public; the detailed evidence archive is private. Do not post email addresses, legal names or employer documents here. "
+                    "Comment `recheck` if the check needs to be run again.\n")
+        else:
+            body = (f"{MARKER}\n## CLA verified\n\n"
+                    "All identified contributors are covered by the Callimachus CLA check. ✅\n\n"
+                    f"[View the exact Callimachus CLA v{VERSION}]({document_url}).\n")
         if prompts:
             if prompts[0]["body"] != body:
                 public.request("PATCH", f"/repos/{SOURCE}/issues/comments/{prompts[0]['id']}", {"body": body})
