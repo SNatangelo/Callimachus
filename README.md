@@ -3,7 +3,8 @@
 Repository reserved for the Callimachus public release.
 
 This repository contains curated public tests and workflows. Application source
-and dependencies are still pending; CI reports this state until they are added.
+and dependencies are still pending; the workflows are manual-only until the
+public release is ready.
 The development repository's Git history has not been imported.
 
 ## Contributor licensing
