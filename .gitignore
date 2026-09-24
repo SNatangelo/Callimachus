@@ -1,0 +1,15 @@
+# .gitignore
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Environment / secrets — never commit
+.env
+.env.*
+*.env
+!.env.example
+
+# Runtime state / caches
+/storage/
+core/storage/
+core/content_store/
+/runs/
