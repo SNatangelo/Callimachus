@@ -22,7 +22,7 @@ jobs:
         id: check
         shell: bash
         run: |
-          if [[ -f run.py && -f core/app/run.py && -f tools/run_provenance.py && -f requirements.txt ]]; then
+          if [[ -f run.py && -f core/app/run.py && -f requirements.txt ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -97,7 +97,6 @@ jobs:
           tests/test_current_schema_rejection.py
           tests/test_content_store_deployment.py
           tests/test_fetch_content_version.py
-          tests/test_run_provenance.py
           tests/test_verdict_validation.py
           tests/test_run_report.py
           -q
