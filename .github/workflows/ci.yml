@@ -1,0 +1,151 @@
+# .github/workflows/ci.yml
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check release source
+        id: check
+        shell: bash
+        run: |
+          if [[ -f run.py && -f core/app/run.py && -f tools/run_provenance.py && -f requirements.txt ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Application source and requirements have not been imported yet; test jobs are pending."
+          fi
+
+  desktop-gui:
+    needs: source
+    if: needs.source.outputs.ready == 'true' && (github.event_name == 'pull_request' || github.event_name == 'push')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install desktop test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-gui.txt pytest
+      - name: Run desktop tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+          CITATION_VERIFIER_LLM_BACKEND: dummy
+        run: >-
+          python -m pytest
+          tests/test_desktop_projection.py
+          tests/test_desktop_config.py
+          tests/test_cache_maintenance.py
+          tests/test_desktop_command.py
+          tests/test_desktop_gui_optional.py
+          tests/test_guided_fetch_viewmodel.py
+          tests/test_guided_fetch_controller.py
+          tests/test_guided_fetch_gui_optional.py
+          -q
+
+  fast:
+    needs: source
+    if: needs.source.outputs.ready == 'true' && (github.event_name == 'pull_request' || github.event_name == 'push')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+      - name: Run core tests
+        env:
+          CITATION_VERIFIER_LLM_BACKEND: dummy
+        run: >-
+          python -m pytest
+          tests/verify/claim_evidence/domain/test_policy.py
+          tests/test_hidden_source_grounding.py
+          tests/test_resume_hash_integrity.py
+          tests/test_pipeline_end_to_end.py
+          tests/test_db_persistence.py
+          tests/test_current_schema_rejection.py
+          tests/test_content_store_deployment.py
+          tests/test_fetch_content_version.py
+          tests/test_run_provenance.py
+          tests/test_verdict_validation.py
+          tests/test_run_report.py
+          -q
+
+  full:
+    needs: source
+    if: needs.source.outputs.ready == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+      - name: Run selected test suite
+        env:
+          CITATION_VERIFIER_LLM_BACKEND: dummy
+        run: python -m pytest tests -q
+
+  full-matrix:
+    needs: source
+    if: needs.source.outputs.ready == 'true' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+      - name: Run selected test suite
+        env:
+          CITATION_VERIFIER_LLM_BACKEND: dummy
+        run: python -m pytest tests -q

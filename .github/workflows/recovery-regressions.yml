@@ -1,0 +1,105 @@
+# .github/workflows/recovery-regressions.yml
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+name: Recovery regressions
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recovery-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check release source
+        id: check
+        shell: bash
+        run: |
+          if [[ -f run.py && -f core/app/run.py && -f tools/run_provenance.py && -f requirements.txt ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Application source and requirements have not been imported yet; recovery tests are pending."
+          fi
+
+  native-recovery:
+    needs: source
+    if: needs.source.outputs.ready == 'true'
+    name: Recovery (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Run recovery tests
+        env:
+          CITATION_VERIFIER_LLM_BACKEND: dummy
+          PYTHONUTF8: "1"
+        run: >-
+          python -m pytest
+          tests/test_recovery_regressions.py
+          tests/test_pause_schema_recovery.py
+          tests/test_report_bibliography.py
+          tests/test_tasks_skip_fetch.py
+          tests/test_resolve_cooldown_resume.py
+          tests/test_resolve_deferred_progress.py
+          tests/test_recovery_checkpoint_selection.py
+          tests/test_pymupdf_import_migration.py
+          tests/test_semantic_scholar_rate_floor.py
+          tests/test_source_identity_attestation_phase.py
+          tests/infra/test_phase_event_storage.py
+          tests/infra/test_current_run_schema.py
+          tests/test_audit_readiness.py
+          tests/test_resume_hash_integrity.py
+          tests/test_db_persistence.py
+          -q
+      - name: Run CLI startup recovery tests
+        env:
+          PYTHONUTF8: "1"
+        run: >-
+          python -m pytest tests/test_cli_help.py -q
+          -k "root_help_uses_only_the_standard_library or missing_requirements or missing_requirement_install_command or missing_env or keyboard_interrupt or resume_command or pdf_backend_preflight"
+      - name: Run configuration safety tests
+        env:
+          CITATION_VERIFIER_LLM_BACKEND: dummy
+          PYTHONUTF8: "1"
+        run: >-
+          python -m pytest
+          tests/test_invocation.py
+          tests/test_configure_deployment.py
+          -q
+      - name: Run integrity recovery tests
+        if: runner.os == 'Linux'
+        env:
+          CITATION_VERIFIER_LLM_BACKEND: dummy
+          PYTHONUTF8: "1"
+        run: >-
+          python -m pytest
+          tests/infra/integrity/test_admission.py
+          tests/test_cache_maintenance.py
+          -q

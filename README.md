@@ -2,7 +2,9 @@
 
 Repository reserved for the Callimachus public release.
 
-This setup does not import the development repository or its history.
+This repository contains curated public tests and workflows. Application source
+and dependencies are still pending; CI reports this state until they are added.
+The development repository's Git history has not been imported.
 
 ## Contributor licensing
 
