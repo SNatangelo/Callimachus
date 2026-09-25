@@ -1,0 +1,11 @@
+{
+  "_comment": "Date phrases a not-yet-published source dates itself with instead of a year — APA 'in press', 'forthcoming', etc. An entry carrying one is indexed under a no-year key, and a citation carrying one ('(Author, in press)') is matched to it. Editable without touching code. All phrases fold to a single no-year key, so a citation and its entry meet even when worded slightly differently; two such works by one author in one year stay ambiguous (reported, not guessed).",
+  "noyear_markers": [
+    "in press",
+    "forthcoming",
+    "in preparation",
+    "under review",
+    "n.d.",
+    "no date"
+  ]
+}

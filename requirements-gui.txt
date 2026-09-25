@@ -1,0 +1,7 @@
+# requirements-gui.txt
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+# Optional Callimachus desktop interface and Guided Fetch browser automation.
+# Google Chrome is an external prerequisite and is never downloaded here.
+PySide6
+playwright

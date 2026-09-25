@@ -1,27 +1,27 @@
 # Contributing to Callimachus
 
-The public project licence is `AGPL-3.0-only`, except for components with their own notices. The release import must preserve the complete `LICENSE` from the development repository and all third-party notices.
+## Public licence
 
-## Contributor agreement
+Callimachus project code, tests and accompanying documentation are available under the GNU Affero General Public License, version 3 only (`AGPL-3.0-only`). See [LICENSE](LICENSE) and [LICENSING.md](LICENSING.md). Separately identified third-party components retain their own terms.
 
-Read [CLA.md](CLA.md), version **1.1**. You keep copyright and grant additional rights for alternative licensing, including paid proprietary licences, subject to the agreement's public-source commitment.
+## Contributor License Agreement
 
-For rights you personally own, the GitHub workflow posts a link to the exact, commit-pinned agreement. After reading it, post the following comment on your pull request:
+Before a contribution is merged, the relevant contributor or rights holder must accept the [Callimachus Contributor License Agreement, version 1.0](CLA.md).
 
-```text
-I have read and accept the Callimachus CLA v1.1 for my own contributions.
-```
+**You keep your copyright. The CLA authorises Stefano Natangelo to include your contribution in Callimachus and distribute it under other licences, including paid proprietary licences, without seeking your permission again or owing you royalties solely under the CLA. In return, an included contribution must also remain available under the public project licence that applied when you submitted it.** See the complete CLA for the terms.
 
-This comment is public. The workflow stores an evidence copy, the agreement text/hash, GitHub account identifier and PR/commit references in a separate private repository. Do not post private contact details or employer documents in a PR. There is no hosted CLA Assistant account, signing Gist or metadata form in this setup.
+The designated CLA Assistant process asks you to authenticate with GitHub and identify yourself and the rights holder. Accept the version presented by the bot before merge. Acceptance normally covers later contributions within the scope of that version; a revised agreement requires fresh acceptance. If the check is unavailable, contact hello@callimachus.science for an alternative written acceptance. A checkbox in a pull request is not a substitute for acceptance of the CLA.
 
-The acceptance covers the signing PR and subsequent contributions within the agreement's scope. A new CLA version requires fresh acceptance. Acceptance of an older agreement is not silently migrated. All GitHub-linked authors/coauthors and the submitter must be covered; the maintainer is exempt only for his own contributions. Unknown/unlinked authors fail the check instead of being ignored.
+Sign in your own capacity only for rights you own or have authority to license. For company-owned contributions, an authorised representative must identify and bind the actual rights holder, or provide adequate written authorisation. Opening a pull request does not entitle you to license another contributor's work. We may request confirmation from the rights holder before merging.
 
-For employer/company-owned work, or other rights you do not personally own, contact **hello@callimachus.science** for verified written acceptance and authority checks. The automatic personal-signature check does not replace those checks. No corporate evidence is to be published in a public comment.
+The signing privacy information is included at the end of [CLA.md](CLA.md). Do not publish private signing details in an issue or pull request.
 
-Comment `recheck` to retry after a configuration problem. Merely using or forking Callimachus under its public licence does not require the CLA.
+You do not need to sign the CLA merely to use, study, fork or distribute the software under its public licence, or to report a bug without contributing material for incorporation. Choosing not to sign does not remove your AGPL rights; it means we will not merge material requiring the additional permissions.
 
-## Pull requests
+## Preparing a pull request
 
-Keep changes focused, explain their purpose and testing, preserve attribution, and identify third-party code and all other rights holders. Do not include credentials or private material. A signed CLA does not relicense dependencies or someone else's code.
+Keep each pull request focused and explain what it changes, why it is needed and how it was tested. Discuss substantial changes in an issue first. Preserve existing copyright and licence notices.
 
-Maintainer setup: [SETUP_CLA.md](SETUP_CLA.md).
+Identify copied or adapted third-party material, its source and licence. A third-party dependency or copied snippet does not become relicensable merely because the person submitting it signs the CLA. Identify all other authors or rights holders whose work is included.
+
+Contributions must not include credentials, private records or material you are not authorised to share.

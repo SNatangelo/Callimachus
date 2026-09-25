@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "Reference coverage: how many of the references a document lists are actually",
+    "cited in its body.  A document that lists N references normally cites nearly",
+    "all of them, so a low coverage means the body's citation markers were lost —",
+    "not that the author cited nothing.",
+    "",
+    "This is the only signal that catches a SILENT parse failure.  The orphan count",
+    "cannot: an orphan is a citation without a source, and a citation that was never",
+    "detected in the first place cannot be orphaned.  A .txt of a paper that cites by",
+    "superscript parses to zero markers, zero claims and ZERO ORPHANS — the plain-text",
+    "format carries no superscript information, so 'in all cases.35' is just a number.",
+    "Measured on the corpus: healthy parses sit between 76% and 100%; parses whose",
+    "markers were eaten sit at 0-33%.  The threshold below is set inside that gap.",
+    "",
+    "min_references: below this many references the ratio is meaningless (a paper with",
+    "two entries citing one of them is 50% and perfectly fine), so no warning is made."
+  ],
+  "min_coverage_pct": 50,
+  "min_references": 5
+}

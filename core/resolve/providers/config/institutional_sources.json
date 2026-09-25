@@ -1,0 +1,68 @@
+{
+  "_comment": "Config for the `institutional` resolver (grey-literature / institutional reports). Everything here is data, editable without touching code. NO institution names are hardcoded in the resolver: identity comes from the citation itself, authority from the domain CLASSES below.",
+
+  "authoritative_tlds": [
+    ".gov",
+    ".int",
+    ".edu",
+    ".mil"
+  ],
+
+  "_authoritative_tlds_comment": "A result domain ending in one of these TLDs (including multi-label public suffixes like `.gov.uk`, `.edu.au`) is treated as an authoritative primary source. Matched as a dotted suffix on the host.",
+
+  "authoritative_domain_patterns": [
+    "europa.eu",
+    "un.org",
+    "who.int",
+    "oecd.org",
+    "worldbank.org",
+    "imf.org",
+    "wto.org",
+    "unesco.org",
+    "unicef.org",
+    "nato.int",
+    "coe.int",
+    "ecb.europa.eu"
+  ],
+
+  "_authoritative_domain_patterns_comment": "Governmental / inter-governmental domains that do NOT carry an authoritative TLD (many IGOs sit on `.org`). A result host that equals or is a subdomain of one of these is authoritative. Add/remove freely; this is not a detection list for institutions, only a trust-class list for domains.",
+
+  "org_author_words": [
+    "organization", "organisation", "agency", "administration", "authority",
+    "commission", "council", "committee", "institute", "institution",
+    "ministry", "department", "directorate", "programme", "program",
+    "foundation", "association", "federation", "network", "consortium",
+    "panel", "board", "bureau", "office", "secretariat", "assembly",
+    "centre", "center", "observatory", "society", "college", "academy",
+    "nations", "union", "bank", "fund", "group", "task force", "taskforce"
+  ],
+
+  "_org_author_words_comment": "If the citation's leading author block contains one of these words, the author is an organisation, not a person. Detection signal #1.",
+
+  "acronym_min_len": 2,
+  "acronym_max_len": 7,
+
+  "_acronym_comment": "An all-caps token of length in [acronym_min_len, acronym_max_len] in the author block (optionally with a spelled-out expansion in parentheses) is an organisational-author signal. Detection signal #2.",
+
+  "report_like_words": [
+    "report", "reports", "guidance", "guideline", "guidelines",
+    "technical report", "working paper", "white paper", "position paper",
+    "assessment", "recommendation", "recommendations", "resolution",
+    "directive", "regulation", "factsheet", "fact sheet", "communication",
+    "opinion", "bulletin", "briefing", "brief", "framework", "roadmap",
+    "action plan", "strategy", "standard", "standards", "protocol",
+    "annual report", "surveillance report", "consultation", "circular",
+    "notice", "memorandum", "statement", "declaration"
+  ],
+
+  "_report_like_words_comment": "If the title/type looks like grey-literature output, that is detection signal #3 (an organisational author is still required for a positive detection).",
+
+  "title_overlap_min": 0.6,
+  "_title_overlap_min_comment": "Minimum overlap between the cited title and a candidate web result's title/page for the result to be accepted as the same report.",
+
+  "max_results": 6,
+  "_max_results_comment": "How many web-search results to consider per lookup.",
+
+  "min_title_words": 3,
+  "_min_title_words_comment": "Do not run a web lookup on a title shorter than this (too generic)."
+}

@@ -1,0 +1,17 @@
+# requirements-ocr.txt
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+# Callimachus — portable OCR fallback (pure pip, no system binaries).
+# Install only if you need to OCR scanned PDFs without a text layer:
+#   pip install -r requirements-ocr.txt
+# OCRmyPDF + Tesseract is the recommended backend when its platform packages
+# are available. This fallback works without apt, Homebrew, Tesseract, or
+# Poppler, so it remains usable across supported desktop platforms.
+
+pypdfium2>=4            # render PDF pages to images (bundles the PDFium binary)
+# rapidocr-onnxruntime was renamed upstream to rapidocr, with the engine split out;
+# the old package caps at Python <3.13, so it cannot install on 3.13+.
+# core/fetch/extraction/ocr.py imports either name, so both layouts keep working.
+rapidocr>=3             # OCR engine with bundled models (CPU, no torch)
+onnxruntime>=1.23; sys_platform == "darwin" and platform_machine == "x86_64"  # latest Intel macOS wheel
+onnxruntime>=1.24; sys_platform != "darwin" or platform_machine != "x86_64"  # inference engine

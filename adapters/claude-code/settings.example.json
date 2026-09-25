@@ -1,0 +1,25 @@
+{
+  "_comment": "Copy these hooks into your project's (or better, USER-level) .claude/settings.json so the citation-verifier gate is un-skippable. citation_arm.py (UserPromptSubmit) arms a verification task from your wording; citation_verify_stop.py (Stop) blocks the turn until a signed run exists — and, when a manuscript is known and the `claude` CLI is present, launches the autonomous runner itself. Provide the signing secret to the HOOK environment ONLY (not the agent's shell), ideally via a file: export CITATION_VERIFIER_SIGNING_KEY_FILE=/etc/citation-verifier/signing.key . Keep these in user-level settings so the agent cannot disable them by editing the repo.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 adapters/claude-code/hooks/citation_arm.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 adapters/claude-code/hooks/citation_verify_stop.py"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,368 @@
+{
+  "resolve_order": [
+    "openalex",
+    "springer_meta",
+    "jmlr",
+    "neurips",
+    "openreview",
+    "tac",
+    "deeplearningbook",
+    "princeton_bialek",
+    "aaai",
+    "acm",
+    "acl",
+    "semantic_scholar",
+    "arxiv",
+    "core",
+    "datacite",
+    "lens",
+    "biblio_glutton",
+    "jstor_stable",
+    "crossref_metadata",
+    "scholar_archive",
+    "un_digital_library",
+    "courtlistener",
+    "institutional_search"
+  ],
+  "fetch_order": [
+    "deeplearningbook",
+    "princeton_bialek",
+    "acl",
+    "arxiv",
+    "biorxiv",
+    "core",
+    "elsevier",
+    "springer_openaccess",
+    "wiley",
+    "curated_copies",
+    "cvf",
+    "europepmc",
+    "openalex",
+    "openai_reports",
+    "pmlr",
+    "repository",
+    "ssrn",
+    "unpaywall",
+    "zenodo"
+  ],
+  "default_rate": {
+    "per_second": 10
+  },
+  "providers": {
+    "acl": {
+      "enabled": true
+    },
+    "wayback": {
+      "enabled": true,
+      "rate": {
+        "per_seconds": [
+          1,
+          2
+        ]
+      }
+    },
+    "arxiv": {
+      "enabled": true,
+      "preprint_host": true,
+      "rate": {
+        "per_seconds": [
+          1,
+          3
+        ]
+      }
+    },
+    "biorxiv": {
+      "enabled": true,
+      "preprint_host": true
+    },
+    "core": {
+      "enabled": true,
+      "api_key_env": "CORE_API_KEY",
+      "rate": {
+        "per_second": 2
+      }
+    },
+    "elsevier": {
+      "enabled": true,
+      "api_key_env": "ELSEVIER_API_KEY",
+      "rate": {
+        "per_second": 2
+      }
+    },
+    "springer_meta": {
+      "enabled": true,
+      "api_key_env": "SPRINGER_NATURE_META_API_KEY"
+    },
+    "springer_openaccess": {
+      "enabled": true,
+      "api_key_env": "SPRINGER_NATURE_OPEN_ACCESS_API_KEY"
+    },
+    "springer_nature": {
+      "enabled": true,
+      "api_key_envs": [
+        "SPRINGER_NATURE_META_API_KEY",
+        "SPRINGER_NATURE_OPEN_ACCESS_API_KEY"
+      ],
+      "rate": {
+        "per_second": 1
+      }
+    },
+    "wiley": {
+      "enabled": true,
+      "api_key_env": "TDM_API_TOKEN",
+      "rate": {
+        "per_seconds": [
+          1,
+          10
+        ]
+      }
+    },
+    "curated_copies": {
+      "enabled": true
+    },
+    "crossref": {
+      "enabled": true,
+      "rate": {
+        "per_second": 20
+      }
+    },
+    "crossref_metadata": {
+      "enabled": true
+    },
+    "crossref_coordinate_occupancy": {
+      "enabled": true,
+      "rate": {
+        "per_second": 20
+      }
+    },
+    "biblio_glutton": {
+      "enabled": true
+    },
+    "courtlistener": {
+      "enabled": true,
+      "api_key_env": "COURTLISTENER_API_TOKEN",
+      "rate": {
+        "per_second": 1
+      }
+    },
+    "cvf": {
+      "enabled": true
+    },
+    "pmlr": {
+      "enabled": true
+    },
+    "openai_reports": {
+      "enabled": true
+    },
+    "datacite": {
+      "enabled": true,
+      "rate": {
+        "per_second": 10
+      }
+    },
+    "europepmc": {
+      "enabled": true
+    },
+    "googlebooks": {
+      "enabled": true,
+      "rate": {
+        "per_second": 5
+      }
+    },
+    "lens": {
+      "enabled": true,
+      "rate": {
+        "per_second": 1
+      }
+    },
+    "jmlr": {
+      "enabled": true
+    },
+    "ncbi": {
+      "enabled": true,
+      "api_key_env": "NCBI_API_KEY",
+      "api_key_envs": [
+        "NCBI_API_KEY",
+        "ENTREZ_API_KEY"
+      ],
+      "rate": {
+        "per_second": 3,
+        "with_api_key_per_second": 10
+      }
+    },
+    "pmc_complete_issue": {
+      "enabled": true
+    },
+    "springerlink_official_issue": {
+      "enabled": true,
+      "rate": {
+        "per_second": 1
+      }
+    },
+    "gwilr_official_issue": {
+      "enabled": true,
+      "rate": {
+        "per_second": 2
+      }
+    },
+    "stanford_law_review_official_issue": {
+      "enabled": true,
+      "rate": {
+        "per_second": 2
+      }
+    },
+    "ucea_review_official_issue": {
+      "enabled": true,
+      "rate": {
+        "per_second": 1
+      }
+    },
+    "jstor": {
+      "enabled": true,
+      "rate": {
+        "per_second": 2
+      }
+    },
+    "neurips": {
+      "enabled": true
+    },
+    "openalex": {
+      "enabled": true,
+      "api_key_env": "OPENALEX_API_KEY",
+      "rate": {
+        "per_second": 5,
+        "with_api_key_per_second": 30
+      }
+    },
+    "openreview": {
+      "enabled": true
+    },
+    "repository": {
+      "enabled": true
+    },
+    "semantic_scholar": {
+      "enabled": true,
+      "rate": {
+        "per_seconds": [
+          1,
+          2
+        ]
+      }
+    },
+    "ssrn": {
+      "enabled": true,
+      "preprint_host": true
+    },
+    "tac": {
+      "enabled": true
+    },
+    "deeplearningbook": {
+      "enabled": true
+    },
+    "princeton_bialek": {
+      "enabled": true
+    },
+    "aaai": {
+      "enabled": true
+    },
+    "acm": {
+      "enabled": true
+    },
+    "unpaywall": {
+      "enabled": true
+    },
+    "zenodo": {
+      "enabled": true,
+      "rate": {
+        "per_seconds": [
+          1,
+          2
+        ]
+      }
+    },
+    "websearch": {
+      "enabled": true,
+      "rate": {
+        "per_seconds": [
+          1,
+          5
+        ]
+      }
+    }
+  },
+  "hosts": {
+    "openalex.org": "openalex",
+    "crossref.org": "crossref",
+    "export.arxiv.org": "arxiv",
+    "eutils.ncbi.nlm.nih.gov": "ncbi",
+    "cdn.ncbi.nlm.nih.gov": "ncbi",
+    "datacite.org": "datacite",
+    "core.ac.uk": "core",
+    "api.elsevier.com": "elsevier",
+    "api.springernature.com": "springer_nature",
+    "api.wiley.com": "wiley",
+    "semanticscholar.org": "semantic_scholar",
+    "lens.org": "lens",
+    "courtlistener.com": "courtlistener",
+    "books.googleapis.com": "googlebooks",
+    "zenodo.org": "zenodo",
+    "www.thegwilr.org": "gwilr_official_issue",
+    "thegwilr.org": "gwilr_official_issue",
+    "web.archive.org": "wayback",
+    "archive.org": "wayback",
+    "html.duckduckgo.com": "websearch",
+    "duckduckgo.com": "websearch",
+    "api.tavily.com": "websearch",
+    "api.mojeek.com": "websearch"
+  },
+  "trusted_hosts_extra": [
+    "figshare.com",
+    "hal.science",
+    "handle.net",
+    "osf.io",
+    "zenodo.org"
+  ],
+  "trusted_host_markers": [
+    "repository",
+    "repo.",
+    "eprints",
+    "dspace"
+  ],
+  "trusted_host_tlds": [
+    ".edu",
+    ".ac.uk",
+    ".edu.au",
+    ".ac.jp",
+    ".ac.nz"
+  ],
+  "challenge_prone_hosts": [
+    "science.org",
+    "jamanetwork.com",
+    "academic.oup.com",
+    "oup.com",
+    "direct.mit.edu",
+    "mitpressjournals.org",
+    "pnas.org"
+  ],
+  "jmlr_hosts": [
+    "jmlr.org",
+    "jmlr.csail.mit.edu"
+  ],
+  "preprint_hosts_extra": [
+    "osf.io",
+    "preprints.org",
+    "researchsquare.com"
+  ],
+  "preprint_markers_extra": [
+    "preprint"
+  ],
+  "preprint_doi_patterns_extra": [
+    "^10\\.1101/(?:\\d{4}\\.\\d{2}\\.\\d{2}\\.\\d+|\\d{6})",
+    "^10\\.48550/arxiv\\.",
+    "^10\\.2139/ssrn\\.",
+    "^10\\.21203/",
+    "^10\\.26434/",
+    "^10\\.20944/preprints",
+    "^10\\.31(?:219|234|235)/"
+  ]
+}

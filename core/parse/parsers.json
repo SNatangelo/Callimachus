@@ -1,0 +1,43 @@
+{
+  "extractor_order": [
+    ".docx",
+    ".markdown",
+    ".md",
+    ".pdf",
+    ".tex",
+    ".txt"
+  ],
+  "extractors": {
+    "docx": {
+      "enabled": true
+    },
+    "markdown": {
+      "enabled": true
+    },
+    "pdf": {
+      "enabled": true
+    },
+    "tex": {
+      "enabled": true
+    },
+    "txt": {
+      "enabled": true
+    }
+  },
+  "scheme_order": [
+    "author-year",
+    "inline-doi",
+    "numeric"
+  ],
+  "schemes": {
+    "author-year": {
+      "enabled": true
+    },
+    "inline-doi": {
+      "enabled": true
+    },
+    "numeric": {
+      "enabled": true
+    }
+  }
+}

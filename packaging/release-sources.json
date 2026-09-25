@@ -1,0 +1,74 @@
+[
+  {
+    "name": "Qt 6",
+    "constraint": "PySide6",
+    "package_version": "6.11.2",
+    "version": "6.11.2",
+    "filename": "qt-everywhere-src-6.11.2.tar.xz",
+    "url": "https://download.qt.io/official_releases/qt/6.11/6.11.2/single/qt-everywhere-src-6.11.2.tar.xz",
+    "sha256": "6dcfbca271d76a6502741a2c0dc6fc98ef7dd0b7b4cfd0abcebb285a86a26f33"
+  },
+  {
+    "name": "Qt 5 (OpenCV)",
+    "constraint": "opencv-python",
+    "package_version": "5.0.0.93",
+    "version": "5.15.19",
+    "filename": "qt-everywhere-opensource-src-5.15.19.tar.xz",
+    "url": "https://download.qt.io/archive/qt/5.15/5.15.19/single/qt-everywhere-opensource-src-5.15.19.tar.xz",
+    "sha256": "173c2326dae138bbb0d98921e9d911e55c00163d93a6db29f294b5e19ff306ae"
+  },
+  {
+    "name": "PySide6 bindings",
+    "constraint": "PySide6",
+    "package_version": "6.11.2",
+    "version": "6.11.2",
+    "filename": "pyside-setup-everywhere-src-6.11.2.tar.xz",
+    "url": "https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.2-src/pyside-setup-everywhere-src-6.11.2.tar.xz",
+    "sha256": "cba47efbaad1bedd529725cbc14e21f156c7a19366f07b3edfbb076ffd7afdf8"
+  },
+  {
+    "name": "PyMuPDF",
+    "constraint": "PyMuPDF",
+    "package_version": "1.28.0",
+    "version": "1.28.0",
+    "filename": "pymupdf-1.28.0.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/8e/e9/6d6c5d6c0a3551bffd47681a6240caf941727f195b45593cf20ab36f018f/pymupdf-1.28.0.tar.gz",
+    "sha256": "e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d"
+  },
+  {
+    "name": "MuPDF",
+    "constraint": "PyMuPDF",
+    "package_version": "1.28.0",
+    "version": "1.28.0",
+    "filename": "mupdf-1.28.0-source.tar.gz",
+    "url": "https://github.com/ArtifexSoftware/mupdf-downloads/releases/download/1.28.0/mupdf-1.28.0-source.tar.gz",
+    "sha256": "21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2"
+  },
+  {
+    "name": "OpenCV Python",
+    "constraint": "opencv-python",
+    "package_version": "5.0.0.93",
+    "version": "5.0.0.93",
+    "filename": "opencv_python-5.0.0.93.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/79/4c/a438d23e09ce2033c09f7b784ad2fbdb0adf529e434101ed28f142226f98/opencv_python-5.0.0.93.tar.gz",
+    "sha256": "66aac3e5b5faa48d4025816592f3af19e4bfc2c68dec067bae2dbb4ca10aa9e2"
+  },
+  {
+    "name": "FFmpeg (OpenCV)",
+    "constraint": "opencv-python",
+    "package_version": "5.0.0.93",
+    "version": "8.1.1",
+    "filename": "ffmpeg-8.1.1.tar.xz",
+    "url": "https://ffmpeg.org/releases/ffmpeg-8.1.1.tar.xz",
+    "sha256": "b6863adde98898f42602017462871b5f6333e65aec803fdd7a6308639c52edf3"
+  },
+  {
+    "name": "PyInstaller bootloader",
+    "constraint": "PyInstaller",
+    "package_version": "6.22.3",
+    "version": "6.22.3",
+    "filename": "pyinstaller-6.22.3.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/63/41/f90302845945abd4ed647933ff5ee7c6ac93983187be67f897b6cb613331/pyinstaller-6.22.3.tar.gz",
+    "sha256": "05eb2f5615503e72939a7224d68b4aff572c6b0438ee4a17d0a4b481f399362d"
+  }
+]

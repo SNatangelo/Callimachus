@@ -1,0 +1,29 @@
+# requirements.txt
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+# citation-verifier runtime dependencies
+# The deterministic core stays lightweight; PDF extraction, the TLS trust
+# bundle, and HTTP Brotli decoding pull in external packages.
+
+# TLS trust bundle for urllib HTTPS requests on environments whose Python trust
+# store does not include every issuer used by OA repositories.
+certifi>=2024.2.2
+
+# Decode HTTP Brotli responses before any HTML/PDF parser sees the body. Raw
+# Wayback snapshots may preserve the archived Content-Encoding even though the
+# live request did not advertise compression.
+Brotli>=1.2.0
+
+# PDF extraction with layout/column detection (Phase 2b: OA fulltext + manuscript PDFs).
+# pymupdf is the preferred backend (fastest, best layout/column handling); the code
+# falls back to pdfminer.six and then pdftotext when it is absent. Either one satisfies
+# the startup PDF-backend check — install at least one.
+pymupdf>=1.24
+pdfminer.six>=20221105
+
+# ── Optional: OCR for scanned PDFs without a text layer ───────────────────────
+# Recommended when platform packages are available: OCRmyPDF + Tesseract.
+# Portable cross-platform fallback (pure pip, bundled models):
+#   pip install -r requirements-ocr.txt
+# Callimachus uses the first installed backend in this deterministic order:
+# OCRmyPDF, Tesseract + Poppler, then RapidOCR + PDFium.

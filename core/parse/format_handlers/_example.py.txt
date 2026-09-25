@@ -1,0 +1,120 @@
+# core/parse/format_handlers/_example.py.txt
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Minimal format-handler example.
+
+Rename this file to ``my_format.py`` to make it importable, then add the
+matching entry to ``core/parse/parsers.json``.
+
+This template shows all four hooks.  Delete any hook whose default behaviour
+(from ``parsing_common``) is sufficient — the registry falls back to the
+shared default for any hook the module does not define.
+"""
+
+# Either NAME (single format label) or FORMATS (list of labels).
+# The label(s) must match the ``fmt`` string produced by your extractor.
+NAME = "my-format"
+# FORMATS = ["my-format-a", "my-format-b"]
+
+
+def split_body_bibliography(text, *, meta=None):
+    """Split extracted text into (body, biblio, debug, end_idx).
+
+    Override this when your format has structural bibliography boundaries
+    that make the PDF-oriented default heuristics unnecessary.
+
+    *end_idx* can be ``None`` for formats with no post-bibliography prose-bleed
+    risk (like LaTeX or Markdown).  The default (``parsing_common``) uses
+    ``_find_biblio_end_index`` which searches for post-biblio prose.
+    """
+    import re
+    lines = text.split("\n")
+    cut_idx = None
+    bibliography_headings = {
+        "references", "bibliography", "works cited", "literature cited",
+    }
+    for i, line in enumerate(lines):
+        stripped = line.strip().lower().rstrip(":.")
+        if stripped in bibliography_headings:
+            cut_idx = i
+    debug = {"cut_line_index": cut_idx, "total_lines": len(lines)}
+    if cut_idx is None:
+        debug["context"] = "(no bibliography heading found)"
+        return text, "", debug, None
+    body = "\n".join(lines[:cut_idx])
+    biblio = "\n".join(lines[cut_idx + 1:])
+    around = " ".join(lines[max(0, cut_idx - 2): cut_idx + 3])
+    debug["context"] = around[:800]
+    return body, biblio, debug, None
+
+
+def segment_sentences(body, *, meta=None):
+    """Split body text into sentences.
+
+    Override only when your format's sentence-boundary conventions differ
+    from the default regex-based splitter in ``parsing_common``.
+    """
+    import re
+    # Default: split on .!? followed by space+capital or newline
+    return re.split(r"(?<=[.!?])\s+(?=[A-Z])", body)
+
+
+def parse_references(biblio, *, meta=None):
+    """Parse bibliography block into reference dicts.
+
+    Override this to skip PDF-artifact heuristics (``_find_biblio_end_index``,
+    ``_truncate_bleed``) when your format's bibliographies are structurally
+    clean (like LaTeX or Markdown).
+    """
+    del meta
+    from parsing_common import _make_reference
+
+    text = biblio.strip()
+    if not text:
+        return []
+
+    # Numbered entries: "[1] ...", "[2] ..."
+    entry_re = re.compile(r"(?m)^\s*(?:\[(\d+)\]|(\d+)[.\)])\s+")
+    matches = list(entry_re.finditer(text))
+    refs = []
+    if matches:
+        for i, m in enumerate(matches):
+            num = int(m.group(1) or m.group(2))
+            start = m.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            refs.append(_make_reference(num, " ".join(text[start:end].split())))
+        return refs
+
+    # Fallback: one entry per non-empty line
+    lines = [l for l in text.split("\n") if l.strip()]
+    return [_make_reference(i, line.strip()) for i, line in enumerate(lines, 1)]
+
+
+def is_table_row(sentence, markers):
+    """Detect whether this sentence is a table/data row.
+
+    Return ``True`` when the sentence's citation markers should be suppressed
+    (not treated as claims).  Return ``False`` for prose sentences.
+
+    Each format has its own table artifacts — use whatever pattern is
+    distinctive for your format.
+    """
+    if not markers:
+        return False
+    alpha = sum(1 for c in sentence if c.isalpha())
+    total = len(sentence) or 1
+    ratio = alpha / total
+    # Example: two or more column separators with very sparse text
+    if sentence.count("&") >= 2 and ratio < 0.30:
+        return True
+    return False
+
+
+# Hooks not defined here fall back to ``parsing_common`` defaults:
+#   split_body_bibliography → default_split_body_bibliography
+#   segment_sentences       → default_segment_sentences
+#   parse_references        → default_parse_references
+#   is_table_row            → never-suppress (via registry fallback)
+#
+# Delete any hook above whose default is sufficient — the module works
+# with zero hooks; just NAME/FORMATS is enough to register.

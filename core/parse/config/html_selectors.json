@@ -1,0 +1,43 @@
+[
+  {
+    "_comment": "Publisher-family container selectors, tried in this order (most specific journal platforms first, generic last). A selector matches when an element's id or class CONTAINS the token (substring match); '#token' restricts the match to id, '.token' restricts it to class, a bare token matches id or class. Bare tag names are deliberately NOT matched here: selecting a plain <main>/<article> is the job of the main_or_article fallback level, which ranks them across the whole page — a family must be a specific id/class signal so it cannot be triggered by one of many <article> teaser cards (a JATS/PMC page that is a single wrapping <article> is caught correctly there). Within a family the richest (most text) matching element wins; the first family with any match wins the whole level.",
+    "family": "springer_nature",
+    "selectors": ["c-article-body", "main-content"]
+  },
+  {
+    "family": "elsevier",
+    "selectors": ["#body", ".Body"]
+  },
+  {
+    "family": "wiley",
+    "selectors": ["article__body"]
+  },
+  {
+    "family": "mdpi",
+    "selectors": ["html-body", "articlebody"]
+  },
+  {
+    "family": "plos",
+    "selectors": ["#artText"]
+  },
+  {
+    "family": "oup_silverchair",
+    "selectors": [".article-body", ".widget-ArticleFulltext"]
+  },
+  {
+    "family": "taylor_francis",
+    "selectors": [".hlFld-Fulltext"]
+  },
+  {
+    "family": "arxiv_ar5iv",
+    "selectors": ["ltx_document", "ltx_page_content"]
+  },
+  {
+    "family": "wikipedia",
+    "selectors": ["mw-content-text"]
+  },
+  {
+    "family": "generic",
+    "selectors": ["#content"]
+  }
+]

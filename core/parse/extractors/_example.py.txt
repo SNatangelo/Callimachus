@@ -1,0 +1,22 @@
+# core/parse/extractors/_example.py.txt
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Minimal extractor example.
+
+Rename this file to `my_format.py` to make it importable, then add the matching
+entry to `core/parse/parsers.json`.
+"""
+
+EXTENSIONS = (".example",)
+
+
+def extract(path, *, ocr_lang, ocr_notice, manuscript_ocr):
+    del ocr_lang, ocr_notice, manuscript_ocr
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    return text, "example", {}
+
+
+def postprocess(text, meta):
+    del meta
+    return text

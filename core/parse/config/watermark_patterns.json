@@ -1,0 +1,23 @@
+{
+  "_comment": "Watermark / running-header / footer characteristic patterns (Python regex strings). A line is treated as boilerplate only when it BOTH repeats across the document AND matches one of these — repetition alone is not enough (table labels and dataset names also recur, but in the body). Add a pattern to cover a new publisher's watermark without touching code.",
+  "watermark_patterns": [
+    "(?i)\\bdownloaded\\s+from\\b",
+    "(?i)\\bby\\s+guest\\s+on\\b",
+    "(?i)\\bthis\\s+content\\s+downloaded\\b",
+    "(?i)\\bdownloaded\\s+for\\s+personal\\s+use\\b",
+    "(?i)\\buse\\s+subject\\s+to\\b",
+    "(?i)\\bterms\\s+and\\s+conditions\\b",
+    "(?i)^\\W*https?://\\S+\\W*$",
+    "(?i)\\bdoi\\.org/",
+    "(?i)\\.(?:com|org|edu|gov|net)/\\S",
+    "(?i)\\ball\\s+rights\\s+reserved\\b",
+    "(?i)\\bcopyright\\b",
+    "©",
+    "(?i)\\bunauthorized\\s+reproduction\\b",
+    "(?i)\\b(?:published|accepted|submitted|under\\s+review)\\s+as\\s+a\\s+(?:conference|workshop)\\s+paper\\b",
+    "(?i)\\bpreprint\\b.*\\bunder\\s+review\\b",
+    "(?i)\\bintended\\s+solely\\s+for\\s+the\\s+personal\\s+use\\b",
+    "(?i)\\bthis\\s+document\\s+is\\s+copyrighted\\b",
+    "^[A-Z][A-Z0-9 &.,'’\\-]{5,60}\\s\\d{1,3}\\s*:\\s*\\d{1,4}\\s*$"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "_comment": "Capitalised words that are NOT surnames. A citation is keyed on (surname, year), and prose puts plenty of capitalised words in front of a year. Two kinds, because they fail in two different ways. Lower-case, accent-normalised; add a word to cover a new language or house style without touching code.",
+
+  "_comment_signal_words": "A word that STANDS BEFORE a citation: 'See Smith (2019)', 'Compare Smith (2019)', 'The United Nations (2019)'. It is not the author — but the author is right behind it, so the scan resumes immediately after the word and reads the real surname where it stands. Discarding the whole marker instead would take Smith down with See, in silence.",
+  "signal_words": [
+    "the", "in", "on", "at", "by", "from", "as", "for", "to", "of", "and", "or",
+    "see", "also", "since", "during", "between", "around", "about", "after",
+    "before", "circa", "via", "per", "but", "however", "thus", "here", "this",
+    "these", "cf", "compare", "contra", "accord", "quoting", "citing",
+    "generally", "supra", "infra", "ibid", "consider", "following", "recently",
+    "unlike", "nel", "del", "della", "dei", "come", "secondo", "vedi", "cfr"
+  ],
+
+  "_comment_stop_names": "A word that is the HEAD OF THE NAME being read — a journal title in a running head ('Journal of Academic Ethics (2025)'), a cross-reference ('Table 3, 2019'), a month. What follows it is the rest of that name, not an author: 'Academic Ethics' is no more a citation than 'Journal' is. The whole marker is discarded, and the scan resumes past it.",
+  "stop_names": [
+    "journal", "ethics", "fig", "table", "eq", "vol", "no", "pp", "chapter",
+    "section",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december"
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "_comment": "Named-destination patterns that denote a reference anchor in a PDF's link layer. These are a fast accelerator only: any named destination that lands in the bibliography region is ALSO treated as a reference anchor (position-based), so an unknown publisher's naming scheme still works without being listed here. Add a Python regex string to extend recognition; edit without touching code.",
+  "ref_name_patterns": [
+    "cite\\..+",
+    "ref0*\\d+",
+    "bm_CR\\d+",
+    "(?:bib|bibr)0*\\d+",
+    "CR\\d+"
+  ]
+}

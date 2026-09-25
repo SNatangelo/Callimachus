@@ -1,0 +1,41 @@
+{
+  "_comment": "Section-heading words that mark the start of a reference list, matched case-insensitively (a leading section-marker glyph like '■' and a trailing ':' or '.' are tolerated; internal spaces match any whitespace). Single source of truth for the body/bibliography cut, the column-aware re-extraction and the PDF link-layer's bibliography-region detection. Add a heading (any language) to cover a new publisher/locale without touching code.",
+  "bibliography_headings": [
+    "references",
+    "reference list",
+    "bibliography",
+    "works cited",
+    "literature cited",
+    "bibliografia",
+    "riferimenti",
+    "riferimenti bibliografici",
+    "bibliografía",
+    "referencias",
+    "bibliographie",
+    "références",
+    "referências",
+    "literaturverzeichnis",
+    "quellenverzeichnis"
+  ],
+  "_further_reading_comment": "A SECOND list some publishers print after the references: works the authors recommend but never cite. Its entries are not references — nobody cites them, by design — so counting them as uncited references would report a coverage hole in a complete bibliography. Matched like the headings above.",
+  "further_reading_headings": [
+    "further reading",
+    "further readings",
+    "additional reading",
+    "additional readings",
+    "recommended reading",
+    "recommended readings",
+    "suggested reading",
+    "suggested readings",
+    "letture consigliate",
+    "ulteriori letture",
+    "lecturas recomendadas",
+    "lecturas adicionales",
+    "lectures complementaires",
+    "lectures complémentaires",
+    "pour aller plus loin",
+    "weiterfuhrende literatur",
+    "weiterführende literatur",
+    "leituras recomendadas"
+  ]
+}

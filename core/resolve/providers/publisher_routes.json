@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "publishers": [
+    {
+      "id": "elsevier",
+      "doi_prefixes": [
+        "10.1016"
+      ],
+      "host_suffixes": [
+        "elsevier.com",
+        "sciencedirect.com"
+      ]
+    },
+    {
+      "id": "springer_nature",
+      "doi_prefixes": [
+        "10.1007",
+        "10.1038",
+        "10.1057",
+        "10.1186"
+      ],
+      "host_suffixes": [
+        "biomedcentral.com",
+        "nature.com",
+        "springer.com",
+        "springeropen.com"
+      ]
+    },
+    {
+      "id": "wiley",
+      "doi_prefixes": [
+        "10.1002",
+        "10.1111"
+      ],
+      "host_suffixes": [
+        "wiley.com"
+      ]
+    }
+  ]
+}

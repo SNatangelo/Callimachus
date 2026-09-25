@@ -1,0 +1,49 @@
+# core/resolve/providers/_example.py.txt
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Minimal provider example.
+
+Rename this file to `my_source.py` to make it importable, then add the matching entry
+to `core/resolve/providers.json`.
+"""
+
+NAME = "my_source"
+RESOLVE_NAME = "my_source_search"
+
+MANIFEST = {
+    "origin": "my_source",
+    "via_aliases": ["my_source", "my_source_search"],
+    "canonical_hosts": ["example.org"],
+    "doi_prefixes": ["10.9999/example."],
+}
+
+
+def supports(ref: dict) -> bool:
+    return bool(ref.get("title")) and not ref.get("url")
+
+
+def discover(ref: dict) -> dict | None:
+    return {
+        "status": "resolved",
+        "via": RESOLVE_NAME,
+        "matched_title": ref.get("title"),
+        "reason": "example resolver match",
+        "resolution_basis": "metadata_search",
+        "existence_confidence": "medium",
+        "metadata_match": {"score": 1.0, "title_overlap": 1.0},
+        "fulltext_exists": True,
+        "oa_status": "open",
+        "fulltext_links": [{"url": "https://example.org/paper.pdf", "content_type": "pdf"}],
+    }
+
+
+def enabled(**kwargs) -> bool:
+    return True
+
+
+def candidate_items(ref: dict, **kwargs) -> list[dict]:
+    return [{"method": NAME, "url": "https://example.org/paper.pdf", "kind": "pdf"}]
+
+
+# See README.md for the optional authoritative-identifier and closed-issue
+# attestation contracts. Add only the capability that this source can prove.

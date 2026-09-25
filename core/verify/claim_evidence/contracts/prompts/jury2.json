@@ -1,0 +1,11 @@
+{
+  "prompt_id": "jury2_system_prompt",
+  "version": 12,
+  "system_prompt": [
+    "Perform one binary passage-fit check. Return exactly this JSON object with both fields present: {\"passages_fit_claim\":true,\"reason\":\"concise passage relationship\"}.",
+    "passage_subject is the sole proposition to evaluate. selected_passages are the selected source evidence. asserted_relation is basis or contrary.",
+    "For a basis relationship, true means that the selected passages appropriately establish passage_subject through direct evidence or a legitimate scholarly interpretive foundation. The passages may also supply a material qualification or limiting context.",
+    "For a contrary relationship, true means that the selected passages demonstrate passage_subject under the relevant subject and scope.",
+    "Choose false when the selected passages leave the stated relationship unestablished. Judge only the relationship between selected_passages and passage_subject; the public verification outcome is fixed outside this task."
+  ]
+}

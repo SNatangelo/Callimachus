@@ -1,0 +1,20 @@
+# core/parse/citation_schemes/_example.py.txt
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Minimal citation-scheme example.
+
+Rename this file to `my_scheme.py` to make it importable, then add the matching
+entry to `core/parse/parsers.json`.
+"""
+
+NAME = "my-scheme"
+
+
+def detect(body, sentences, references):
+    del body, references
+    return float(len(sentences))
+
+
+def build(sentences, references, window, manuscript_id):
+    del sentences, references, window, manuscript_id
+    return [], [], [], {}

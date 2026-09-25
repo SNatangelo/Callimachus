@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "report_copy": "byte-for-byte from the latest supplied index.html",
+  "files": {
+    "assets/readme/logo-dark.png": {
+      "sha256": "67cd48b4e91d7d868e8f513cb9f184cefb382cf184a0ec9f6b5bb3505689e935",
+      "bytes": 47250
+    },
+    "assets/readme/logo.png": {
+      "sha256": "dd15612fc759e9960c29e6e97735a2aa027a8e3b1cb1dac99f33eb8f6e91488c",
+      "bytes": 47759
+    },
+    "assets/readme/report-detail.png": {
+      "sha256": "07e6db147215fbbe7aeccac6cc8c571ea9e3a8f22ecb3c6ba949523bf889d376",
+      "bytes": 120169
+    },
+    "assets/readme/report-overview.png": {
+      "sha256": "49243dac1928d9ffd86848f97f89d9c25130e1c9844a8aec197faf764003b5c0",
+      "bytes": 238891
+    },
+    "assets/readme/report-source.png": {
+      "sha256": "be28008905cc2bc4d5c3d3b530c908bf121debbcb1facb9211b983956e63e35e",
+      "bytes": 97447
+    },
+    "examples/report/index.html": {
+      "sha256": "8329a0414e68d09b6bfcd838ba67a8fcc6ccb6bbaa97455cc77b809fab2d31a1",
+      "bytes": 12042981
+    }
+  }
+}
