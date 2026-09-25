@@ -17,11 +17,13 @@
   <a href="docs/guide/README.md">Documentation</a>
 </p>
 
+<p align="center"><strong>Download the desktop app</strong></p>
+
 <p align="center">
-  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-Setup.exe"><img src="assets/readme/download-windows.svg" alt="Download Callimachus for Windows x64" width="188"></a>
-  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-linux-x64.tar.gz"><img src="assets/readme/download-linux.svg" alt="Download Callimachus for Linux x64" width="188"></a>
-  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-arm64.tar.gz"><img src="assets/readme/download-macos-arm64.svg" alt="Download Callimachus for macOS Apple Silicon" width="188"></a>
-  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-x64.tar.gz"><img src="assets/readme/download-macos-x64.svg" alt="Download Callimachus for macOS Intel" width="188"></a>
+  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-Setup.exe"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-windows-dark.svg"><img src="assets/readme/download-windows.svg" alt="Download Callimachus installer for Windows x64" width="184"></picture></a>
+  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-linux-x64.tar.gz"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-linux-dark.svg"><img src="assets/readme/download-linux.svg" alt="Download Callimachus archive for Linux x64" width="184"></picture></a>
+  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-arm64.tar.gz"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-macos-arm64-dark.svg"><img src="assets/readme/download-macos-arm64.svg" alt="Download Callimachus for macOS Apple Silicon" width="184"></picture></a>
+  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-x64.tar.gz"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-macos-x64-dark.svg"><img src="assets/readme/download-macos-x64.svg" alt="Download Callimachus for macOS Intel" width="184"></picture></a>
 </p>
 
 <p align="center"><sub>Complete desktop packages with Python included. <a href="https://github.com/SNatangelo/Callimachus/releases/latest">Checksums and all release assets</a>.</sub></p>
