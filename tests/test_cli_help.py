@@ -267,8 +267,8 @@ def test_missing_requirement_managed_install_commands_are_rooted_outside_checkou
         root=root,
         cwd=elsewhere,
     ) == [
-        f"/usr/bin/python3 -m venv {root}/.venv",
-        f"{root}/.venv/bin/python -m pip install -r {root}/requirements.txt",
+        f"/usr/bin/python3 -m venv {shlex.quote(str(root / '.venv'))}",
+        f"{shlex.quote(str(root / '.venv' / 'bin' / 'python'))} -m pip install -r {shlex.quote(str(root / 'requirements.txt'))}",
     ]
     assert _runtime_install_commands(
         "linux",
@@ -276,7 +276,7 @@ def test_missing_requirement_managed_install_commands_are_rooted_outside_checkou
         externally_managed=False,
         root=root,
         cwd=elsewhere,
-    ) == [f"/usr/bin/python3 -m pip install -r {root}/requirements.txt"]
+    ) == [f"/usr/bin/python3 -m pip install -r {shlex.quote(str(root / 'requirements.txt'))}"]
 
 
 def test_missing_env_is_created_from_template_once(tmp_path, capsys):
@@ -357,7 +357,8 @@ def test_project_venv_run_command_is_rooted_outside_checkout(tmp_path):
     root = tmp_path / "checkout"
     elsewhere = tmp_path / "elsewhere"
     expected = (
-        f"{root}/.venv/bin/python {root}/run.py --input paper.pdf"
+        f"{shlex.quote(str(root / '.venv' / 'bin' / 'python'))} "
+        f"{shlex.quote(str(root / 'run.py'))} --input paper.pdf"
     )
     assert _project_run_command(
         ["--input", "paper.pdf"], "linux", root=root, cwd=elsewhere,

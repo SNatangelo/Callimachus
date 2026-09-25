@@ -321,3 +321,26 @@ def test_history_completed_run_forks_verify_with_selected_backends(monkeypatch):
     assert len(started) == 1
     assert warnings
     window.close()
+
+
+def test_windows_html_report_uses_edge_when_file_association_is_missing(monkeypatch, tmp_path):
+    from core.gui import desktop
+
+    report = tmp_path / "report.preview.html"
+    report.write_text("<html>Preview</html>", encoding="utf-8")
+    edge = tmp_path / "msedge.exe"
+    edge.write_bytes(b"browser")
+    opened = []
+
+    def missing_association(_path):
+        raise OSError("No HTML association")
+
+    monkeypatch.setattr(desktop.os, "startfile", missing_association, raising=False)
+    monkeypatch.setattr(desktop, "_edge_candidates", lambda: (edge,))
+    monkeypatch.setattr(desktop.subprocess, "Popen", lambda argv: opened.append(argv))
+
+    assert desktop._open_local_path(str(report), None, None, platform_name="win32")
+    assert opened == [[str(edge), report.resolve().as_uri()]]
+    assert not desktop._open_local_path(
+        str(tmp_path / "missing.html"), None, None, platform_name="win32"
+    )

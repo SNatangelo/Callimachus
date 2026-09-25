@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from core.app.commands import desktop
+from core.app import runtime_paths
 from core.fetch.storage import content_store
 from core.infra.db import RunRepository
 
@@ -264,3 +265,54 @@ def test_desktop_builds_completed_verify_fork_with_selected_backends(
         captured["verify_fork_command_builder"](
             {"run_dir": str(root / "runs" / "parent")}, ["unknown"]
         )
+
+
+def test_installed_settings_save_replaces_startup_loaded_env_value(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    root.mkdir()
+    env_path = root / ".env"
+    env_path.write_text("CITATION_VERIFIER_ACCURACY=standard\n", encoding="utf-8")
+    (root / ".env.example").write_text(
+        "CITATION_VERIFIER_ACCURACY=standard\n", encoding="utf-8",
+    )
+    monkeypatch.delenv("CITATION_VERIFIER_ACCURACY", raising=False)
+    monkeypatch.setattr(runtime_paths, "_LOADED_ENV_VALUES", {})
+    runtime_paths.load_environment_file(env_path)
+    captured = {}
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+    before = {row["name"]: row for row in captured["settings_loader"]()}
+    assert before["CITATION_VERIFIER_ACCURACY"]["source"] == "env_file"
+    assert captured["settings_saver"]({"CITATION_VERIFIER_ACCURACY": "maximum"}) == env_path
+    after = {row["name"]: row for row in captured["settings_loader"]()}
+    assert after["CITATION_VERIFIER_ACCURACY"]["value"] == "maximum"
+    assert after["CITATION_VERIFIER_ACCURACY"]["source"] == "env_file"
+    assert env_path.read_text(encoding="utf-8") == "CITATION_VERIFIER_ACCURACY=maximum\n"
+    assert runtime_paths.os.environ["CITATION_VERIFIER_ACCURACY"] == "maximum"
+
+
+def test_installed_settings_do_not_silently_shadow_external_override(tmp_path, monkeypatch):
+    root = tmp_path / "project"
+    root.mkdir()
+    env_path = root / ".env"
+    env_path.write_text("CITATION_VERIFIER_ACCURACY=standard\n", encoding="utf-8")
+    monkeypatch.setenv("CITATION_VERIFIER_ACCURACY", "external")
+    monkeypatch.setattr(runtime_paths, "_LOADED_ENV_VALUES", {})
+    runtime_paths.load_environment_file(env_path)
+    captured = {}
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+    with pytest.raises(ValueError, match="controlled by the process environment"):
+        captured["settings_saver"]({"CITATION_VERIFIER_ACCURACY": "maximum"})
+    assert env_path.read_text(encoding="utf-8") == "CITATION_VERIFIER_ACCURACY=standard\n"
+    assert runtime_paths.os.environ["CITATION_VERIFIER_ACCURACY"] == "external"
