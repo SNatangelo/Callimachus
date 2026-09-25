@@ -181,32 +181,18 @@ requirements with `python -m pip`.
 
 ### Native desktop releases
 
-The repository's Releases page provides a Windows x64 installer and standalone
-archives for Windows x64, Linux x64, macOS Apple Silicon, and macOS Intel after
-each native build passes its checks. On Windows, run `Callimachus-Setup.exe`;
-it checks for the Microsoft Visual C++ runtime and offers to install or update
-it from Microsoft if missing or too old. Alternatively, extract the entire
-Windows ZIP and run `Callimachus.exe` if that runtime is already installed.
-On macOS and Linux, extract the whole archive and start `Callimachus.app` or
-`Callimachus`.
-Python and the application's Python libraries are included. Google Chrome
-remains an external requirement for Guided Fetch's browser capture. Each
-archive includes the Callimachus license, actual
-third-party notices, and a SHA-256 file; the matching source is published with
-the release. See [Desktop packages](docs/guide/12-desktop-packages.md) for
-configuration locations, platform caveats, and release verification.
+Download the latest desktop build:
 
-The desktop uses the same pipeline and durable run database as the command-line
-workflow. It opens Guided Fetch in the same application if Fetch pauses for
-operator input. Select a configured LLM model before starting a full run;
-without one, the application runs only Parse and Resolve and produces a
-references-only report.
-Select **Finish without manual review** to waive pending manual Fetch work and
-keep sources needing an identity decision unverified. It also disables
-interactive browser challenges for that run; automatic checks still run. The
-final HTML report opens automatically and remains available from the
-Analysis screen. **Resume latest** is disabled when the latest run is complete;
-use the explicit History action to start a new verification run from it.
+| Platform | Download |
+| --- | --- |
+| Windows x64 | [Installer](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-Setup.exe) · [Portable ZIP](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-windows-x64.zip) |
+| Linux x64 | [Archive](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-linux-x64.tar.gz) |
+| macOS Apple Silicon | [Archive](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-arm64.tar.gz) |
+| macOS Intel | [Archive](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-x64.tar.gz) |
+
+Python is bundled. Google Chrome is needed only for Guided Fetch browser capture. The [release page](https://github.com/SNatangelo/Callimachus/releases/latest) has checksums and source archives; [Desktop packages](docs/guide/12-desktop-packages.md) covers installation and verification.
+
+The desktop follows the same pipeline as the CLI. Choose a configured LLM model for a full run; without one, it produces a references-only report. Guided Fetch prompts and the final report appear in the app.
 
 <a href="assets/readme/app-analysis.png">
   <img src="assets/readme/app-analysis.png" alt="Callimachus desktop Analysis view with a running Fetch phase, source statuses and progress; all names and data are illustrative." width="1280">
