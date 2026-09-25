@@ -10,11 +10,21 @@
 
 <p align="center">
   <a href="https://callimachus.science/">Website</a> ·
+  <a href="#native-desktop-releases">Downloads</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="https://callimachus.science/demo/attention/">Example report</a> ·
   <a href="#what-it-checks">What it checks</a> ·
   <a href="docs/guide/README.md">Documentation</a>
 </p>
+
+<p align="center">
+  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-Setup.exe"><img src="assets/readme/download-windows.svg" alt="Download Callimachus for Windows x64" width="188"></a>
+  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-linux-x64.tar.gz"><img src="assets/readme/download-linux.svg" alt="Download Callimachus for Linux x64" width="188"></a>
+  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-arm64.tar.gz"><img src="assets/readme/download-macos-arm64.svg" alt="Download Callimachus for macOS Apple Silicon" width="188"></a>
+  <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-x64.tar.gz"><img src="assets/readme/download-macos-x64.svg" alt="Download Callimachus for macOS Intel" width="188"></a>
+</p>
+
+<p align="center"><sub>Complete desktop packages with Python included. <a href="https://github.com/SNatangelo/Callimachus/releases/latest">Checksums and all release assets</a>.</sub></p>
 
 A reference can be real and still fail to support the sentence that cites it.
 
@@ -95,7 +105,7 @@ Each run retains the underlying record alongside the browser report.
 
 ## Quick start
 
-You need **Python 3.9+**, network access to retrieve sources, and **one configured LLM backend** for claim-support assessment. You can run Callimachus directly; an external agent is not required.
+To run from source, you need **Python 3.9+**, network access to retrieve sources, and **one configured LLM backend** for claim-support assessment. The desktop downloads above include Python. You can run Callimachus directly; an external agent is not required.
 
 ### 1. Install
 
