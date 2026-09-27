@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible problem with Callimachus.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues before reporting a bug.
+
+        **This issue is public. Remove API keys, private documents, and sensitive data from all text, logs, screenshots, and attachments before submitting.** Use a minimal, anonymised example to reproduce the problem.
+
+        You do not need to sign the CLA to report a bug without contributing material for incorporation. See [CONTRIBUTING.md](https://github.com/SNatangelo/Callimachus/blob/main/CONTRIBUTING.md).
+  - type: input
+    id: version
+    attributes:
+      label: Callimachus version
+      description: Enter the release version or commit SHA if running from source.
+      placeholder: e.g. v1.0.0
+    validations:
+      required: true
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      description: Include the OS version and architecture.
+      placeholder: e.g. Windows 11 x64, macOS 15 arm64, Ubuntu 24.04 x64
+    validations:
+      required: true
+  - type: input
+    id: package
+    attributes:
+      label: Package or installation method
+      description: Enter the downloaded filename, or explain how you installed from source.
+      placeholder: e.g. Callimachus-Setup.exe, Callimachus-macos-arm64.tar.gz, or source checkout
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest set of steps that reproduces the problem, using only data you can share publicly.
+      placeholder: |
+        1. Open or run...
+        2. Select or enter...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behaviour
+      description: What actually happened? Include any error message after removing sensitive data.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: If available, paste only relevant log output. Remove API keys, private document content, and sensitive data before pasting.
+      render: text
+    validations:
+      required: false
