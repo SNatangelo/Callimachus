@@ -1,0 +1,31 @@
+name: Feature request
+description: Propose an improvement to Callimachus.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues before proposing a feature. Discuss substantial changes here before preparing a pull request, as described in [CONTRIBUTING.md](https://github.com/SNatangelo/Callimachus/blob/main/CONTRIBUTING.md).
+
+        This issue is public. Do not include API keys, private documents, or sensitive data.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what limitation are you encountering?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Describe the behaviour you would like and how it would help.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Mention any alternatives or workarounds you have considered, if applicable.
+    validations:
+      required: false
