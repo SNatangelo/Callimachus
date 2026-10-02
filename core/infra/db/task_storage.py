@@ -12,8 +12,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import unicodedata
+from urllib.parse import quote
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -26,6 +28,10 @@ from core.verify.claim_evidence.evidence.context import (
 
 
 JsonDict = dict[str, Any]
+_OCR_SCAN_SOURCE_REF_RE = re.compile(
+    r"^urn:callimachus:ocr-scan:sha256:[0-9a-f]{64}$"
+)
+_OCR_SCAN_ATTACHMENT_MARKER = "#callimachus-scan-attachment="
 
 _TASK_TABLES = (
     "task_fetch_details",
@@ -1050,7 +1056,7 @@ def read_task_payload(
 
 
 def _source_answer(value: JsonDict, label: str, *, ref_id_required: bool) -> JsonDict:
-    allowed = {"found", "file_path", "text", "url", "source_tier", "disposition", "guided_fetch", "identity_attested"} | ({"ref_id"} if ref_id_required else set())
+    allowed = {"found", "file_path", "text", "url", "source_tier", "disposition", "guided_fetch", "identity_attested", "ocr_scan_file_path"} | ({"ref_id"} if ref_id_required else set())
     required = {"found"} | ({"ref_id"} if ref_id_required else set())
     if set(value) - allowed or not required <= set(value):
         raise ValueError(f"{label} has an unsupported shape")
@@ -1069,7 +1075,11 @@ def _source_answer(value: JsonDict, label: str, *, ref_id_required: bool) -> Jso
     identity_attested = value.get("identity_attested", False)
     if type(identity_attested) is not bool:
         raise ValueError(f"{label}.identity_attested must be boolean")
-    if identity_attested != bool(guided_fetch and value["found"]):
+    unconfirmed_ocr = (
+        guided_fetch and value["found"] and not identity_attested
+        and "ocr_scan_file_path" in value
+    )
+    if identity_attested != bool(guided_fetch and value["found"]) and not unconfirmed_ocr:
         raise ValueError(f"{label}.identity_attested requires guided_fetch=true and found=true")
     if disposition == "user_waived" and not guided_fetch:
         raise ValueError(f"{label}.user_waived requires guided_fetch=true")
@@ -1093,6 +1103,50 @@ def _source_answer(value: JsonDict, label: str, *, ref_id_required: bool) -> Jso
     url = None
     if url_present:
         url = _nonempty_text(value["url"], f"{label}.url")
+    ocr_scan_file_path = None
+    if "ocr_scan_file_path" in value:
+        ocr_scan_file_path = _nonempty_text(
+            value["ocr_scan_file_path"], f"{label}.ocr_scan_file_path",
+        )
+        if Path(ocr_scan_file_path).suffix.lower() != ".pdf":
+            raise ValueError(f"{label}.ocr_scan_file_path must name a PDF")
+        if not guided_fetch or source_tier != "fulltext":
+            raise ValueError(
+                f"{label}.ocr_scan_file_path requires guided full-text Fetch"
+            )
+        if value["found"]:
+            if (
+                source_kind != "file_path"
+                or Path(source_value or "").suffix.lower() != ".txt"
+                or not _OCR_SCAN_SOURCE_REF_RE.fullmatch(url or "")
+            ):
+                raise ValueError(
+                    f"{label}.ocr_scan_file_path requires hash-bound OCR text"
+                )
+            scan_digest = _sha256_file(ocr_scan_file_path)
+            if scan_digest is None or not url.endswith(scan_digest):
+                raise ValueError(
+                    f"{label}.ocr_scan_file_path hash does not match its OCR URN"
+                )
+            url = f"{url}{_OCR_SCAN_ATTACHMENT_MARKER}{quote(ocr_scan_file_path, safe='')}"
+            url_present = True
+        elif (
+            disposition != "user_waived"
+            or source_fields
+            or url_present
+        ):
+            raise ValueError(
+                f"{label}.ocr_scan_file_path on a waiver requires no source answer"
+            )
+        else:
+            scan_digest = _sha256_file(ocr_scan_file_path)
+            if scan_digest is None:
+                raise ValueError(f"{label}.ocr_scan_file_path is unavailable")
+            url = (
+                f"urn:callimachus:guided-ocr-skip:sha256:{scan_digest}"
+                f"{_OCR_SCAN_ATTACHMENT_MARKER}{quote(ocr_scan_file_path, safe='')}"
+            )
+            url_present = True
     out = {
         "found": value["found"], "source_kind": source_kind,
         "source_value": source_value, "url_present": url_present, "url": url,
@@ -1103,6 +1157,17 @@ def _source_answer(value: JsonDict, label: str, *, ref_id_required: bool) -> Jso
     if ref_id_required:
         out["ref_id"] = _nonempty_text(value["ref_id"], f"{label}.ref_id")
     return out
+
+
+def _sha256_file(path: str) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
 
 
 def normalize_task_answer(
@@ -1147,13 +1212,33 @@ def normalize_task_answer(
         if detail is None:
             raise ValueError("manual Parse review details are unavailable")
         action = value.get("action")
-        legal = ({"no_sources", "split_sources", "keep_ambiguous"} if detail["review_kind"] == "footnote_source_review" else {"correct_identity", "keep_ambiguous"} if detail["review_kind"] == "reference_identity_review" else {"select_reference", "keep_unresolved"} if detail["review_kind"] == "citation_reference_review" else {"select_claim", "keep_unresolved"})
+        legal = ({"no_sources", "split_sources", "keep_ambiguous"} if detail["review_kind"] == "footnote_source_review" else {"correct_identity", "keep_ambiguous"} if detail["review_kind"] == "reference_identity_review" else {"select_reference", "keep_unresolved"} if detail["review_kind"] == "citation_reference_review" else {"select_claim", "keep_unresolved"}) | {"skip_review"}
         if action not in legal or value.get("target_sha256") != detail["target_sha256"]:
             raise ValueError("manual Parse review action or target hash is invalid")
-        reason = _nonempty_text(value.get("reason"), "manual Parse review reason")
-        if detail["review_kind"] in {"citation_reference_review", "reference_claim_review"}:
-            expected = {"action", "target_sha256", "reason"} | ({"ref_id"} if action == "select_reference" else {"claim_id"} if action == "select_claim" else set())
+        if action == "skip_review":
+            expected = {"action", "target_sha256", "reason"}
             if set(value) != expected:
+                raise ValueError("skip_review requires an explicit reason and target hash")
+            return {
+                "kind": kind,
+                "action": action,
+                "target_sha256": detail["target_sha256"],
+                "reason": _nonempty_text(value["reason"], "manual Parse review reason"),
+                "sources": [],
+                "title": None,
+                "doi": None,
+                "selected_ref_id": None,
+                "selected_claim_id": None,
+            }
+        raw_reason = value.get("reason", "")
+        reason = (
+            ""
+            if isinstance(raw_reason, str) and not raw_reason.strip()
+            else _nonempty_text(raw_reason, "manual Parse review reason")
+        )
+        if detail["review_kind"] in {"citation_reference_review", "reference_claim_review"}:
+            expected = {"action", "target_sha256"} | ({"ref_id"} if action == "select_reference" else {"claim_id"} if action == "select_claim" else set())
+            if frozenset(value) not in {frozenset(expected), frozenset(expected | {"reason"})}:
                 raise ValueError("citation attribution answer has an unsupported shape")
             selected = value.get("ref_id") or value.get("claim_id")
             if selected is not None:
@@ -1163,19 +1248,22 @@ def normalize_task_answer(
                     raise ValueError("citation attribution selection is outside the candidate set")
             return {"kind": kind, "action": action, "target_sha256": detail["target_sha256"], "reason": reason, "sources": [], "title": None, "doi": None, "selected_ref_id": selected if action == "select_reference" else None, "selected_claim_id": selected if action == "select_claim" else None}
         if action == "split_sources":
-            if set(value) != {"action", "target_sha256", "reason", "source_texts"} or not isinstance(value["source_texts"], list) or len(value["source_texts"]) < 2:
+            expected = {"action", "target_sha256", "source_texts"}
+            if frozenset(value) not in {frozenset(expected), frozenset(expected | {"reason"})} or not isinstance(value["source_texts"], list) or len(value["source_texts"]) < 2:
                 raise ValueError("split_sources requires at least two source_texts")
             sources = [_nonempty_text(item, "split source", exact=True) for item in value["source_texts"]]
             if len(set(sources)) != len(sources): raise ValueError("split source is duplicated")
             return {"kind": kind, "action": action, "target_sha256": detail["target_sha256"], "reason": reason, "sources": sources, "title": None, "doi": None, "selected_ref_id": None, "selected_claim_id": None}
         if action == "correct_identity":
-            if set(value) != {"action", "target_sha256", "reason", "title", "doi"}:
+            expected = {"action", "target_sha256", "title", "doi"}
+            if frozenset(value) not in {frozenset(expected), frozenset(expected | {"reason"})}:
                 raise ValueError("correct_identity has an unsupported shape")
             title = _nullable_text(value["title"], "identity title")
             doi = _nullable_text(value["doi"], "identity doi")
             if title is None and doi is None: raise ValueError("correct_identity requires title or doi")
             return {"kind": kind, "action": action, "target_sha256": detail["target_sha256"], "reason": reason, "sources": [], "title": title, "doi": doi, "selected_ref_id": None, "selected_claim_id": None}
-        if set(value) != {"action", "target_sha256", "reason"}: raise ValueError("manual Parse review has an unsupported answer shape")
+        expected = {"action", "target_sha256"}
+        if frozenset(value) not in {frozenset(expected), frozenset(expected | {"reason"})}: raise ValueError("manual Parse review has an unsupported answer shape")
         return {"kind": kind, "action": action, "target_sha256": detail["target_sha256"], "reason": reason, "sources": [], "title": None, "doi": None, "selected_ref_id": None, "selected_claim_id": None}
     if kind == "claim_evidence":
         raise ValueError("ClaimEvidence does not accept generic task answers")

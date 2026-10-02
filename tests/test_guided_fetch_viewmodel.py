@@ -340,3 +340,25 @@ def test_browser_search_empty_per_reference_query_fails_closed(tmp_path):
     model = GuidedFetchViewModel(_inventory(tmp_path))
     with pytest.raises(ValueError, match="rendered an empty value"):
         model.browser_url("r3")
+
+def test_viewmodel_labels_staged_ocr_preview_without_promoting_fetch_text(tmp_path):
+    inventory = _inventory(tmp_path)
+    staged_text = tmp_path / "guided-ocr-staged.txt"
+    staged_text.write_text("parsed OCR text", encoding="utf-8")
+    inventory["references"][1]["fetch"].update({
+        "preview_path": str(staged_text),
+        "preview_kind": "guided_ocr_staged",
+    })
+    model = GuidedFetchViewModel(inventory)
+
+    assert model.rows()[1].status == "abstract"
+    assert model.detail_tabs("r2")["Preview"] == {
+        "path": str(staged_text),
+        "kind": "guided_ocr_staged",
+    }
+    preview = model.detail_panels("r2")["Preview"]
+    assert preview["headline"] == "Staged OCR text"
+    assert any(
+        label == "Preview status" and "not admitted for verification" in value
+        for label, value in preview["rows"]
+    )

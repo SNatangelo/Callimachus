@@ -115,6 +115,9 @@ def load_run_snapshot(
             "active": run.status == "active",
             "paused": run.status == "paused",
             "action_required": bool(pending),
+            "parse_review_pending": sum(
+                task.slot == "parse_review" for task in pending
+            ),
             "fetch_paused": bool(settings.get("fetch_paused")),
             "references_only": bool(settings.get("references_only")),
             "run_status": run.status,
@@ -147,6 +150,9 @@ def load_run_overview(run_dir: str) -> dict[str, Any]:
             "active": run.status == "active",
             "paused": run.status == "paused",
             "action_required": bool(pending),
+            "parse_review_pending": sum(
+                task.slot == "parse_review" for task in pending
+            ),
             "fetch_paused": bool(settings.get("fetch_paused")),
             "references_only": bool(settings.get("references_only")),
             "run_status": run.status,
@@ -259,6 +265,7 @@ def load_run_summary(run_dir: str) -> dict[str, Any]:
             "source_counts": counts,
             "verification_counts": verification_counts,
             "action_required": snapshot["action_required"],
+            "parse_review_pending": snapshot["parse_review_pending"],
             "crash_recoverable": crash_recoverable,
             "audit_present": audit_present,
             "report_present": report_path.is_file(),

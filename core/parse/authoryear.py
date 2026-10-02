@@ -30,9 +30,9 @@ import unicodedata
 from core.invocation import run_command
 
 try:
-    from core.parse.parsing_common import RANGE_DASHES
+    from core.parse.parsing_common import RANGE_DASHES, _terminal_issue_page_range_year
 except ImportError:
-    from parsing_common import RANGE_DASHES
+    from parsing_common import RANGE_DASHES, _terminal_issue_page_range_year
 
 YEAR = r"(?:1[5-9]|20)\d{2}"
 # Surname-word: initial capital (including accented letters), not all-caps short acronyms.
@@ -258,6 +258,9 @@ def entry_key(raw_entry: str):
     m_year = re.search(r"\b(" + YEAR + r")([a-z])?\b", e_year)
     year = int(m_year.group(1)) if m_year else None
     suffix = (m_year.group(2) or "") if m_year else ""
+    terminal_issue_year = _terminal_issue_page_range_year(e_year)
+    if terminal_issue_year is not None:
+        year, suffix = terminal_issue_year
     # Read the name off a base-Latin fold of the entry, so a surname does not
     # truncate at a letter the class below cannot see: "Zaviačič" (č is outside
     # À-ÿ) keeps all of itself as "Zaviacic".  _surname_key folds the same way, so

@@ -1479,9 +1479,9 @@ CREATE TABLE IF NOT EXISTS task_manual_parse_review_candidates (
 );
 CREATE TABLE IF NOT EXISTS task_manual_parse_review_answers (
   answer_id TEXT PRIMARY KEY REFERENCES task_answers(answer_id) ON DELETE CASCADE,
-  action TEXT NOT NULL CHECK (action IN ('no_sources','split_sources','correct_identity','select_reference','select_claim','keep_ambiguous','keep_unresolved')),
+  action TEXT NOT NULL CHECK (action IN ('no_sources','split_sources','correct_identity','select_reference','select_claim','keep_ambiguous','keep_unresolved','skip_review')),
   target_sha256 TEXT NOT NULL CHECK (length(target_sha256)=64 AND target_sha256 NOT GLOB '*[^0-9a-f]*'),
-  reason TEXT NOT NULL CHECK(length(trim(reason))>0),
+  reason TEXT NOT NULL,
   title_present INTEGER NOT NULL CHECK(title_present IN(0,1)),
   title TEXT,
   doi_present INTEGER NOT NULL CHECK(doi_present IN(0,1)),
@@ -1760,7 +1760,12 @@ CREATE TABLE IF NOT EXISTS task_fetch_answers (
   CHECK (source_tier != 'abstract' OR source_kind = 'file_path'),
   CHECK (disposition != 'user_waived' OR guided_fetch = 1),
   CHECK (guided_fetch = 0 OR found = 1 OR disposition = 'user_waived'),
-  CHECK (identity_attested = CASE WHEN guided_fetch = 1 AND found = 1 THEN 1 ELSE 0 END)
+  CHECK (
+    identity_attested = CASE WHEN guided_fetch = 1 AND found = 1 THEN 1 ELSE 0 END
+    OR (identity_attested = 0 AND guided_fetch = 1 AND found = 1
+      AND source_kind = 'file_path' AND url_present = 1
+      AND url LIKE 'urn:callimachus:ocr-scan:sha256:%#callimachus-scan-attachment=%')
+  )
 );
 
 CREATE TABLE IF NOT EXISTS task_browser_answer_states (
@@ -1797,7 +1802,12 @@ CREATE TABLE IF NOT EXISTS task_browser_answer_items (
   CHECK (source_tier != 'abstract' OR source_kind = 'file_path'),
   CHECK (disposition != 'user_waived' OR guided_fetch = 1),
   CHECK (guided_fetch = 0 OR found = 1 OR disposition = 'user_waived'),
-  CHECK (identity_attested = CASE WHEN guided_fetch = 1 AND found = 1 THEN 1 ELSE 0 END)
+  CHECK (
+    identity_attested = CASE WHEN guided_fetch = 1 AND found = 1 THEN 1 ELSE 0 END
+    OR (identity_attested = 0 AND guided_fetch = 1 AND found = 1
+      AND source_kind = 'file_path' AND url_present = 1
+      AND url LIKE 'urn:callimachus:ocr-scan:sha256:%#callimachus-scan-attachment=%')
+  )
 );
 
 CREATE TABLE IF NOT EXISTS task_research_answer_states (

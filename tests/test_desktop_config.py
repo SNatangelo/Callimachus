@@ -32,7 +32,8 @@ def test_settings_inventory_masks_secrets_and_preserves_effective_source(tmp_pat
     )
     by_name = {row["name"]: row for row in rows}
 
-    assert by_name["OPENAI_API_KEY"]["value"] == "••••••••"
+    assert by_name["OPENAI_API_KEY"]["value"] == ""
+    assert by_name["OPENAI_API_KEY"]["display_value"] == "••••••••"
     assert "local-secret" not in repr(rows)
     assert by_name["CITATION_VERIFIER_ACCURACY"]["value"] == "maximum"
     assert by_name["CITATION_VERIFIER_ACCURACY"]["source"] == "environment"
@@ -75,13 +76,13 @@ def test_verify_fork_options_expose_only_configured_valid_backends():
             "backend": "freetoken",
             "model": "local-a",
             "model_env": "FREETOKEN_MODEL",
-            "label": "freetoken — local-a",
+            "label": "freetoken: local-a",
         },
         {
             "selector": "freetoken:local-b",
             "backend": "freetoken",
             "model": "local-b",
             "model_env": "FREETOKEN_MODEL",
-            "label": "freetoken — local-b",
+            "label": "freetoken: local-b",
         },
     ]

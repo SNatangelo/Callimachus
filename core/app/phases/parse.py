@@ -317,12 +317,14 @@ def phase_parse(st, *, _progress, _configure_debug_mode, _repo_open, _save_state
             count = _emit_manual_parse_review_tasks(st, repo, repo.parse_payload())
         finally:
             repo.close()
-        st["parse_review_paused"] = True
-        _save_state(st)
-        _progress(f"manual Parse review paused: {count} task(s) emitted")
-        print("Manual Parse review required. Inspect with: "
-              f"{run_command('tasks', 'list', '--run', st['run_dir'], '--slot', 'parse_review')}")
-        return ACTION_REQUIRED
+        if count:
+            st["parse_review_paused"] = True
+            _save_state(st)
+            _progress(f"manual Parse review paused: {count} task(s) emitted")
+            print("Manual Parse review required. Inspect with: "
+                  f"{run_command('tasks', 'list', '--run', st['run_dir'], '--slot', 'parse_review')}")
+            return ACTION_REQUIRED
+        _progress("manual Parse review: no decisions needed; continuing to Resolve")
     ambiguous = [note for note in parse.get("footnote_notes") or []
                  if note.get("extraction_status") == "ambiguous"]
     if ambiguous:

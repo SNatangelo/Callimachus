@@ -40,7 +40,15 @@ ShowUninstDetails show
 !define MUI_UNICON "${PACKAGING_DIR}\assets\Callimachus.ico"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Callimachus\Callimachus.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Start Callimachus"
+!define MUI_FINISHPAGE_LINK "Callimachus source code"
+!define MUI_FINISHPAGE_LINK_LOCATION "https://github.com/SNatangelo/Callimachus"
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_HEADER_TEXT "Callimachus license"
+!define MUI_PAGE_HEADER_SUBTEXT "GNU Affero General Public License v3"
+!define MUI_LICENSEPAGE_TEXT_TOP "Callimachus is free software licensed under the GNU Affero General Public License v3. The full license text is included below. Source code: https://github.com/SNatangelo/Callimachus"
+!define MUI_LICENSEPAGE_TEXT_BOTTOM "Acceptance is not required to run Callimachus. Click Continue to proceed."
+!define MUI_LICENSEPAGE_BUTTON "Continue"
+!insertmacro MUI_PAGE_LICENSE "${DIST_DIR}\LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH

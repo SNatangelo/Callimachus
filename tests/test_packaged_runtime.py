@@ -352,7 +352,7 @@ def test_frozen_run_without_arguments_dispatches_desktop(monkeypatch):
     monkeypatch.setattr(entrypoint, "is_frozen", lambda: True)
     monkeypatch.setattr(entrypoint, "_prepare_frozen_desktop", lambda: True)
     monkeypatch.setattr(entrypoint, "_check_runtime_dependencies", lambda: None)
-    monkeypatch.setattr(entrypoint, "_dispatch", lambda module, args, _prog: (module, args))
+    monkeypatch.setattr(entrypoint, "_launch_desktop", lambda module, args, _prog: (module, args))
     monkeypatch.setattr(sys, "argv", ["Callimachus"])
 
     assert entrypoint._main() == ("core.app.commands.desktop", [])
@@ -362,3 +362,23 @@ def test_freeze_support_precedes_application_main():
     source = Path(entrypoint.__file__).read_text(encoding="utf-8")
     guard = source.split('if __name__ == "__main__":', 1)[1]
     assert guard.index("multiprocessing.freeze_support()") < guard.index("main()")
+
+
+def test_source_app_uses_splash_without_changing_other_commands(monkeypatch):
+    monkeypatch.setattr(entrypoint, "is_frozen", lambda: False)
+    monkeypatch.setattr(entrypoint, "_check_runtime_dependencies", lambda: None)
+    calls = []
+    monkeypatch.setattr(entrypoint, "_launch_desktop", lambda *args: calls.append(("splash", args)) or 7)
+    monkeypatch.setattr(entrypoint, "_dispatch", lambda *args: calls.append(("dispatch", args)) or 9)
+
+    monkeypatch.setattr(sys, "argv", ["run.py", "app", "--language", "it"])
+    assert entrypoint._main() == 7
+    assert calls == [("splash", ("core.app.commands.desktop", ["--language", "it"], "run.py app"))]
+
+    monkeypatch.setattr(sys, "argv", ["run.py", "parse", "--help"])
+    assert entrypoint._main() == 9
+    assert calls[-1] == ("dispatch", (entrypoint._COMMANDS["parse"], ["--help"], "run.py parse"))
+
+    monkeypatch.setattr(sys, "argv", ["run.py", "app", "--help"])
+    assert entrypoint._main() == 9
+    assert calls[-1] == ("dispatch", ("core.app.commands.desktop", ["--help"], "run.py app"))

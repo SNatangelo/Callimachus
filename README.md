@@ -57,7 +57,7 @@ Open **`report.html`** in your browser. Start with the overview, filter claims a
 
 **[Explore the example report on the website](https://callimachus.science/demo/attention/)** without installing Callimachus. A [self-contained copy is included in this repository](examples/report/index.html); download that file and open it in your browser to inspect the bundled version offline. On GitHub, use the file page's download button.
 
-The bundled example is the latest anonymised test report supplied for this README, preserved byte-for-byte with its SHA values and attempt history. It demonstrates the interface, not measured accuracy or independently attested audit readiness.
+The bundled example is a public derivative of a test report. It retains the claim and verdict excerpts, omits nonessential source text and prompt payloads, and records the transformation in a [redaction manifest](examples/report/index.html.redaction.json). Its Dropout citation year is corrected in the public copy, with the changed fields listed in that manifest. It demonstrates the interface, not measured accuracy or independently attested audit readiness. See the [example notes](examples/report/README.md).
 
 ### From a claim to its evidence
 
@@ -88,7 +88,7 @@ Open a source to compare **what was searched**, **what the resolver found**, and
 
 </details>
 
-**Rejected attempts stay visible.** Where present, Jury 1 proposals rejected by the guards and Jury 2 reviews are shown separately from the final result, with reasons, model attribution and candidate cycles. Expand the audit record to inspect the recorded requests and attempts.
+**Rejected attempts stay visible.** Where present, Jury 1 proposals rejected by the guards and Jury 2 reviews are shown separately from the final result, with model attribution and candidate cycles. Full reports include their recorded reasons and request payloads; the public example omits some reasons and payloads while retaining the attempt timeline and safe status fields.
 
 <details>
 <summary><strong>The files behind the report</strong></summary>
@@ -181,7 +181,7 @@ python run.py --input manuscript.pdf --accuracy standard
 Replace `manuscript.pdf` with your input file. Progress appears in the terminal, and the run is saved under `runs/<id>/`. Open **`report.html`** there after the report has been generated.
 
 For the optional desktop interface, install its dependencies and launch the
-five-tab application. On Windows:
+six-tab application, including the Console. On Windows:
 
 ```powershell
 py -m pip install -r requirements-gui.txt
@@ -207,10 +207,36 @@ Python is bundled. Google Chrome is needed only for Guided Fetch browser capture
 The desktop follows the same pipeline as the CLI. Choose a configured LLM model for a full run; without one, it produces a references-only report. Guided Fetch prompts and the final report appear in the app.
 
 <a href="assets/readme/app-analysis.png">
-  <img src="assets/readme/app-analysis.png" alt="Callimachus desktop Analysis view with a running Fetch phase, source statuses and progress; all names and data are illustrative." width="1280">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/app-analysis-dark.png">
+    <img src="assets/readme/app-analysis.png" alt="Callimachus 1.1.0 Analysis interface with manuscript selection, Jury controls, source progress and the Console tab; demonstration data." width="1280">
+  </picture>
 </a>
 
-*Analysis view with illustrative data; no personal paths or credentials.*
+*Callimachus 1.1.0 interface preview with demonstration data; no personal paths or credentials. [Light theme](assets/readme/app-analysis.png) · [Dark theme](assets/readme/app-analysis-dark.png).*
+
+<details>
+<summary><strong>Guided Fetch, OCR and manual citation review</strong></summary>
+
+<a href="assets/readme/guided-fetch.png">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/guided-fetch-dark.png">
+    <img src="assets/readme/guided-fetch.png" alt="Guided Fetch with a PDF awaiting OCR, source-identity review and file upload controls; demonstration data." width="1280">
+  </picture>
+</a>
+
+*Guided Fetch and OCR — [Light theme](assets/readme/guided-fetch.png) · [Dark theme](assets/readme/guided-fetch-dark.png).*
+
+<a href="assets/readme/manual-review.png">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme/manual-review-dark.png">
+    <img src="assets/readme/manual-review.png" alt="Manual citation review with task tabs and single-choice source selection; demonstration data." width="1000">
+  </picture>
+</a>
+
+*Manual citation review — [Light theme](assets/readme/manual-review.png) · [Dark theme](assets/readme/manual-review-dark.png). All examples are illustrative UI states, not verification evidence.*
+
+</details>
 
 <details>
 <summary><strong>When a run needs a source or an operator decision</strong></summary>

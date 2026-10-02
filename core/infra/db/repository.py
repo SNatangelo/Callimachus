@@ -1620,7 +1620,7 @@ class RunRepository:
         ):
             decision = applied_by_note.get(note["note_id"])
             if note["extraction_status"] not in {"no_sources", "ambiguous"} and not (
-                decision and decision["action"] == "split_sources"
+                decision and decision["action"] in {"split_sources", "skip_review"}
             ):
                 continue
             effective_status = note["extraction_status"]
@@ -1630,6 +1630,8 @@ class RunRepository:
                 effective_status = "no_sources"
             elif decision and decision["action"] == "keep_ambiguous":
                 effective_status = "ambiguous"
+            elif decision and decision["action"] == "skip_review":
+                effective_status = "skipped"
             rows.append({
                 "subject_type": "footnote_note",
                 "subject_id": note["note_id"],
@@ -1695,7 +1697,10 @@ class RunRepository:
                 "effective_doi": override["override_doi"] if override["doi_present"] else override["original_doi"],
             })
         for decision in sorted(applied.values(), key=lambda item: item["task_id"]):
-            if decision["review_kind"] != "reference_identity_review" or decision["action"] != "keep_ambiguous":
+            if (
+                decision["review_kind"] != "reference_identity_review"
+                or decision["action"] not in {"keep_ambiguous", "skip_review"}
+            ):
                 continue
             ref = self._conn.execute(
                 "SELECT ref_id,ref_number,title,doi FROM reference_entries WHERE ref_id=?",
@@ -1703,10 +1708,14 @@ class RunRepository:
             ).fetchone()
             if ref is None:
                 raise RuntimeError("manual Parse identity target is unavailable")
+            status = (
+                "skipped" if decision["action"] == "skip_review"
+                else "identity_ambiguous"
+            )
             rows.append({
                 "subject_type": "reference_identity",
                 "subject_id": ref["ref_id"], "ref_number": ref["ref_number"],
-                "status": "identity_ambiguous", "action": "keep_ambiguous",
+                "status": status, "action": decision["action"],
                 "source_count": None, "manual_review_required": False,
                 "task_id": decision["task_id"], "answer_id": decision["answer_id"],
                 "target_sha256": decision["target_sha256"], "reason": decision["reason"],
@@ -1733,10 +1742,16 @@ class RunRepository:
             forward_claim = self._conn.execute("SELECT claim_id FROM unresolved_citations WHERE occurrence_id=?", (override["occurrence_id"],)).fetchone() if override["occurrence_id"] else None
             rows.append({"subject_type": "citation_attribution", "subject_id": override["occurrence_id"] or override["ref_id"], "claim_id": forward_claim["claim_id"] if forward_claim else override["claim_id"], "ref_id": override["ref_id"], "status": "attribution_overridden", "action": "select_reference" if override["direction"] == "citation_to_reference" else "select_claim", "task_id": override["task_id"], "answer_id": override["answer_id"], "target_sha256": override["target_sha256"], "reason": override["reason"], "actor_type": override["actor_type"], "producer_class": override["producer_class"], "producer_identity": override["producer_identity"], "ingress_kind": override["ingress_kind"], "authority_id": override["authority_id"], "submitted_at": override["submitted_at"], "applied_at": override["applied_at"], "direction": override["direction"], "candidate_origin": override["candidate_origin"], "candidate_score": override["candidate_score"]})
         for decision in applied.values():
-            if decision["review_kind"] not in {"citation_reference_review", "reference_claim_review"} or decision["action"] != "keep_unresolved":
+            if (
+                decision["review_kind"] not in {"citation_reference_review", "reference_claim_review"}
+                or decision["action"] not in {"keep_unresolved", "skip_review"}
+            ):
                 continue
             task = self._conn.execute("SELECT claim_id,ref_id,scope FROM tasks WHERE task_id=?", (decision["task_id"],)).fetchone()
-            rows.append({"subject_type": "citation_attribution", "subject_id": task["scope"] or task["ref_id"], "claim_id": task["claim_id"], "ref_id": task["ref_id"], "status": "kept_unresolved", "action": "keep_unresolved", "task_id": decision["task_id"], "answer_id": decision["answer_id"], "target_sha256": decision["target_sha256"], "reason": decision["reason"], "actor_type": decision["actor_type"], "producer_class": decision["producer_class"], "producer_identity": decision["producer_identity"], "ingress_kind": decision["ingress_kind"], "authority_id": decision["authority_id"], "submitted_at": decision["submitted_at"], "applied_at": decision["applied_at"]})
+            if task is None:
+                raise RuntimeError("manual Parse attribution target is unavailable")
+            skipped = decision["action"] == "skip_review"
+            rows.append({"subject_type": "citation_attribution", "subject_id": task["scope"] or task["ref_id"], "claim_id": task["claim_id"], "ref_id": task["ref_id"], "status": "skipped" if skipped else "kept_unresolved", "action": decision["action"], "task_id": decision["task_id"], "answer_id": decision["answer_id"], "target_sha256": decision["target_sha256"], "reason": decision["reason"], "actor_type": decision["actor_type"], "producer_class": decision["producer_class"], "producer_identity": decision["producer_identity"], "ingress_kind": decision["ingress_kind"], "authority_id": decision["authority_id"], "submitted_at": decision["submitted_at"], "applied_at": decision["applied_at"]})
         return rows
 
     def _replace_footnote_provenance(self, notes, sources, claim_footnotes, parents=None) -> None:
@@ -3018,8 +3033,21 @@ class RunRepository:
             raise RuntimeError("materialization intent path is not normalized")
         run_root = os.path.realpath(self._run_dir)
         absolute = os.path.realpath(os.path.join(run_root, stored_path))
+        containment_root, containment_path = run_root, absolute
+        if os.name == "nt":
+            def _comparison_path(path: str) -> str:
+                path = os.path.normcase(os.path.normpath(path))
+                if path.startswith("\\\\?\\unc\\"):
+                    return "\\\\" + path[8:]
+                if path.startswith("\\\\?\\"):
+                    return path[4:]
+                return path
+
+            # realpath may spell equivalent Windows paths with or without the extended prefix.
+            containment_root = _comparison_path(run_root)
+            containment_path = _comparison_path(absolute)
         try:
-            if os.path.commonpath((run_root, absolute)) != run_root:
+            if os.path.commonpath((containment_root, containment_path)) != containment_root:
                 raise RuntimeError("materialization intent path escapes run directory")
         except ValueError as exc:
             raise RuntimeError("materialization intent path is invalid") from exc
@@ -4044,7 +4072,7 @@ class RunRepository:
                     current_hash = hashlib.sha256((target.raw_entry + json.dumps(claim_snapshots, sort_keys=True, separators=(",", ":")) + json.dumps(task_candidates, sort_keys=True, separators=(",", ":"))).encode("utf-8")).hexdigest() if target is not None else None
                     if current_hash != answer["task_hash"]:
                         raise ValueError("manual inverse attribution target is unavailable")
-                if answer["action"] == "keep_unresolved":
+                if answer["action"] in {"keep_unresolved", "skip_review"}:
                     pass
                 else:
                     selected = answer["selected_id"]
@@ -4072,7 +4100,7 @@ class RunRepository:
                 target = self._conn.execute("SELECT * FROM footnote_notes WHERE note_id=?", (task["note_id"],)).fetchone()
                 if target is None or hashlib.sha256(target["raw_note"].encode("utf-8")).hexdigest() != answer["task_hash"]:
                     raise ValueError("manual Parse footnote target changed")
-                if answer["action"] not in {"no_sources", "split_sources", "keep_ambiguous"}:
+                if answer["action"] not in {"no_sources", "split_sources", "keep_ambiguous", "skip_review"}:
                     raise ValueError("manual Parse footnote action is invalid")
                 if answer["action"] == "split_sources":
                     pieces = list(self._conn.execute("SELECT source_order,source_text FROM task_manual_parse_review_split_sources WHERE answer_id=? ORDER BY source_order", (answer["answer_id"],)))
@@ -4089,41 +4117,42 @@ class RunRepository:
                         raise ValueError("manual Parse split sources overlap or are out of order")
                 else:
                     spans = []
-                if self._conn.execute(
-                    "SELECT 1 FROM manual_footnote_source_overrides WHERE note_id=?",
-                    (task["note_id"],),
-                ).fetchone() is not None:
-                    raise ValueError("manual Parse footnote decision is already applied")
-                self._conn.execute(
-                    "INSERT INTO manual_footnote_source_overrides VALUES(?,?,?,?,?)",
-                    (task["note_id"], answer["action"], answer["task_hash"], answer["answer_id"], now),
-                )
-                next_ref_number = int(self._conn.execute(
-                    "SELECT COALESCE(MAX(ref_number),0)+1 FROM operational_references"
-                ).fetchone()[0])
-                for order, (start, end, text) in enumerate(spans):
-                    ref_id = "footnote-source-" + hashlib.sha256(
-                        f"{task['note_id']}:{order}:{text}".encode()
-                    ).hexdigest()[:24]
+                if answer["action"] != "skip_review":
+                    if self._conn.execute(
+                        "SELECT 1 FROM manual_footnote_source_overrides WHERE note_id=?",
+                        (task["note_id"],),
+                    ).fetchone() is not None:
+                        raise ValueError("manual Parse footnote decision is already applied")
                     self._conn.execute(
-                        "INSERT INTO operational_references VALUES(?,?,?,?,?,?,?)",
-                        (ref_id, next_ref_number + order, "manual_footnote_split",
-                         self._conn.execute(
-                             "SELECT ref_id FROM footnote_note_parents WHERE note_id=?",
-                             (task["note_id"],),
-                         ).fetchone()[0], task["note_id"], answer["answer_id"], now),
+                        "INSERT INTO manual_footnote_source_overrides VALUES(?,?,?,?,?)",
+                        (task["note_id"], answer["action"], answer["task_hash"], answer["answer_id"], now),
                     )
-                    self._conn.execute(
-                        "INSERT INTO manual_footnote_source_override_sources VALUES(?,?,?,?,?,?)",
-                        (task["note_id"], ref_id, order, text, start, end),
-                    )
+                    next_ref_number = int(self._conn.execute(
+                        "SELECT COALESCE(MAX(ref_number),0)+1 FROM operational_references"
+                    ).fetchone()[0])
+                    for order, (start, end, text) in enumerate(spans):
+                        ref_id = "footnote-source-" + hashlib.sha256(
+                            f"{task['note_id']}:{order}:{text}".encode()
+                        ).hexdigest()[:24]
+                        self._conn.execute(
+                            "INSERT INTO operational_references VALUES(?,?,?,?,?,?,?)",
+                            (ref_id, next_ref_number + order, "manual_footnote_split",
+                             self._conn.execute(
+                                 "SELECT ref_id FROM footnote_note_parents WHERE note_id=?",
+                                 (task["note_id"],),
+                             ).fetchone()[0], task["note_id"], answer["answer_id"], now),
+                        )
+                        self._conn.execute(
+                            "INSERT INTO manual_footnote_source_override_sources VALUES(?,?,?,?,?,?)",
+                            (task["note_id"], ref_id, order, text, start, end),
+                        )
             else:
                 target = self._conn.execute("SELECT raw_entry FROM reference_entries WHERE ref_id=?", (task["ref_id"],)).fetchone()
                 if target is None or hashlib.sha256(target[0].encode("utf-8")).hexdigest() != answer["task_hash"]:
                     raise ValueError("manual Parse identity target changed")
                 if answer["action"] == "correct_identity":
                     self._conn.execute("INSERT INTO manual_reference_identity_overrides VALUES(?,?,?,?,?,?,?,?)", (task["ref_id"], answer["task_hash"], answer["title_present"], answer["title"], answer["doi_present"], answer["doi"], answer["answer_id"], now))
-                elif answer["action"] != "keep_ambiguous":
+                elif answer["action"] not in {"keep_ambiguous", "skip_review"}:
                     raise ValueError("manual Parse identity action is invalid")
             applied = self._conn.execute("UPDATE tasks SET status='applied',applied_at=? WHERE task_id=? AND status='answered' AND generation=?", (now, task_id, task["generation"])).rowcount
             if applied != 1:

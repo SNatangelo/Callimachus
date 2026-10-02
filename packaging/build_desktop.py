@@ -98,6 +98,7 @@ def build_arguments() -> list[str]:
         (ROOT / ".env.example", "."),
         (ROOT / "DEPLOYMENT.md", "."),
         (ROOT / "LICENSE", "."),
+        (ROOT / "VERSION", "."),
         (ROOT / "docs" / "guide", "docs/guide"),
         (ROOT / "docs" / "deployment", "docs/deployment"),
         (ROOT / "docs" / "architecture", "docs/architecture"),
@@ -137,6 +138,10 @@ def build_arguments() -> list[str]:
     for source, destination in data:
         arguments.extend(("--add-data", f"{source}{os.pathsep}{destination}"))
     if sys.platform == "darwin":
+        icon = ROOT / "packaging" / "assets" / "Callimachus.icns"
+        if not icon.is_file():
+            raise RuntimeError(f"macOS application icon is missing: {icon}")
+        arguments.extend(("--icon", str(icon)))
         arguments.extend(("--windowed", "--osx-bundle-identifier", "science.callimachus.desktop"))
     elif sys.platform == "win32":
         icon = ROOT / "packaging" / "assets" / "Callimachus.ico"

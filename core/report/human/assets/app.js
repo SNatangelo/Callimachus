@@ -88,6 +88,9 @@
   const bySource = pairMap("ref_id");
   const claimById = new Map((state.projection.claims || []).map(item => [item.claim.id, item]));
   const sourceById = new Map((state.projection.sources || []).map(item => [item.reference.id, item]));
+  const tableOnlySourceIds = new Set((state.projection.table_only_citations || []).map(item => item.ref_id));
+  const sourceUsage = item => (item.claim_ids || []).length
+    ? "cited" : tableOnlySourceIds.has(item.reference.id) ? "table_only" : "uncited";
   const worst = pairs => {
     const ranks = {contradicts: 0, off_topic: 1, partial: 2, unresolved: 3, no_outcome: 4, related: 5, supports: 6};
     return pairs.reduce((best, pair) => !best || (ranks[outcome(pair)] ?? 4) < (ranks[best] ?? 4) ? outcome(pair) : best, "");
@@ -112,6 +115,20 @@
     return list;
   };
   const detailCard = (titleKey, entries) => card(el("h3", {class: "cv-section-title"}, t(titleKey)), detailList(entries));
+  const orphanCard = (citations, hasLinkedPairs) => {
+    const list = el("ul", {class: "cv-orphan-citation-list"});
+    citations.forEach(citation => list.append(add(
+      el("li", {class: "cv-orphan-citation"}),
+      el("strong", {}, orphanCitationLabel(citation)),
+      el("span", {class: "cv-orphan-marker"}, t("attention.orphan_marker_copy", {marker: citationMarker(citation)})),
+    )));
+    return add(
+      el("section", {class: "cv-card cv-orphan-card"}),
+      el("h3", {class: "cv-section-title"}, t("heading.orphan_citations")),
+      list,
+      hasLinkedPairs ? el("p", {class: "cv-orphan-verdict-scope"}, t("attention.orphan_verdict_scope")) : null,
+    );
+  };
   const audit = record => {
     const details = el("details", {class: "cv-audit"});
     details.append(el("summary", {}, t("heading.audit")), el("pre", {}, JSON.stringify(record, null, 2)));
@@ -148,6 +165,13 @@
     return text.length > 160 ? `${text.slice(0, 157)}…` : text;
   };
   const claimText = item => item && (item.focus_text || (item.claim || {}).sentence) || t("value.not_recorded");
+  const isOrphanCitation = citation => citation && citation.ref_id == null && !(citation.candidate_ref_ids || []).length;
+  const orphanCitations = item => (item.citations || []).filter(isOrphanCitation);
+  const citationMarker = citation => String((citation || {}).marker_raw || "").trim() || t("value.not_recorded");
+  const orphanCitationLabel = citation => {
+    const item = citation || {}, surname = String(item.surname || "").trim(), year = String(item.year || "").trim();
+    return surname && year ? `${surname[0].toLocaleUpperCase()}${surname.slice(1)} · ${year}` : citationMarker(item);
+  };
   const sourceCitation = item => item && (item.display_citation || (item.reference || {}).title || (item.reference || {}).raw_entry) || t("value.not_recorded");
   const sourceTitle = item => item && ((item.reference || {}).title || (item.reference || {}).raw_entry || item.display_citation) || t("value.not_recorded");
   const sourceLabel = item => item ? `${item.display_id || ""} ${sourceCitation(item)}`.trim() : t("value.not_recorded");
@@ -291,6 +315,8 @@
   const showClaim = (item, source) => {
     const closeButton = startDrawer(excerpt(claimText(item)), source);
     const pairs = byClaim.get(item.claim.id) || [];
+    const orphans = orphanCitations(item);
+    if (orphans.length) drawer.append(orphanCard(orphans, pairs.length > 0));
     drawer.append(detailCard("heading.claim_considered", [["field.claim_text", quote(claimText(item))], ["field.claim_scope", status(item.claim.claim_scope)]]));
     const parserProvenance = [];
     if (item.claim.parser_sentence_index !== undefined && item.claim.parser_sentence_index !== null) parserProvenance.push(t("value.sentence_number", {number: item.claim.parser_sentence_index}));
@@ -299,7 +325,7 @@
     const verdicts = el("div", {class: "cv-structured"});
     pairs.forEach(pair => {
       const sourceItem = sourceById.get(pair.ref_id);
-      const button = el("button", {type: "button", class: "cv-structured-item"});
+      const button = el("button", {type: "button", class: `cv-structured-item cv-verdict-card cv-pair-verdict ${classFor(outcome(pair))}`});
       button.append(el("h3", {}, sourceLabel(sourceItem)), el("p", {}, `${status(outcome(pair))} · ${modelsFor([pair])}`));
       button.addEventListener("click", () => showPair(pair, button)); verdicts.append(button);
     });
@@ -316,6 +342,8 @@
   const resolverMetadata = resolve => resolve.metadata_match || (resolve.evidence_profile || {}).metadata_match || resolverCandidate(resolve).metadata_match || {};
   const isVerifiableManifestEntry = entry => ["fulltext", "full_text", "abstract", "abstract_only"].includes(entry.tier)
     || (entry.tier === "web" && entry.origin === "googlebooks");
+  const operatorAttestedManifestEntry = item => (item.manifest_entries || []).find(entry => entry && entry.identity_status === "operator_attested");
+  const sourceIdentityStatus = item => operatorAttestedManifestEntry(item) ? "operator_attested" : (item.resolve || {}).status;
   const preferredManifestEntry = item => {
     const entries = (item.manifest_entries || []).filter(isVerifiableManifestEntry), selected = entries.find(entry => entry.selected_for_verification);
     if (selected) return selected;
@@ -423,6 +451,14 @@
   };
   const showSource = (item, source) => {
     const closeButton = startDrawer(sourceLabel(item), source);
+    if (!(item.claim_ids || []).length) {
+      const usage = sourceUsage(item);
+      drawer.append(card(
+        el("h3", {class: "cv-section-title"}, t("filter.usage")),
+        add(el("div", {class: "cv-source-usage-notice"}), badge(usage), el("p", {},
+          usage === "table_only" ? t("usage.table_only_explanation") : t("usage.uncited_explanation"))),
+      ));
+    }
     const reference = item.reference || {}, resolve = item.resolve || {};
     const adjudication = ((resolve.evidence_profile || {}).bibliographic_adjudication || {});
     const reviewLabels = item.bibliographic_review_labels || [];
@@ -586,6 +622,9 @@
     if (bibliographicReviewLabels(item).length) return badge("bibliographic_review_required");
     return status("none");
   };
+  const sourceClaimCount = item => (item.claim_ids || []).length
+    ? String(item.claim_ids.length)
+    : add(el("span", {class: "cv-source-usage"}), el("span", {}, "0"), badge(sourceUsage(item)));
   const reviewLabelText = label => {
     const providers = (label.providers || []).join(", ") || t("value.not_recorded");
     if (label.code === "incomplete_bibliographic_source") {
@@ -765,9 +804,9 @@
     });
     const orphans = attention.filter(item => item.entity === "citation");
     orphans.forEach(item => {
-      const claim = claimById.get(item.claim_id), marker = (item.citation || {}).marker_raw || t("value.not_recorded");
+      const claim = claimById.get(item.claim_id), citation = item.citation || {};
       const button = el("button", {type: "button", class: "cv-triage-row cv-negative"});
-      button.append(el("span", {class: "cv-triage-title"}, t("attention.orphan_title")), el("span", {class: "cv-triage-copy"}, excerpt(claimText(claim))), el("span", {class: "cv-triage-source"}, t("attention.orphan_copy", {marker})));
+      button.append(el("span", {class: "cv-triage-title"}, t("attention.orphan_title")), el("span", {class: "cv-triage-copy"}, excerpt(claimText(claim))), el("span", {class: "cv-triage-source"}, t("attention.orphan_copy", {citation: orphanCitationLabel(citation)})));
       button.addEventListener("click", () => showClaim(claim, button)); review.append(button);
     });
     const sourceAttention = attention.filter(item => item.entity === "source");
@@ -864,14 +903,14 @@
     return section("nav.method", add(el("div", {class: "cv-config-grid"}), detailCard("heading.evidence_regime", [["field.evidence_regime", status(regime)], ["field.evidence_regime_detail", regime && loc().messages[`regime.${regime}`] ? t(`regime.${regime}`) : t("value.not_recorded")], ["field.configuration_origin", runtime.accuracy_origin || t("value.not_recorded")]]), detailCard("heading.verification_policy", [["field.context", status(policy.context_mode || runtime.context_mode)], ["field.profile", status(policy.profile || runtime.profile)], ["field.jury2_policy", status(jury2Level)], ["field.reasoning", status(policy.reasoning || runtime.reasoning)]]), detailCard("heading.models_configured", [["field.configured_models", configured.length ? configured : t("value.not_recorded")], ["field.models_used", used.length ? used : t("value.not_recorded")], ["field.judge_separation", judgeSeparation]]), detailCard("heading.credentials", credentialValues)));
   };
   const claims = () => {
-    const claimIssue = item => (item.citations || []).some(citation => citation.ref_id == null && !(citation.candidate_ref_ids || []).length) ? "orphan" : "";
+    const claimIssue = item => orphanCitations(item).length ? "orphan" : "";
     const fields = [
       {name: "outcome", label: "filter.outcome", get: item => worst(byClaim.get(item.claim.id) || []), status: true},
       {name: "sources", label: "filter.source_count", get: item => String(item.source_display_ids.length)},
       {name: "issue", label: "filter.issue", get: claimIssue, status: true, options: [{value: "orphan", label: "status.orphan"}]},
     ];
     const items = match(state.projection.claims || [], fields);
-    return section("heading.claims", filters(state.projection.claims || [], fields), items.length ? table([{label: "column.claim_text", value: item => primary(excerpt(claimText(item)), item.claim.marker_raw)}, {label: "column.sources", value: item => (item.ref_ids || []).map(id => sourceLabel(sourceById.get(id))).join(" · ")}, {label: "column.outcome", value: item => badge(worst(byClaim.get(item.claim.id) || []))}, {label: "column.model", value: item => modelsFor(byClaim.get(item.claim.id) || [])}], items, showClaim) : card(el("p", {}, t("empty.no_results"))));
+    return section("heading.claims", filters(state.projection.claims || [], fields), items.length ? table([{label: "column.claim_text", value: item => primary(excerpt(claimText(item)), item.claim.marker_raw)}, {label: "column.sources", value: item => (item.ref_ids || []).map(id => sourceLabel(sourceById.get(id))).join(" · ")}, {label: "column.outcome", value: item => add(el("div", {class: "cv-claim-outcome-badges"}), badge(worst(byClaim.get(item.claim.id) || [])), orphanCitations(item).length ? badge("orphan") : null)}, {label: "column.model", value: item => modelsFor(byClaim.get(item.claim.id) || [])}], items, showClaim) : card(el("p", {}, t("empty.no_results"))));
   };
   const sources = () => {
     const fields = [
@@ -897,10 +936,10 @@
       },
       {name: "tier", label: "filter.evidence", get: bestTier, status: true},
       {name: "outcome", label: "filter.outcome", get: item => worst(bySource.get(item.reference.id) || []), status: true},
-      {name: "usage", label: "filter.usage", get: item => (item.claim_ids || []).length ? "cited" : "uncited", status: true},
+      {name: "usage", label: "filter.usage", get: sourceUsage, status: true},
     ];
     const items = match(state.projection.sources || [], fields);
-    return section("heading.sources", filters(state.projection.sources || [], fields), items.length ? table([{label: "column.bibliography", value: item => primary(sourceTitle(item), `${item.display_id || ""} · ${sourceCitation(item)}`)}, {label: "column.bibliographic_concern", value: bibliographicAssessmentBadge}, {label: "column.bibliographic_review", value: reviewLabelBadges}, {label: "column.identity", value: item => add(badge((item.resolve || {}).status), (item.resolve || {}).retracted === true ? badge("retracted") : null)}, {label: "column.text_availability", value: sourceTextAvailabilityBadge}, {label: "column.source_count", value: item => item.claim_ids.length}, {label: "column.outcome", value: item => badge(worst(bySource.get(item.reference.id) || []))}], items, showSource) : card(el("p", {}, t("empty.no_results"))));
+    return section("heading.sources", filters(state.projection.sources || [], fields), items.length ? table([{label: "column.bibliography", value: item => primary(sourceTitle(item), `${item.display_id || ""} · ${sourceCitation(item)}`)}, {label: "column.bibliographic_concern", value: bibliographicAssessmentBadge}, {label: "column.bibliographic_review", value: reviewLabelBadges}, {label: "column.identity", value: item => add(badge(sourceIdentityStatus(item)), (item.resolve || {}).retracted === true ? badge("retracted") : null)}, {label: "column.text_availability", value: sourceTextAvailabilityBadge}, {label: "column.source_count", value: sourceClaimCount}, {label: "column.outcome", value: item => badge(worst(bySource.get(item.reference.id) || []))}], items, showSource) : card(el("p", {}, t("empty.no_results"))));
   };
   const pairs = () => {
     const fields = [
@@ -956,7 +995,9 @@
     };
     menu.addEventListener("click", () => setNavigationOpen(!shell.classList.contains("cv-nav-open")));
     const sidebar = el("aside", {class: "cv-sidebar", id: "cv-sidebar"});
-    sidebar.append(add(el("div", {class: "cv-brand"}), el("img", {class: "cv-brand-logo", src: state.brand_logo, alt: t("app.brand")}), el("span", {}, t("app.title"))));
+    const brand = add(el("button", {type: "button", class: "cv-brand", "aria-label": t("nav.overview")}), el("img", {class: "cv-brand-logo", src: state.brand_logo, alt: t("app.brand")}), el("span", {}, t("app.title")));
+    brand.addEventListener("click", () => { setNavigationOpen(false); navigate("overview"); });
+    sidebar.append(brand);
     const nav = el("nav", {class: "cv-nav", "aria-label": t("a11y.main_navigation")});
     const navCounts = {claims: (state.projection.claims || []).length, sources: (state.projection.sources || []).length, pairs: (state.projection.pairs || []).length};
     viewNames.forEach(name => {

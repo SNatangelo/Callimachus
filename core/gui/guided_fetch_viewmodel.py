@@ -78,6 +78,39 @@ class GuidedFetchViewModel:
     def rows(self) -> list[SourceRow]:
         return [self.row(ref_id) for ref_id in self._entries]
 
+    def ocr_queue(self) -> list[dict[str, Any]]:
+        """Return scans that still need OCR or can be retried after failure."""
+        return [scan for scan in self.ocr_entries() if scan["status"] in {"pending", "failed"}]
+
+    def ocr_entries(self) -> list[dict[str, Any]]:
+        """Return safe OCR states so a reopened window can show completed work."""
+        scans = self.inventory.get("ocr_queue") or []
+        if not isinstance(scans, list):
+            raise ValueError("guided Fetch OCR queue must be a list")
+        result = []
+        for scan in scans:
+            if not isinstance(scan, dict):
+                raise ValueError("guided Fetch OCR queue contains an invalid entry")
+            ref_id = scan.get("ref_id")
+            scan_id = scan.get("scan_id")
+            if not isinstance(ref_id, str) or ref_id not in self._entries:
+                raise ValueError("guided Fetch OCR scan has no known reference")
+            if not isinstance(scan_id, str) or not scan_id:
+                raise ValueError("guided Fetch OCR scan has no identifier")
+            if self.row(ref_id).status == "fulltext":
+                continue
+            status = scan.get("status")
+            if status not in {"pending", "done", "failed"}:
+                raise ValueError("guided Fetch OCR scan has an invalid status")
+            result.append({
+                "ref_id": ref_id,
+                "scan_id": scan_id,
+                "status": status,
+                "display_name": str(scan.get("display_name") or "PDF"),
+                "reason": str(scan.get("reason") or ""),
+            })
+        return result
+
     def row(self, ref_id: str) -> SourceRow:
         entry = self.entry(ref_id)
         parsed = _mapping(entry.get("parsed"))
@@ -134,7 +167,12 @@ class GuidedFetchViewModel:
         entry = self.entry(ref_id)
         fetch = _mapping(entry.get("fetch"))
         source = _mapping(fetch.get("best_source"))
-        preview = fetch.get("preview_path")
+        preview = {"path": self.preview_path(ref_id)}
+        if (
+            preview["path"] is not None
+            and fetch.get("preview_kind") == "guided_ocr_staged"
+        ):
+            preview["kind"] = "guided_ocr_staged"
         return {
             "Parsed": _mapping(entry.get("parsed")),
             "Resolved": _mapping(entry.get("resolve")),
@@ -145,7 +183,7 @@ class GuidedFetchViewModel:
                 "pending_tasks": list(fetch.get("pending_tasks") or []),
                 "best_source": source,
             },
-            "Preview": {"path": self.preview_path(ref_id)},
+            "Preview": preview,
         }
 
     def detail_panels(self, ref_id: str) -> dict[str, dict[str, Any]]:
@@ -199,9 +237,26 @@ class GuidedFetchViewModel:
                 )), raw["Acquired"],
             ),
             "Preview": _detail_panel(
-                "Source preview",
-                "A text preview is shown below when an acquired source is available.",
-                _rows((("Preview file", raw["Preview"].get("path")),)), raw["Preview"],
+                (
+                    "Staged OCR text"
+                    if raw["Preview"].get("kind") == "guided_ocr_staged"
+                    else "Source preview"
+                ),
+                (
+                    "This OCR text is staged and pending Fetch checks; it is not an admitted source."
+                    if raw["Preview"].get("kind") == "guided_ocr_staged"
+                    else "A text preview is shown below when an acquired source is available."
+                ),
+                _rows((
+                    (
+                        "Preview status",
+                        "Staged OCR text; pending Fetch checks and not admitted for verification."
+                        if raw["Preview"].get("kind") == "guided_ocr_staged"
+                        else None,
+                    ),
+                    ("Preview file", raw["Preview"].get("path")),
+                )),
+                raw["Preview"],
             ),
         }
 

@@ -52,7 +52,7 @@ def test_export_is_readonly_and_reports_missing_and_transient_separately(tmp_pat
     assert sorted(p.name for p in out.iterdir()) == [
         'bibliography-report.html', 'bibliography-report.json', 'bibliography-report.md',
     ]
-    data = json.loads((out / 'bibliography-report.json').read_text())
+    data = json.loads((out / 'bibliography-report.json').read_text(encoding='utf-8'))
     assert data['counts'] == {
         'references': 5, 'resolve_recorded': 4, 'not_checked': 1,
         'suspected_fabricated': 1, 'transient_unresolved': 1, 'retraction_flagged': 1,
@@ -66,7 +66,7 @@ def test_export_is_readonly_and_reports_missing_and_transient_separately(tmp_pat
     assert not data['export_signed']
     assert data['references'][1]['suspected_fabricated'] is False
     assert data['references'][4]['resolve'] is None
-    html = (out / 'bibliography-report.html').read_text()
+    html = (out / 'bibliography-report.html').read_text(encoding='utf-8')
     assert '<script>' not in html
     assert '&lt;script&gt;' in html
     assert 'BIBLIOGRAPHIC SCREENING ONLY' in html
@@ -84,11 +84,11 @@ def test_export_is_readonly_and_reports_missing_and_transient_separately(tmp_pat
 def test_suspects_filter_does_not_hide_coverage_or_drop_json_rows(tmp_path):
     run = populated(tmp_path)
     out = report.export(run, suspects_only=True)
-    text = (out / 'bibliography-report.md').read_text()
+    text = (out / 'bibliography-report.md').read_text(encoding='utf-8')
     assert '### Reference 1' in text
     assert '### Reference 2' not in text
     assert 'not checked: 1' in text
-    data = json.loads((out / 'bibliography-report.json').read_text())
+    data = json.loads((out / 'bibliography-report.json').read_text(encoding='utf-8'))
     assert len(data['references']) == 5
 
 

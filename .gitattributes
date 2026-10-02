@@ -1,0 +1,3 @@
+# Preserve publication artifacts byte-for-byte for their provenance hashes.
+examples/report/index.html -text
+examples/report/index.html.redaction.json -text

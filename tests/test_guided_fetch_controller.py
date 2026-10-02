@@ -10,6 +10,8 @@ import pytest
 from core.app.guided_fetch import GuidedFetchController, source_payload
 from core.app.commands import tasks
 
+from core.app import guided_fetch
+
 
 def _record(task_id: str):
     return SimpleNamespace(task_id=task_id)
@@ -352,3 +354,23 @@ def test_controller_proceed_never_waives_pending_identity_review():
 
     assert admitted == []
     assert controller.proceeded is False
+
+def test_controller_skip_keeps_unprocessed_scan_as_waiver_attachment(monkeypatch, tmp_path):
+    admitted: list[tuple[str, dict]] = []
+    controller, _repo = _controller(
+        [{"task_id": "fetch:r1", "kind": "fetch", "ref_id": "r1"}], admitted
+    )
+    monkeypatch.setattr(guided_fetch.provided_fulltext, "pdf_requires_ocr", lambda _path: True)
+    scan = tmp_path / "scan.pdf"
+    scan.write_bytes(b"%PDF-1.4\n")
+    controller.stage_source("r1", source_payload(file_path=str(scan)))
+
+    result = controller.proceed()
+
+    assert result["waived_ref_ids"] == ["r1"]
+    assert admitted == [("fetch:r1", {
+        "found": False,
+        "disposition": "user_waived",
+        "guided_fetch": True,
+        "ocr_scan_file_path": str(scan),
+    })]

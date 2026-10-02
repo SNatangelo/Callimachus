@@ -43,6 +43,7 @@ Specialist commands
   report         regenerate the deterministic report projection and seal
   report-bibliography  export persisted existence/fabrication findings without Fetch/Verify
   report-html    generate or verify the optional human HTML companion
+  report-export  export a public redacted copy of a completed Verify report
   present        emit a report only after its presentation gate accepts it
   preview        inspect key-gated Google Books preview evidence
   gaps           recompute unresolved-source gaps for an accuracy regime

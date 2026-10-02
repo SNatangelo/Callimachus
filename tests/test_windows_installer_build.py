@@ -199,3 +199,26 @@ def test_runtime_preflight_checks_trust_prompts_and_blocks_silent_download():
     assert "if ($Silent)" in source
     assert "exit 15" in source
     assert "Invoke-WebRequest" in source
+
+
+def test_installer_license_page_is_informational_and_uses_distribution_license():
+    source = (ROOT / "packaging" / "windows-installer.nsi").read_text(encoding="utf-8")
+    welcome = source.index("!insertmacro MUI_PAGE_WELCOME")
+    license_page = source.index('!insertmacro MUI_PAGE_LICENSE "${DIST_DIR}\\LICENSE"')
+    directory = source.index("!insertmacro MUI_PAGE_DIRECTORY")
+
+    assert welcome < license_page < directory
+    license_settings = source[welcome:license_page]
+    assert '!define MUI_PAGE_HEADER_TEXT "Callimachus license"' in license_settings
+    assert '!define MUI_PAGE_HEADER_SUBTEXT "GNU Affero General Public License v3"' in license_settings
+    assert '!define MUI_LICENSEPAGE_BUTTON "Continue"' in source
+    assert "Acceptance is not required to run Callimachus." in source
+    assert "LicenseForceSelection" not in source
+    assert "MUI_LICENSEPAGE_CHECKBOX" not in source
+    assert "MUI_LICENSEPAGE_RADIOBUTTONS" not in source
+def test_installer_finish_page_links_to_callimachus_source():
+    source = (ROOT / "packaging" / "windows-installer.nsi").read_text(encoding="utf-8")
+
+    assert '!define MUI_FINISHPAGE_LINK "Callimachus source code"' in source
+    assert '!define MUI_FINISHPAGE_LINK_LOCATION "https://github.com/SNatangelo/Callimachus"' in source
+    assert '!define MUI_FINISHPAGE_RUN "$INSTDIR\\Callimachus\\Callimachus.exe"' in source
