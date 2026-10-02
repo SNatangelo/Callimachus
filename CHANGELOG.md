@@ -14,3 +14,5 @@
   headers, with a light wordmark for dark theme.
 - Add a gated public-report export to the CLI and desktop History/Analysis
   views. Export writes a separate redacted HTML and manifest after Verify.
+- Fix protected database snapshot synchronization and binary artifact reads/copies
+  on Windows, preserving exact bytes, SHA-256 identities and durability checks.

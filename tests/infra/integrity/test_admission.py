@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 from __future__ import annotations
 
+import builtins
 import hashlib
 import os
+import sqlite3
 
 import pytest
 
@@ -12,6 +14,7 @@ from core.infra.db import RunRepository
 from core.infra.db import repository as repository_module
 from core.infra.integrity import AuthorityError, AuthorityPermissionError, FileAuthority
 from core.infra.integrity import admission
+from core.infra.integrity import authority as authority_module
 from core.infra.integrity.authority import AUTHORITY_PROTOCOL_VERSION
 from core.infra.integrity.service import _parse_peer_identities, dispatch_request
 from tests._recovery_fixtures import _current_fetch_task
@@ -20,7 +23,7 @@ from tests._recovery_fixtures import _current_fetch_task
 HASH = "a" * 64
 
 
-def _fixture(tmp_path):
+def _fixture(tmp_path, *, enroll=True):
     authority_root = tmp_path / "authority"
     protected_root = tmp_path / "protected"
     authority_root.mkdir()
@@ -68,11 +71,69 @@ def _fixture(tmp_path):
         task_payload=_current_fetch_task(repo),
     )
     repo.close()
+    if not enroll:
+        return authority, run_dir
     enrolled = authority.enroll(str(run_dir), caller_role="trusted_writer")
     repo = RunRepository.open(str(run_dir))
     repo.append_artifact_checkpoint(enrolled["checkpoint"], enrolled["files"])
     repo.close()
     return authority, run_dir
+
+
+def test_database_snapshot_is_fsynced_through_writable_handle(tmp_path, monkeypatch):
+    authority, run_dir = _fixture(tmp_path, enroll=False)
+    database_path = next(run_dir.glob("*.sqlite"))
+    real_open = builtins.open
+    real_fsync = authority_module.os.fsync
+    opened_handles = {}
+    synchronized_snapshots = []
+
+    def recording_open(path, mode="r", *args, **kwargs):
+        handle = real_open(path, mode, *args, **kwargs)
+        opened_handles[handle.fileno()] = handle
+        return handle
+
+    def checking_fsync(descriptor):
+        handle = opened_handles.get(descriptor)
+        if handle is not None:
+            assert handle.writable(), "SQLite snapshot fsync requires a writable handle"
+            synchronized_snapshots.append(descriptor)
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(authority_module, "open", recording_open, raising=False)
+    monkeypatch.setattr(authority_module.os, "fsync", checking_fsync)
+
+    snapshot = authority._store_database_snapshot(
+        str(database_path), subject_id="run-1", checkpoint_id="fsync-regression"
+    )
+
+    snapshot_path = os.path.join(authority._authority_root, snapshot["relative_path"])
+    assert len(synchronized_snapshots) == 1
+    assert os.path.isfile(snapshot_path)
+    with sqlite3.connect(f"file:{snapshot_path}?mode=ro", uri=True) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
+def test_authority_file_object_preserves_binary_source_bytes(tmp_path):
+    authority, _run_dir = _fixture(tmp_path, enroll=False)
+    contents = b"first line\r\n\x1a\x00\xffsecond line\r\n"
+    source = tmp_path / "binary-source.bin"
+    source.write_bytes(contents)
+    expected_sha256 = hashlib.sha256(contents).hexdigest()
+
+    assert authority._regular_file_digest(str(source)) == (
+        expected_sha256,
+        len(contents),
+    )
+
+    stored_relative_path = authority._store_file_object(
+        str(source),
+        expected_sha256=expected_sha256,
+        expected_byte_count=len(contents),
+    )
+    stored_path = os.path.join(authority._authority_root, stored_relative_path)
+    with open(stored_path, "rb") as stored:
+        assert stored.read() == contents
 
 
 def _request(run_dir, payload):
@@ -280,12 +341,16 @@ def test_admitted_source_opens_source_and_destination_in_binary_mode(
     source.write_bytes(b"%PDF-1.4\nstream\r\ncontent\nendstream")
     destination = tmp_path / "controlled-copy.pdf"
     real_open = admission.os.open
+    native_binary_flag = getattr(admission.os, "O_BINARY", 0)
     binary_flag = 1 << 29
     opened_flags = []
 
     def recording_open(path, flags, mode=0o777):
         opened_flags.append(flags)
-        return real_open(path, flags & ~binary_flag, mode)
+        actual_flags = flags & ~binary_flag
+        if flags & binary_flag:
+            actual_flags |= native_binary_flag
+        return real_open(path, actual_flags, mode)
 
     monkeypatch.setattr(admission.os, "O_BINARY", binary_flag, raising=False)
     monkeypatch.setattr(admission.os, "open", recording_open)
