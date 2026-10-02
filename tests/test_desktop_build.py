@@ -142,6 +142,23 @@ def test_manual_source_audit_uploads_verified_archives_without_publishing():
     assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --generate-notes' in release
 
 
+def test_parser_smoke_fixture_extracts_citation_and_bibliography():
+    fixture = ROOT / "tests" / "fixtures" / "parse_golden" / "inputs" / "pdf_author_year_basic.pdf"
+    assert fixture.is_file(), f"packaging smoke test requires its parser PDF fixture: {fixture}"
+
+    import fitz
+
+    document = fitz.open(fixture)
+    try:
+        text = "\n".join(page.get_text() for page in document)
+    finally:
+        document.close()
+
+    assert "Taylor 2017" in text
+    assert "References" in text
+    assert "Taylor, T. 2017." in text
+
+
 def test_release_runner_builds_and_smokes_windows_installer():
     workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(
         encoding="utf-8"
