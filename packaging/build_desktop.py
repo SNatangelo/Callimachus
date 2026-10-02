@@ -70,6 +70,12 @@ def _dispatch_modules() -> tuple[str, ...]:
 
 
 def _metadata() -> Path:
+    try:
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("a non-empty VERSION file is required to build a release") from exc
+    if not version:
+        raise RuntimeError("a non-empty VERSION file is required to build a release")
     revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=5,
     ).strip()
@@ -82,7 +88,7 @@ def _metadata() -> Path:
     destination = BUILD_ROOT / "build-metadata.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps({
-        "revision": revision, "version": os.environ.get("GITHUB_REF_NAME", ""),
+        "revision": revision, "version": version,
         "dirty": dirty,
     }) + "\n", encoding="utf-8")
     return destination
@@ -98,6 +104,7 @@ def build_arguments() -> list[str]:
         (ROOT / ".env.example", "."),
         (ROOT / "DEPLOYMENT.md", "."),
         (ROOT / "LICENSE", "."),
+        (ROOT / "VERSION", "."),
         (ROOT / "docs" / "guide", "docs/guide"),
         (ROOT / "docs" / "deployment", "docs/deployment"),
         (ROOT / "docs" / "architecture", "docs/architecture"),
@@ -137,6 +144,10 @@ def build_arguments() -> list[str]:
     for source, destination in data:
         arguments.extend(("--add-data", f"{source}{os.pathsep}{destination}"))
     if sys.platform == "darwin":
+        icon = ROOT / "packaging" / "assets" / "Callimachus.icns"
+        if not icon.is_file():
+            raise RuntimeError(f"macOS application icon is missing: {icon}")
+        arguments.extend(("--icon", str(icon)))
         arguments.extend(("--windowed", "--osx-bundle-identifier", "science.callimachus.desktop"))
     elif sys.platform == "win32":
         icon = ROOT / "packaging" / "assets" / "Callimachus.ico"

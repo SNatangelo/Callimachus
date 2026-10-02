@@ -50,7 +50,7 @@ LIBFFI_SOURCE = "https://github.com/libffi/libffi/releases/download/v3.4.4/libff
 LIBFFI_SHA256 = "d66c56ad259a82cf2a9dfc408b32bf5da52371500b84745f7fb8b645712df676"
 SQLITE_SOURCE = "https://www.sqlite.org/2025/sqlite-autoconf-3500400.tar.gz"
 SQLITE_SHA256 = "a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18"
-QT_DOC_SOURCE = "https://doc.qt.io/qt-6/"
+QT_DOC_SOURCE = "https://doc.qt.io/qt-6.11/"
 QT_GFDL_SOURCE = "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/GFDL-1.3-no-invariants-only.txt"
 QT_ATTRIBUTION_MODULES = {
     "Core": "qt-core", "DBus": "qt-d-bus", "Gui": "qt-gui",

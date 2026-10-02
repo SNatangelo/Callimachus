@@ -1804,10 +1804,29 @@ def _browser_challenge_answer_is_valid(task: dict) -> bool:
             return False
         guided = item.get("guided_fetch", False)
         identity_attested = item.get("identity_attested", False)
-        if (
-            type(identity_attested) is not bool
-            or identity_attested != bool(guided and item["found"])
-        ):
+        if type(identity_attested) is not bool:
+            return False
+        if guided and item["found"] and not identity_attested:
+            try:
+                source_ref, scan_path = _provided_fulltext.unpack_ocr_scan_source_ref(
+                    item.get("url")
+                )
+            except ValueError:
+                return False
+            if not (
+                item.get("source_tier", "fulltext") == "fulltext"
+                and "file_path" in item and "text" not in item
+                and isinstance(item["file_path"], str)
+                and Path(item["file_path"]).suffix.lower() == ".txt"
+                and isinstance(scan_path, str)
+                and Path(scan_path).suffix.lower() == ".pdf"
+                and isinstance(source_ref, str)
+                and re.fullmatch(
+                    r"urn:callimachus:ocr-scan:sha256:[0-9a-f]{64}", source_ref,
+                )
+            ):
+                return False
+        elif identity_attested != bool(guided and item["found"]):
             return False
         disposition = item.get(
             "disposition", "provided" if item["found"] else "not_found"
@@ -3105,7 +3124,9 @@ def _admit_controlled_fetch_answer(
     """Apply a controlled answer through its declared deterministic tier gate."""
     ref = _run_ref_by_id(run_dir, ref_id)
     resolve_result = _load_resolve_map(run_dir).get(ref_id) or {}
-    source_ref = answer.get("url")
+    source_ref, ocr_scan_file_path = (
+        _provided_fulltext.unpack_ocr_scan_source_ref(answer.get("url"))
+    )
     origin = (
         "ocr"
         if _provided_fulltext.is_precomputed_ocr_source_ref(source_ref)
@@ -3143,6 +3164,7 @@ def _admit_controlled_fetch_answer(
         file_path=answer.get("file_path"),
         text=answer.get("text"),
         source_ref=source_ref,
+        ocr_scan_file_path=ocr_scan_file_path,
         origin=origin,
         supplied_by=supplied_by,
         supplied_via=supplied_via,

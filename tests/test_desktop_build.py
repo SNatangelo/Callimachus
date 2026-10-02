@@ -19,6 +19,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
+def _load(name: str, file: str):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "packaging" / file)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 def test_intel_mac_ocr_dependency_has_platform_specific_pin():
     requirements = (ROOT / "requirements-ocr.txt").read_text(encoding="utf-8")
@@ -55,6 +62,103 @@ def test_release_runner_requires_binary_dependency_wheels():
     assert "python packaging/assemble_sources.py build/source-audit" in workflow
 
 
+@pytest.mark.parametrize(
+    "ref_name",
+    [
+        pytest.param("Callimachus-v1.1.0", id="branch-ref"),
+        pytest.param("v1.1.0", id="tag-ref"),
+        pytest.param(None, id="no-ref"),
+    ],
+)
+def test_build_metadata_uses_project_version_for_every_git_ref(
+    monkeypatch, tmp_path, ref_name,
+):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_metadata", "build_desktop.py")
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path / "build")
+    (tmp_path / "VERSION").write_text(" 1.1.0 \n", encoding="utf-8")
+    if ref_name is None:
+        monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_REF_NAME", ref_name)
+
+    git_calls = []
+
+    def check_output(arguments, **kwargs):
+        git_calls.append((arguments, kwargs))
+        if arguments == ["git", "rev-parse", "HEAD"]:
+            return "a" * 40
+        if arguments == ["git", "status", "--porcelain", "--untracked-files=normal"]:
+            return " M tracked.py\n"
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(build.subprocess, "check_output", check_output)
+    metadata_path = build._metadata()
+
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == {
+        "revision": "a" * 40,
+        "version": "1.1.0",
+        "dirty": True,
+    }
+    assert [arguments for arguments, _ in git_calls] == [
+        ["git", "rev-parse", "HEAD"],
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+    ]
+
+
+@pytest.mark.parametrize("version_contents", [None, "", " \n\t"])
+def test_build_metadata_rejects_missing_or_empty_version(
+    monkeypatch, tmp_path, version_contents,
+):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_metadata_invalid", "build_desktop.py")
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path / "build")
+    if version_contents is not None:
+        (tmp_path / "VERSION").write_text(version_contents, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="non-empty VERSION"):
+        build._metadata()
+
+
+def test_manual_source_audit_uploads_verified_archives_without_publishing():
+    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(
+        encoding="utf-8"
+    )
+    source_audit = workflow.split("\n  source-audit:\n", 1)[1].split(
+        "\n  release:\n", 1
+    )[0]
+    assert "if: github.event_name == 'workflow_dispatch'" in source_audit
+    assert "run: python packaging/assemble_sources.py build/source-audit" in source_audit
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7" in source_audit
+    assert "name: callimachus-dependency-sources" in source_audit
+    assert "path: build/source-audit/*" in source_audit
+    assert "if-no-files-found: error" in source_audit
+    assert "retention-days: 14" in source_audit
+
+    release = workflow.split("\n  release:\n", 1)[1]
+    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
+    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --generate-notes' in release
+
+
+def test_parser_smoke_fixture_extracts_citation_and_bibliography():
+    fixture = ROOT / "tests" / "fixtures" / "parse_golden" / "inputs" / "pdf_author_year_basic.pdf"
+    assert fixture.is_file(), f"packaging smoke test requires its parser PDF fixture: {fixture}"
+
+    import fitz
+
+    document = fitz.open(fixture)
+    try:
+        text = "\n".join(page.get_text() for page in document)
+    finally:
+        document.close()
+
+    assert "Taylor 2017" in text
+    assert "References" in text
+    assert "Taylor, T. 2017." in text
+
+
 def test_release_runner_builds_and_smokes_windows_installer():
     workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(
         encoding="utf-8"
@@ -71,23 +175,38 @@ def test_smoke_reports_qt_failure_before_aggregate_check(monkeypatch, tmp_path):
     executable = tmp_path / "Callimachus"
     executable.write_bytes(b"executable")
     monkeypatch.setattr(smoke, "DIST", tmp_path)
+    monkeypatch.setattr(smoke, "ROOT", tmp_path)
     monkeypatch.setattr(smoke, "executable_path", lambda: executable)
     monkeypatch.setattr(smoke, "check_linux_graphics_bundle", lambda: None)
+    monkeypatch.setattr(smoke, "create_image_only_pdf", lambda path: path.parent.mkdir(parents=True, exist_ok=True))
     calls = []
 
-    def run(argv, **_kwargs):
+    def run(argv, **kwargs):
         calls.append(tuple(argv[1:]))
         if argv[1:2] == ["parse"]:
             debug = Path(argv[argv.index("--debug") + 1])
             debug.parent.mkdir(parents=True, exist_ok=True)
             debug.write_text("parsed", encoding="utf-8")
             return subprocess.CompletedProcess(argv, 0, '{"ok":true,"n_claims":1}', "")
+        if argv[1:2] == ["ocr"] and "--pdf" in argv:
+            assert kwargs["env"]["PATH"] == ""
+            output = Path(argv[argv.index("--out") + 1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(
+                "Callimachus verifies optical character recognition.", encoding="utf-8"
+            )
+            return subprocess.CompletedProcess(
+                argv, 0, '{"ok":true,"method":"rapidocr+pypdfium2"}', ""
+            )
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(smoke.subprocess, "run", run)
     smoke.main()
     assert calls[:2] == [("--qt-probe",), ("--package-self-test",)]
-    assert calls[-1][0] == "parse"
+    assert calls[-2][0] == "parse"
+    assert calls[-1] == ("ocr", "--pdf", str(tmp_path / "build/desktop/smoke-ocr-scan.pdf"),
+                         "--out", str(tmp_path / "build/desktop/smoke-ocr-output.txt"),
+                         "--dpi", "150")
 
 
 def test_linux_smoke_requires_packaged_xcb_libraries(monkeypatch, tmp_path):
@@ -107,12 +226,6 @@ def test_linux_smoke_requires_packaged_xcb_libraries(monkeypatch, tmp_path):
     smoke.check_linux_graphics_bundle()
 
 
-def _load(name: str, file: str):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "packaging" / file)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):
@@ -156,6 +269,13 @@ def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):
     assert windows_args[windows_args.index("--icon") + 1] == str(
         ROOT / "packaging" / "assets" / "Callimachus.ico"
     )
+
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    macos_args = build.build_arguments()
+    assert macos_args[macos_args.index("--icon") + 1] == str(
+        ROOT / "packaging" / "assets" / "Callimachus.icns"
+    )
+    assert "--windowed" in macos_args
 
 
 def test_final_notices_replace_bundled_and_adjacent_indexes(monkeypatch, tmp_path):
@@ -499,3 +619,71 @@ def test_ubuntu_source_download_rejects_wrong_bytes(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="checksum mismatch"):
         sources.collect([("example", "1.0")], tmp_path)
+
+
+def test_macos_build_rejects_missing_application_icon(monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_missing_macos_icon", "build_desktop.py")
+    metadata = tmp_path / "build-metadata.json"
+    metadata.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
+    monkeypatch.setattr(build, "_metadata", lambda: metadata)
+    monkeypatch.setattr(build, "collect", lambda path: path.mkdir() or path)
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    icon_path = ROOT / "packaging" / "assets" / "Callimachus.icns"
+    original_is_file = Path.is_file
+
+    def is_file(path):
+        if path == icon_path:
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    with pytest.raises(RuntimeError, match="macOS application icon is missing"):
+        build.build_arguments()
+def test_macos_application_icon_is_valid_multisize_icns():
+    import struct
+
+    icon = (ROOT / "packaging" / "assets" / "Callimachus.icns").read_bytes()
+    assert icon[:4] == b"icns"
+    assert struct.unpack(">I", icon[4:8])[0] == len(icon)
+
+    entries = {}
+    offset = 8
+    while offset < len(icon):
+        kind = icon[offset:offset + 4]
+        length = struct.unpack(">I", icon[offset + 4:offset + 8])[0]
+        assert length >= 8
+        entries[kind] = icon[offset + 8:offset + length]
+        offset += length
+    assert offset == len(icon)
+    assert {b"ic07", b"ic08", b"ic09"} <= entries.keys()
+    for kind, size in ((b"ic07", 128), (b"ic08", 256), (b"ic09", 512)):
+        png = entries[kind]
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+        assert struct.unpack(">II", png[16:24]) == (size, size)
+def test_frozen_ocr_smoke_rejects_external_backend(monkeypatch, tmp_path):
+    smoke = _load("desktop_smoke_external_ocr", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "ROOT", tmp_path)
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    executable = tmp_path / "Callimachus"
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((tuple(argv[1:]), kwargs))
+        output = Path(argv[argv.index("--out") + 1])
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("Callimachus optical character recognition", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            argv, 0, '{"ok":true,"method":"tesseract"}', ""
+        )
+
+    monkeypatch.setattr(smoke, "create_image_only_pdf", lambda path: path.parent.mkdir(parents=True, exist_ok=True))
+    monkeypatch.setattr(smoke.subprocess, "run", run)
+    with pytest.raises(SystemExit, match="bundled backend"):
+        smoke.smoke_frozen_ocr(executable, {"PATH": "system-tools"})
+    arguments, kwargs = calls[0]
+    assert arguments[0] == "ocr"
+    assert "--help" not in arguments
+    assert kwargs["env"]["PATH"] == ""
+    assert kwargs["timeout"] == 180

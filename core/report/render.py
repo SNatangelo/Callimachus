@@ -954,8 +954,18 @@ def render(
         lines.append("| Subject | Status / action | Audit evidence |")
         lines.append("|---|---|---|")
         for row in manual_parse_adjudication:
-            subject = (f"note {row['note_number']}" if row["subject_type"] == "footnote_note"
-                       else f"reference [{row['ref_number']}]")
+            if row["subject_type"] == "footnote_note":
+                subject = f"note {row['note_number']}"
+            elif row["subject_type"] == "reference_identity":
+                subject = f"reference [{row['ref_number']}]"
+            elif row["subject_type"] == "citation_attribution":
+                ref_id = row.get("ref_id")
+                reference = refs.get(ref_id)
+                ref_label = (f"reference [{reference['ref_number']}]" if reference
+                             else f"reference {ref_id or 'unassigned'}")
+                subject = f"citation · claim {row.get('claim_id') or 'unknown'} · {ref_label}"
+            else:
+                raise ValueError(f"unknown manual Parse adjudication subject: {row['subject_type']}")
             action = row.get("action") or ("manual review required" if row.get("manual_review_required") else "not applied")
             details = []
             if row.get("source_count") is not None:

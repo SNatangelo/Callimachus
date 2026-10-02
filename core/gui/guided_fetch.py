@@ -10,13 +10,33 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from core.app.guided_fetch import build_source_inventory, source_payload
 from .guided_fetch_viewmodel import GuidedFetchViewModel
 
 
 CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/"
+_OCR_DEFAULT = {
+    "ocr_column": "OCR",
+    "ocr_button": "Run OCR",
+    "ocr_button_count": "Run OCR · {count} PDF",
+    "ocr_button_active": "OCR in progress · {done}/{total}",
+    "ocr_tooltip": "Extract text from the PDFs awaiting OCR.",
+    "ocr_pending": "PDF needs OCR",
+    "ocr_queued": "OCR queued",
+    "ocr_running": "OCR in progress",
+    "ocr_done": "Text extracted",
+    "ocr_failed": "OCR failed",
+    "ocr_progress_accessible": "OCR in progress for source {source}",
+    "ocr_confirm_button": "Confirm and run OCR",
+    "ocr_confirm_note": " OCR will start after confirmation.",
+    "ocr_skip_button": "Proceed / skip Fetch and OCR",
+    "ocr_skip_note": " {count} PDF(s) still need OCR. Skipping Fetch and OCR leaves their full text unavailable for verification. The PDFs remain saved; cancel to provide another file or run OCR.",
+    "ocr_finished_summary": "OCR finished: {done} text(s) extracted, {failed} failed.",
+    "ocr_stopped_summary": "OCR stopped: {reason}",
+    "ocr_close_busy": "OCR is still running; wait for it to finish.",
+}
 
 
 def _preflight_source_file(path: str, tier: str) -> str:
@@ -64,6 +84,9 @@ def create_guided_fetch_window(
     submit_source: Callable[[str, dict[str, Any]], Any],
     proceed: Callable[[], Any],
     discard_source: Callable[[str], Any] | None = None,
+    run_ocr: Callable[[list[dict[str, Any]], Callable[[dict[str, Any]], None]], list[dict[str, Any]]] | None = None,
+    on_ocr_event: Callable[[dict[str, Any]], None] | None = None,
+    ocr_text: Mapping[str, str] | None = None,
     submit_identity_review: Callable[[str, str, str, str], Any] | None = None,
     identity_review_allowed: bool = True,
     inventory_loader: Callable[[str], dict[str, Any]] = build_source_inventory,
@@ -71,6 +94,64 @@ def create_guided_fetch_window(
     """Create (but do not show) the window; all writes use injected callbacks."""
     qt = _load_qt()
     QtCore, QtGui, QtWidgets = qt
+    labels = {**_OCR_DEFAULT, **(ocr_text or {})}
+
+    def pdf_icon(color: str):
+        pixmap = QtGui.QPixmap(17, 19)
+        pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtGui.QPen(QtGui.QColor(color), 1.3))
+        paper = QtGui.QPainterPath()
+        paper.moveTo(2, 1)
+        paper.lineTo(11, 1)
+        paper.lineTo(15, 5)
+        paper.lineTo(15, 18)
+        paper.lineTo(2, 18)
+        paper.closeSubpath()
+        painter.drawPath(paper)
+        painter.drawLine(11, 1, 11, 5)
+        painter.drawLine(11, 5, 15, 5)
+        font = painter.font()
+        font.setPixelSize(6)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(QtCore.QRect(2, 8, 13, 8), QtCore.Qt.AlignmentFlag.AlignCenter, "PDF")
+        painter.end()
+        return QtGui.QIcon(pixmap)
+
+    class OcrWorker(QtCore.QObject):
+        progress = QtCore.Signal(object)
+        finished = QtCore.Signal(object)
+        failed = QtCore.Signal(str)
+
+        def __init__(self, action, jobs):
+            super().__init__()
+            self._action = action
+            self._jobs = jobs
+
+        @QtCore.Slot()
+        def run(self):
+            try:
+                self.finished.emit(self._action(self._jobs, self.progress.emit))
+            except Exception as exc:
+                self.failed.emit(str(exc))
+
+    class PreviewWorker(QtCore.QObject):
+        loaded = QtCore.Signal(object, str)
+
+        def __init__(self, request, path: str):
+            super().__init__()
+            self._request = request
+            self._path = path
+
+        @QtCore.Slot()
+        def run(self):
+            try:
+                text = _read_preview(self._path)
+            except Exception:
+                text = "Preview unavailable."
+            self.loaded.emit(self._request, text)
 
     class TierSwitch(QtWidgets.QAbstractButton):
         """Compact two-state switch; unchecked is Full text, checked is Abstract."""
@@ -145,10 +226,17 @@ def create_guided_fetch_window(
             self._submit_source = submit_source
             self._proceed = proceed
             self._discard_source = discard_source
+            self._run_ocr = run_ocr
+            self._on_ocr_event = on_ocr_event
             self._submit_identity_review = submit_identity_review
             self._identity_review_allowed = identity_review_allowed
             self._current_ref_id: str | None = None
             self._selected_file: str | None = None
+            self._selected_file_ref_id: str | None = None
+            self._selected_file_generation: int | None = None
+            self._next_file_generation = 0
+            self._consumed_file_selections: set[tuple[str, int]] = set()
+            self._selected_file_ocr_pending = False
             self._browser_thread = None
             self._browser_worker = None
             self._pending_browser_url: str | None = None
@@ -158,8 +246,22 @@ def create_guided_fetch_window(
             self._capture_tiers: dict[tuple[str, int], str] = {}
             self._preconfirmed_captures: set[tuple[str, int]] = set()
             self._queued_sources: dict[str, tuple[str, str | None]] = {}
+            self._staged_ocr_refs: set[str] = set()
+            self._ocr_row_status: dict[str, dict[str, Any]] = {}
+            self._ocr_thread = None
+            self._ocr_worker = None
+            self._ocr_active_jobs: list[dict[str, Any]] = []
             self._recorded_identity_refs: set[str] = set()
             self._closing = False
+            self._preview_thread = None
+            self._preview_worker = None
+            self._preview_inflight_request = None
+            self._preview_pending_request = None
+            self._preview_request = None
+            self._preview_loaded_key = None
+            self._preview_request_id = 0
+            self._preview_close_when_finished = False
+            self._selected_preview_path: str | None = None
             self._dark_theme = False
             self._font_size_px = 13
             self.setWindowTitle("Callimachus: Guided Fetch")
@@ -182,19 +284,15 @@ def create_guided_fetch_window(
             header.setObjectName("brandHeader")
             header_layout = QtWidgets.QHBoxLayout(header)
             header_layout.setContentsMargins(8, 5, 8, 5)
-            logo_tile = QtWidgets.QFrame(header)
-            logo_tile.setObjectName("brandLogoTile")
-            logo_tile_layout = QtWidgets.QHBoxLayout(logo_tile)
-            logo_tile_layout.setContentsMargins(8, 3, 8, 3)
-            logo = QtWidgets.QLabel(logo_tile)
+            logo = QtWidgets.QLabel(header)
             logo.setObjectName("brandLogo")
             logo.setPixmap(_callimachus_wordmark(
-                QtCore, QtGui, 215, 46, self.devicePixelRatioF()
+                QtCore, QtGui, 215, 46, self.devicePixelRatioF(), dark=False
             ))
             logo.setFixedSize(215, 46)
             logo.setScaledContents(False)
-            logo_tile_layout.addWidget(logo, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
-            header_layout.addWidget(logo_tile)
+            self.brand_logo = logo
+            header_layout.addWidget(logo)
             header_layout.addStretch()
             self.font_smaller = QtWidgets.QPushButton("A−", header)
             self.font_smaller.setObjectName("fontSmaller")
@@ -214,10 +312,10 @@ def create_guided_fetch_window(
             self.theme_toggle.toggled.connect(self._set_dark_theme)
             header_layout.addWidget(self.theme_toggle)
             layout.addWidget(header)
-            self.table = QtWidgets.QTableWidget(0, 5, central)
+            self.table = QtWidgets.QTableWidget(0, 6, central)
             self.table.setObjectName("sourceTable")
             self.table.setHorizontalHeaderLabels(
-                ["Source", "Title", "Text availability", "Risk signal", "Review labels"]
+                ["Source", "Title", "Text availability", labels["ocr_column"], "Risk signal", "Review labels"]
             )
             self.table.setSelectionBehavior(
                 QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
@@ -238,18 +336,23 @@ def create_guided_fetch_window(
             source_header.setSectionResizeMode(
                 3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
             )
-            source_header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            source_header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            source_header.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeMode.Stretch)
             self.table.setMinimumHeight(140)
             self.table.itemSelectionChanged.connect(self._selected)
 
             self.tabs = QtWidgets.QTabWidget(central)
             self._tab_text = {}
             self._detail_views = {}
+            self._preview_tab_widget = None
             for name in ("Parsed", "Resolved", "Acquired", "Preview"):
                 panel, view = self._detail_panel(name)
                 self.tabs.addTab(panel, name)
                 self._detail_views[name] = view
                 self._tab_text[name] = view["raw"]
+                if name == "Preview":
+                    self._preview_tab_widget = panel
+            self.tabs.currentChanged.connect(self._detail_tab_changed)
             self.tabs.setMinimumHeight(210)
             detail_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical, central)
             detail_splitter.setObjectName("detailSplitter")
@@ -348,6 +451,12 @@ def create_guided_fetch_window(
             self.open_chrome.clicked.connect(self._open_controlled_browser)
             browser_controls.addWidget(self.open_chrome)
             browser_controls.addStretch()
+            self.ocr_button = QtWidgets.QPushButton(labels["ocr_button"], central)
+            self.ocr_button.setObjectName("runOcrButton")
+            self.ocr_button.setToolTip(labels["ocr_tooltip"])
+            self.ocr_button.clicked.connect(lambda: self._start_ocr())
+            self.ocr_button.setVisible(False)
+            browser_controls.addWidget(self.ocr_button)
             self.proceed_button = QtWidgets.QPushButton("Proceed / skip remaining", central)
             self.proceed_button.setObjectName("proceedButton")
             self.proceed_button.setToolTip(
@@ -377,14 +486,20 @@ def create_guided_fetch_window(
             self.choose_file = QtWidgets.QPushButton("Choose file", central)
             self.choose_file.clicked.connect(self._choose_file)
             self.choose_file.setEnabled(False)
-            source_controls.addWidget(self.choose_file)
             self.file_label = QtWidgets.QLabel("Drop one file here", central)
             self.file_label.setObjectName("fileDropArea")
             self.file_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            self.file_label.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+            self.file_label.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            self.file_label.setAccessibleName("Choose source file")
+            self.file_label.setAccessibleDescription(
+                "Click or press Enter or Space to choose a source file, or drop one here."
+            )
             self.file_label.setAcceptDrops(True)
             self.file_label.installEventFilter(self)
             self.file_label.setEnabled(False)
             source_controls.addWidget(self.file_label, 1)
+            source_controls.addWidget(self.choose_file)
             self.submit = QtWidgets.QPushButton("Confirm source", central)
             self.submit.clicked.connect(self._submit_file)
             self.submit.setEnabled(False)
@@ -434,18 +549,52 @@ def create_guided_fetch_window(
             layout.addLayout(headline_controls)
             layout.addWidget(table)
             if name == "Preview":
+                stack = QtWidgets.QStackedWidget(panel)
+                stack.setObjectName("previewStack")
+                loader = QtWidgets.QWidget(stack)
+                loader.setObjectName("previewLoadingSkeleton")
+                loader_layout = QtWidgets.QVBoxLayout(loader)
+                loader_layout.setContentsMargins(18, 18, 18, 18)
+                loader_layout.setSpacing(13)
+                animations = []
+                for index in range(6):
+                    bar = QtWidgets.QFrame(loader)
+                    bar.setObjectName("previewSkeletonBar")
+                    bar.setFixedHeight(20 if index % 3 == 0 else 14)
+                    bar.setMaximumWidth(560 if index % 3 == 0 else 350 + index * 18)
+                    effect = QtWidgets.QGraphicsOpacityEffect(bar)
+                    effect.setOpacity(0.6)
+                    bar.setGraphicsEffect(effect)
+                    animation = QtCore.QPropertyAnimation(effect, b"opacity", bar)
+                    animation.setDuration(900 + index * 80)
+                    animation.setStartValue(0.35)
+                    animation.setKeyValueAt(0.5, 0.9)
+                    animation.setEndValue(0.35)
+                    animation.setLoopCount(-1)
+                    animations.append(animation)
+                    loader_layout.addWidget(bar)
+                loader_layout.addStretch()
                 preview = QtWidgets.QPlainTextEdit(panel)
                 preview.setObjectName("previewText")
                 preview.setReadOnly(True)
-                layout.addWidget(preview)
+                stack.addWidget(loader)
+                stack.addWidget(preview)
+                stack.setCurrentWidget(preview)
+                layout.addWidget(stack)
             else:
                 preview = None
+                stack = None
+                loader = None
+                animations = []
             return panel, {
                 "headline": headline,
                 "table": table,
                 "raw": "",
                 "button": raw_button,
                 "preview": preview,
+                "preview_stack": stack,
+                "preview_loader": loader,
+                "preview_animations": animations,
             }
 
         def _show_raw_json(self, name: str):
@@ -497,24 +646,78 @@ def create_guided_fetch_window(
                 self.setStyleSheet(_theme_stylesheet(dark=True, font_size=self._font_size_px))
             else:
                 self.setStyleSheet(_theme_stylesheet(dark=False, font_size=self._font_size_px))
+            self.brand_logo.setPixmap(_callimachus_wordmark(
+                QtCore, QtGui, 215, 46, self.devicePixelRatioF(), dark=dark
+            ))
             self._apply_status_colors()
+            selected = self.table.selectedItems()
+            self._set_identity_selection_style(
+                selected[0].data(QtCore.Qt.ItemDataRole.UserRole) if selected else None
+            )
+            if self.tabs.isTabEnabled(self._identity_review_tab):
+                self.tabs.tabBar().setTabTextColor(
+                    self._identity_review_tab,
+                    QtGui.QColor(_status_foregrounds(dark=dark)["amber"]),
+                )
             if self._browser_worker is not None:
                 self.browser_theme.emit(dark)
 
         def _apply_status_colors(self):
             colors = _status_foregrounds(dark=self._dark_theme)
+            warning_background, warning_text, _ = _identity_review_colors(dark=self._dark_theme)
             for index, row in enumerate(self._model.rows()):
+                if self._model.identity_review(row.ref_id) is not None:
+                    for column in range(self.table.columnCount()):
+                        item = self.table.item(index, column)
+                        if item is not None:
+                            item.setBackground(QtGui.QColor(warning_background))
+                            if column < 2:
+                                item.setForeground(QtGui.QColor(warning_text))
                 availability = self.table.item(index, 2)
                 if availability is not None:
                     availability.setForeground(QtGui.QColor(colors[row.status_color]))
-                risk = self.table.item(index, 3)
+                ocr = self.table.item(index, 3)
+                ocr_status = self._ocr_row_status.get(row.ref_id, {}).get("status")
+                if not ocr_status and row.ref_id in self._staged_ocr_refs:
+                    ocr_status = "pending"
+                if not ocr_status and row.ref_id not in self._queued_sources:
+                    statuses = {
+                        scan["status"] for scan in self._model.ocr_entries()
+                        if scan["ref_id"] == row.ref_id
+                    }
+                    ocr_status = next(
+                        (status for status in ("done", "failed", "pending") if status in statuses),
+                        None,
+                    )
+                if ocr is not None and ocr_status:
+                    ocr_color = (
+                        colors["red"] if ocr_status == "failed" else
+                        colors["green"] if ocr_status == "done" else colors["amber"]
+                    )
+                    ocr.setForeground(QtGui.QColor(ocr_color))
+                    ocr.setIcon(pdf_icon(ocr_color))
+                risk = self.table.item(index, 4)
                 if risk is not None and row.risk_label:
                     risk.setForeground(QtGui.QColor(colors["red"]))
-                review = self.table.item(index, 4)
+                review = self.table.item(index, 5)
                 if review is not None and row.review_label:
                     review.setForeground(QtGui.QColor(colors["amber"]))
 
         def eventFilter(self, watched, event):  # noqa: N802 - Qt API name
+            if watched is self.file_label:
+                if (
+                    event.type() == QtCore.QEvent.Type.MouseButtonRelease
+                    and event.button() == QtCore.Qt.MouseButton.LeftButton
+                ):
+                    self._choose_file()
+                    return True
+                if event.type() == QtCore.QEvent.Type.KeyPress and event.key() in (
+                    QtCore.Qt.Key.Key_Return,
+                    QtCore.Qt.Key.Key_Enter,
+                    QtCore.Qt.Key.Key_Space,
+                ):
+                    self._choose_file()
+                    return True
             if watched is self.file_label and event.type() == QtCore.QEvent.Type.DragEnter:
                 urls = event.mimeData().urls()
                 if len(urls) == 1 and urls[0].isLocalFile():
@@ -530,9 +733,36 @@ def create_guided_fetch_window(
 
         def _render_rows(self, select_ref_id: str | None = None):
             rows = self._model.rows()
+            queued_ocr = self._model.ocr_entries()
+            ocr_by_ref: dict[str, list[dict[str, Any]]] = {}
+            for scan in queued_ocr:
+                if scan["ref_id"] not in self._queued_sources:
+                    ocr_by_ref.setdefault(scan["ref_id"], []).append(scan)
             colors = _status_foregrounds(dark=self._dark_theme)
+            warning_background, warning_text, _ = _identity_review_colors(dark=self._dark_theme)
             self.table.setRowCount(len(rows))
             for index, row in enumerate(rows):
+                pending_identity = self._model.identity_review(row.ref_id) is not None
+                ocr_state = self._ocr_row_status.get(row.ref_id, {})
+                ocr_status = ocr_state.get("status")
+                if not ocr_status and row.ref_id in self._staged_ocr_refs:
+                    ocr_status = "pending"
+                if not ocr_status and ocr_by_ref.get(row.ref_id):
+                    statuses = {scan["status"] for scan in ocr_by_ref[row.ref_id]}
+                    ocr_status = next(
+                        status for status in ("done", "failed", "pending")
+                        if status in statuses
+                    )
+                ocr_label = {
+                    "pending": labels["ocr_pending"],
+                    "queued": labels["ocr_queued"],
+                    "running": labels["ocr_running"],
+                    "done": labels["ocr_done"],
+                    "failed": labels["ocr_failed"],
+                }.get(ocr_status, "")
+                ocr_tooltip = str(ocr_state.get("reason") or "")
+                if not ocr_tooltip and ocr_by_ref.get(row.ref_id):
+                    ocr_tooltip = ocr_by_ref[row.ref_id][0]["reason"]
                 values = [
                     (
                         f"[{row.ref_number}] · Queued"
@@ -545,41 +775,86 @@ def create_guided_fetch_window(
                         if row.ref_id in self._queued_sources
                         else f"{row.status_marker} {row.status_label}"
                     ),
+                    ocr_label,
                     f"⚠ {row.risk_label}" if row.risk_label else "",
                     f"⚠ {row.review_label}" if row.review_label else "",
                 ]
                 for column, value in enumerate(values):
                     item = QtWidgets.QTableWidgetItem(value)
                     item.setData(QtCore.Qt.ItemDataRole.UserRole, row.ref_id)
+                    if pending_identity:
+                        item.setBackground(QtGui.QColor(warning_background))
+                        if column < 2:
+                            item.setForeground(QtGui.QColor(warning_text))
                     if column == 2:
                         item.setForeground(QtGui.QColor(colors[row.status_color]))
                         item.setToolTip(row.status_tooltip)
-                    if column == 3 and row.risk_label:
+                    if column == 3 and ocr_status:
+                        ocr_color = (
+                            colors["red"] if ocr_status == "failed" else
+                            colors["green"] if ocr_status == "done" else colors["amber"]
+                        )
+                        item.setForeground(QtGui.QColor(ocr_color))
+                        item.setIcon(pdf_icon(ocr_color))
+                        item.setToolTip(ocr_tooltip or ocr_label)
+                    if column == 4 and row.risk_label:
                         item.setForeground(QtGui.QColor(colors["red"]))
                         item.setToolTip(row.risk_tooltip)
-                    if column == 4 and row.review_label:
+                    if column == 5 and row.review_label:
                         item.setForeground(QtGui.QColor(colors["amber"]))
                         item.setToolTip(row.review_tooltip)
                     self.table.setItem(index, column, item)
+                if ocr_status == "running":
+                    progress = QtWidgets.QProgressBar(self.table)
+                    progress.setObjectName("ocrRowProgress")
+                    progress.setRange(0, 0)
+                    progress.setTextVisible(False)
+                    progress.setAccessibleName(labels["ocr_progress_accessible"].format(
+                        source=row.ref_number or row.ref_id
+                    ))
+                    self.table.setCellWidget(index, 3, progress)
+                else:
+                    self.table.removeCellWidget(index, 3)
             if rows:
                 target_ref_id = select_ref_id or self._current_ref_id
                 target_index = next(
                     (index for index, row in enumerate(rows) if row.ref_id == target_ref_id), 0
                 )
                 self.table.selectRow(target_index)
+            self._update_ocr_button()
 
         def _selected(self):
             selected = self.table.selectedItems()
             if not selected:
+                self._current_ref_id = None
+                self._selected_preview_path = None
+                self._clear_preview()
+                self._set_identity_selection_style(None)
                 return
             ref_id = selected[0].data(QtCore.Qt.ItemDataRole.UserRole)
             if not isinstance(ref_id, str):
                 return
-            self._current_ref_id = ref_id
+            self._set_identity_selection_style(ref_id)
             detail = self._model.detail_panels(ref_id)
+            preview_raw = detail.get("Preview", {}).get("raw", {})
+            preview_path = preview_raw.get("path")
+            preview_kind = preview_raw.get("kind")
+            if not isinstance(preview_path, str):
+                preview_path = None
+            if ref_id != self._current_ref_id or preview_path != self._selected_preview_path:
+                self._clear_preview()
+            self._current_ref_id = ref_id
+            self._selected_preview_path = preview_path
             for name, payload in detail.items():
                 view = self._detail_views[name]
-                view["headline"].setText(payload["headline"])
+                view["headline"].setText(
+                    (
+                        "OCR text staged · pending Fetch checks; not admitted"
+                        if preview_kind == "guided_ocr_staged"
+                        else "Extracted text from selected source"
+                    )
+                    if name == "Preview" else payload["headline"]
+                )
                 view["raw"] = json.dumps(
                     payload["raw"],
                     indent=2,
@@ -592,20 +867,62 @@ def create_guided_fetch_window(
                 for index, (label, value) in enumerate(payload["rows"]):
                     table.setItem(index, 0, QtWidgets.QTableWidgetItem(label))
                     table.setItem(index, 1, QtWidgets.QTableWidgetItem(value))
-                if view["preview"] is not None:
-                    view["preview"].setPlainText(_read_preview(payload["raw"].get("path")))
+            if self.tabs.currentWidget() is self._preview_tab_widget:
+                self._request_preview()
             self.open_link.setEnabled(True)
-            self.open_chrome.setEnabled(True)
+            self.open_chrome.setEnabled(self._ocr_thread is None)
             can_submit = self._model.can_submit_source(ref_id)
+            controls_enabled = can_submit and self._ocr_thread is None
             guidance = self._model.action_guidance(ref_id)
             rejection = self._model.rejected_source_guidance(ref_id)
             self.selection_guidance.setText(rejection or guidance)
-            self.tier_switch.setEnabled(can_submit)
-            self.fulltext_label.setEnabled(can_submit)
-            self.abstract_label.setEnabled(can_submit)
-            self.choose_file.setEnabled(can_submit)
-            self.file_label.setEnabled(can_submit)
-            self.submit.setEnabled(can_submit)
+            self.tier_switch.setEnabled(controls_enabled)
+            self.fulltext_label.setEnabled(controls_enabled)
+            self.abstract_label.setEnabled(controls_enabled)
+            self.choose_file.setEnabled(controls_enabled)
+            self.file_label.setEnabled(controls_enabled)
+            selection_matches = (
+                self._selected_file is not None
+                and self._selected_file_ref_id == ref_id
+                and self._selected_file_generation is not None
+            )
+            selection_key = (
+                (ref_id, self._selected_file_generation) if selection_matches else None
+            )
+            selection_consumed = (
+                selection_key in self._consumed_file_selections
+                if selection_key is not None else False
+            )
+            self.submit.setEnabled(
+                controls_enabled
+                and (
+                    self._selected_file is None
+                    or (selection_matches and not selection_consumed)
+                )
+            )
+            if selection_matches:
+                self.file_label.setText(
+                    f"{Path(self._selected_file).name} (OCR needed)"
+                    if self._selected_file_ocr_pending and not selection_consumed
+                    else Path(self._selected_file).name
+                )
+            elif self._selected_file is not None:
+                self.file_label.setText("Drop one file here")
+            if selection_consumed:
+                ocr_status = self._ocr_row_status.get(ref_id, {}).get("status")
+                self.submit.setText(
+                    {
+                        "queued": labels["ocr_queued"],
+                        "running": labels["ocr_running"],
+                        "done": labels["ocr_done"],
+                        "failed": labels["ocr_failed"],
+                    }.get(ocr_status, "Source queued")
+                    if self._selected_file_ocr_pending else "Source queued"
+                )
+            elif selection_matches and self._selected_file_ocr_pending and self._run_ocr is not None:
+                self.submit.setText(labels["ocr_confirm_button"])
+            else:
+                self.submit.setText("Confirm source")
             self._show_identity_review(ref_id)
             self._update_proceed_button()
             self.discard_source_button.setEnabled(
@@ -615,12 +932,132 @@ def create_guided_fetch_window(
             )
             self._show_queued_status(ref_id)
 
+        def _detail_tab_changed(self, _index: int):
+            if self.tabs.currentWidget() is self._preview_tab_widget:
+                self._request_preview()
+            else:
+                self._clear_preview()
+
+        def _clear_preview(self):
+            self._preview_request_id += 1
+            self._preview_request = None
+            self._preview_pending_request = None
+            self._preview_loaded_key = None
+            view = self._detail_views.get("Preview")
+            if view is None:
+                return
+            for animation in view["preview_animations"]:
+                animation.stop()
+            view["preview"].clear()
+            view["preview_stack"].setCurrentWidget(view["preview"])
+
+        def _request_preview(self):
+            if (
+                self.tabs.currentWidget() is not self._preview_tab_widget
+                or self._current_ref_id is None
+            ):
+                return
+            ref_id = self._current_ref_id
+            path = self._selected_preview_path
+            key = (ref_id, path)
+            if self._preview_loaded_key == key:
+                return
+            if (
+                self._preview_request is not None
+                and self._preview_request[1:] == key
+                and self._preview_request in (
+                    self._preview_inflight_request, self._preview_pending_request
+                )
+            ):
+                return
+
+            self._preview_request_id += 1
+            request = (self._preview_request_id, ref_id, path)
+            self._preview_request = request
+            self._preview_pending_request = None
+            view = self._detail_views["Preview"]
+            view["preview"].clear()
+            if path is None:
+                view["preview"].setPlainText("No preview available.")
+                view["preview_stack"].setCurrentWidget(view["preview"])
+                self._preview_loaded_key = key
+                return
+
+            self._start_preview_loading(view)
+            self._preview_pending_request = request
+            if self._preview_thread is None:
+                self._start_preview_worker(request)
+
+        def _start_preview_loading(self, view):
+            view["preview_stack"].setCurrentWidget(view["preview_loader"])
+            for animation in view["preview_animations"]:
+                animation.start()
+
+        def _start_preview_worker(self, request):
+            if self._preview_thread is not None or request != self._preview_request:
+                return
+            path = request[2]
+            if not isinstance(path, str):
+                return
+            self._preview_pending_request = None
+            self._preview_inflight_request = request
+            thread = QtCore.QThread(self)
+            worker = PreviewWorker(request, path)
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.loaded.connect(self._preview_worker_loaded)
+            worker.loaded.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(self._preview_worker_finished)
+            thread.finished.connect(thread.deleteLater)
+            self._preview_thread = thread
+            self._preview_worker = worker
+            thread.start()
+
+        def _preview_worker_loaded(self, request, text: str):
+            if (
+                request != self._preview_request
+                or self.tabs.currentWidget() is not self._preview_tab_widget
+                or self._current_ref_id != request[1]
+                or self._selected_preview_path != request[2]
+            ):
+                return
+            view = self._detail_views["Preview"]
+            view["preview"].setPlainText(text)
+            view["preview_stack"].setCurrentWidget(view["preview"])
+            for animation in view["preview_animations"]:
+                animation.stop()
+            self._preview_loaded_key = (request[1], request[2])
+
+        def _preview_worker_finished(self):
+            self._preview_thread = None
+            self._preview_worker = None
+            self._preview_inflight_request = None
+            pending = self._preview_pending_request
+            if pending is not None and pending == self._preview_request:
+                self._start_preview_worker(pending)
+            elif self._preview_close_when_finished:
+                self._preview_close_when_finished = False
+                self.close()
+
+        def _set_identity_selection_style(self, ref_id: str | None):
+            if ref_id is not None and self._model.identity_review(ref_id) is not None:
+                background, foreground, _ = _identity_review_colors(dark=self._dark_theme)
+                self.table.setStyleSheet(
+                    f"QTableWidget {{ selection-background-color: {background}; "
+                    f"selection-color: {foreground}; }}"
+                )
+            else:
+                self.table.setStyleSheet("")
+
         def _show_identity_review(self, ref_id: str):
             review = self._model.identity_review(ref_id)
             if review is None:
                 if self.tabs.currentIndex() == self._identity_review_tab:
                     self.tabs.setCurrentIndex(0)
                 self.tabs.setTabEnabled(self._identity_review_tab, False)
+                self.tabs.setTabIcon(self._identity_review_tab, QtGui.QIcon())
+                self.tabs.tabBar().setTabTextColor(self._identity_review_tab, QtGui.QColor())
                 self.identity_review_panel.setVisible(False)
                 self.identity_review_reason.clear()
                 return
@@ -661,6 +1098,14 @@ def create_guided_fetch_window(
             self.keep_unverified_button.setEnabled(enabled)
             self.identity_review_panel.setVisible(True)
             self.tabs.setTabEnabled(self._identity_review_tab, True)
+            self.tabs.setTabIcon(
+                self._identity_review_tab,
+                self.style().standardIcon(QtWidgets.QStyle.StandardPixmap.SP_MessageBoxWarning),
+            )
+            self.tabs.tabBar().setTabTextColor(
+                self._identity_review_tab,
+                QtGui.QColor(_status_foregrounds(dark=self._dark_theme)["amber"]),
+            )
             self.tabs.setCurrentIndex(self._identity_review_tab)
 
         def _pending_identity_reviews(self):
@@ -682,8 +1127,14 @@ def create_guided_fetch_window(
                 and not already_recorded
             )
             self.proceed_button.setEnabled(
-                not self._capture_tiers and (not pending or can_resolve)
+                not self._capture_tiers and self._ocr_thread is None
+                and (not pending or can_resolve)
             )
+            ocr_count = len(self._ocr_jobs())
+            if ocr_count:
+                self.proceed_button.setText(labels["ocr_skip_button"])
+            else:
+                self.proceed_button.setText("Proceed / skip remaining")
             blocked_explanation = ""
             if not pending:
                 self.proceed_button.setToolTip(
@@ -729,6 +1180,148 @@ def create_guided_fetch_window(
                 )
             self.proceed_guidance.setText(blocked_explanation)
             self.proceed_guidance.setVisible(bool(blocked_explanation))
+
+        def _ocr_jobs(self) -> list[dict[str, Any]]:
+            jobs = [
+                {"ref_id": scan["ref_id"], "scan_id": scan["scan_id"]}
+                for scan in self._model.ocr_queue()
+                if scan["ref_id"] not in self._staged_ocr_refs
+                and scan["ref_id"] not in self._queued_sources
+                and self._ocr_row_status.get(scan["ref_id"], {}).get("status") != "done"
+            ]
+            jobs.extend(
+                {"ref_id": ref_id, "scan_id": None}
+                for ref_id in sorted(self._staged_ocr_refs)
+                if self._ocr_row_status.get(ref_id, {}).get("status") != "done"
+            )
+            return jobs
+
+        def _update_ocr_button(self):
+            count = len(self._ocr_jobs())
+            active = self._ocr_thread is not None
+            self.ocr_button.setVisible(bool(count or active))
+            self.ocr_button.setEnabled(bool(
+                count and self._run_ocr is not None and not active and not self._capture_tiers
+            ))
+            if active:
+                completed = sum(
+                    self._ocr_row_status.get(job["ref_id"], {}).get("status") in {"done", "failed"}
+                    for job in self._ocr_active_jobs
+                )
+                self.ocr_button.setText(labels["ocr_button_active"].format(
+                    done=completed, total=len(self._ocr_active_jobs)
+                ))
+            else:
+                self.ocr_button.setText(
+                    labels["ocr_button_count"].format(count=count) if count else labels["ocr_button"]
+                )
+
+        def _start_ocr(self, jobs: list[dict[str, Any]] | None = None):
+            if self._ocr_thread is not None or self._capture_tiers or self._run_ocr is None:
+                return
+            jobs = list(jobs if jobs is not None else self._ocr_jobs())
+            if not jobs:
+                return
+            self._ocr_active_jobs = jobs
+            for job in jobs:
+                self._ocr_row_status[job["ref_id"]] = {"status": "queued"}
+            thread = QtCore.QThread(self)
+            worker = OcrWorker(self._run_ocr, jobs)
+            worker.moveToThread(thread)
+            self._ocr_thread = thread
+            self._ocr_worker = worker
+            thread.started.connect(worker.run)
+            worker.progress.connect(self._ocr_progress)
+            worker.finished.connect(self._ocr_finished)
+            worker.failed.connect(self._ocr_failed)
+            worker.finished.connect(thread.quit)
+            worker.failed.connect(thread.quit)
+            thread.finished.connect(worker.deleteLater)
+            thread.finished.connect(self._ocr_thread_finished)
+            thread.start()
+            self._render_rows(select_ref_id=self._current_ref_id)
+            self._selected()
+            self._update_proceed_button()
+
+        def _ocr_progress(self, event: dict[str, Any]):
+            ref_id = event.get("ref_id") if isinstance(event, dict) else None
+            if not isinstance(ref_id, str):
+                return
+            status = event.get("status")
+            if status not in {"queued", "running", "done", "failed"}:
+                return
+            self._ocr_row_status[ref_id] = {
+                "status": status,
+                "reason": str(event.get("reason") or ""),
+            }
+            if self._on_ocr_event is not None:
+                self._on_ocr_event(event)
+            self._render_rows(select_ref_id=self._current_ref_id)
+            if ref_id == self._current_ref_id:
+                self._show_queued_status(ref_id)
+
+        def _ocr_finished(self, results: Any):
+            if not isinstance(results, list):
+                self._ocr_failed("OCR returned an invalid result.")
+                return
+            reported = set()
+            completed_refs = set()
+            for result in results:
+                if not isinstance(result, dict) or not isinstance(result.get("ref_id"), str):
+                    continue
+                reported.add(result["ref_id"])
+                if result.get("status") == "done":
+                    completed_refs.add(result["ref_id"])
+                self._ocr_row_status[result["ref_id"]] = {
+                    "status": result.get("status") if result.get("status") in {"done", "failed"} else "failed",
+                    "reason": str(result.get("reason") or ""),
+                }
+                if result.get("status") == "done":
+                    self._staged_ocr_refs.discard(result["ref_id"])
+            for job in self._ocr_active_jobs:
+                if job["ref_id"] not in reported:
+                    self._ocr_row_status[job["ref_id"]] = {
+                        "status": "failed", "reason": "OCR returned no result for this PDF."
+                    }
+            done = sum(item.get("status") == "done" for item in results if isinstance(item, dict))
+            failed = len(self._ocr_active_jobs) - done
+            self.statusBar().showMessage(labels["ocr_finished_summary"].format(
+                done=done, failed=failed
+            ), 15_000)
+            refresh_error = None
+            if completed_refs:
+                try:
+                    self._model = GuidedFetchViewModel(
+                        self._inventory_loader(self._run_dir)
+                    )
+                except Exception as exc:
+                    refresh_error = str(exc)
+            self._render_rows(select_ref_id=self._current_ref_id)
+            if self._current_ref_id is not None:
+                self._selected()
+            if refresh_error is not None:
+                self.statusBar().showMessage(
+                    "OCR completed, but Guided Fetch could not refresh its preview: "
+                    f"{refresh_error}. Close and reopen Guided Fetch.",
+                    15_000,
+                )
+            self._update_proceed_button()
+
+        def _ocr_failed(self, reason: str):
+            for job in self._ocr_active_jobs:
+                if self._ocr_row_status.get(job["ref_id"], {}).get("status") in {"queued", "running"}:
+                    self._ocr_row_status[job["ref_id"]] = {"status": "failed", "reason": reason}
+            self.statusBar().showMessage(labels["ocr_stopped_summary"].format(reason=reason), 15_000)
+            self._render_rows(select_ref_id=self._current_ref_id)
+            self._update_proceed_button()
+
+        def _ocr_thread_finished(self):
+            self._ocr_thread = None
+            self._ocr_worker = None
+            self._ocr_active_jobs = []
+            self._update_ocr_button()
+            self._selected()
+            self._update_proceed_button()
 
         def _submit_identity(self, action: str):
             ref_id = self._current_ref_id
@@ -951,17 +1544,21 @@ def create_guided_fetch_window(
                 ref_id,
                 _normalized_download_name(artifact.get("display_name")) or Path(path).name,
                 audit_path=path,
+                ocr_pending=preflight == "ocr_pending",
             )
             self.browser_park.emit()
-            self._application_modal_information(
-                "Source queued",
-                "You confirmed this artifact is the exact cited work. "
-                + (
-                    "This PDF needs OCR before its text can be assessed. "
-                    if preflight == "ocr_pending" else "Readable text was detected. "
+            if preflight == "ocr_pending" and self._run_ocr is not None:
+                self._start_ocr([{"ref_id": ref_id, "scan_id": None}])
+            else:
+                self._application_modal_information(
+                    "Source queued",
+                    "You confirmed this artifact is the exact cited work. "
+                    + (
+                        "This PDF needs OCR before its text can be assessed. "
+                        if preflight == "ocr_pending" else "Readable text was detected. "
+                    )
+                    + "Final evidence checks will run when Fetch resumes.",
                 )
-                + "Final evidence checks will run when Fetch resumes.",
-            )
 
         def _browser_failed(self, reason: str):
             if self._capture_tiers:
@@ -989,8 +1586,14 @@ def create_guided_fetch_window(
                     "Callimachus is not requesting a source for this reference.",
                 )
                 return
+            ref_id = self._current_ref_id
+            self._next_file_generation += 1
+            generation = self._next_file_generation
             candidate = Path(path)
             self._selected_file = None
+            self._selected_file_ref_id = None
+            self._selected_file_generation = None
+            self._selected_file_ocr_pending = False
             self.file_label.setText("Drop one file here")
             if not candidate.is_file():
                 QtWidgets.QMessageBox.warning(self, "Invalid file", "Choose one existing file.")
@@ -1003,54 +1606,100 @@ def create_guided_fetch_window(
                 QtWidgets.QMessageBox.warning(self, "Source cannot be used", str(exc))
                 return
             self._selected_file = str(candidate)
+            self._selected_file_ref_id = ref_id
+            self._selected_file_generation = generation
+            self._selected_file_ocr_pending = preflight == "ocr_pending"
             self.file_label.setToolTip("")
             self.file_label.setText(
                 f"{candidate.name} (OCR needed)" if preflight == "ocr_pending"
                 else candidate.name
             )
+            self.submit.setText(
+                labels["ocr_confirm_button"] if preflight == "ocr_pending" and self._run_ocr is not None
+                else "Confirm source"
+            )
+            self.submit.setEnabled(self._ocr_thread is None)
 
         def _submit_file(self):
-            if self._current_ref_id is None or self._selected_file is None:
+            if self._ocr_thread is not None:
+                return
+            ref_id = self._current_ref_id
+            file_path = self._selected_file
+            file_generation = self._selected_file_generation
+            if ref_id is None or file_path is None:
                 QtWidgets.QMessageBox.information(self, "Source required", "Choose a source and a file.")
                 return
-            if not self._model.can_submit_source(self._current_ref_id):
+            if self._selected_file_ref_id != ref_id or file_generation is None:
+                QtWidgets.QMessageBox.information(
+                    self, "Source required", "Choose a file for the selected source."
+                )
+                return
+            selection_key = (ref_id, file_generation)
+            if selection_key in self._consumed_file_selections:
+                return
+            if not self._model.can_submit_source(ref_id):
                 QtWidgets.QMessageBox.information(
                     self,
                     "No Fetch action",
                     "Callimachus is not requesting a source for this reference.",
                 )
                 return
-            row = self._model.row(self._current_ref_id)
+            try:
+                tier = self._selected_tier()
+                preflight = _preflight_source_file(file_path, tier)
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.critical(self, "Source cannot be used", str(exc))
+                return
+            row = self._model.row(ref_id)
             question = (
-                f"Confirm that '{Path(self._selected_file).name}' is the exact cited work "
+                f"Confirm that '{Path(file_path).name}' is the exact cited work "
                 f"for source [{row.ref_number}]?"
             )
+            if preflight == "ocr_pending" and self._run_ocr is not None:
+                question += labels["ocr_confirm_note"]
             if (
                 QtWidgets.QMessageBox.question(self, "Confirm source", question)
                 != QtWidgets.QMessageBox.StandardButton.Yes
             ):
                 return
+            if (
+                self._current_ref_id != ref_id
+                or self._selected_file != file_path
+                or self._selected_file_ref_id != ref_id
+                or self._selected_file_generation != file_generation
+            ):
+                return
             try:
-                preflight = _preflight_source_file(self._selected_file, self._selected_tier())
-                payload = source_payload(file_path=self._selected_file, tier=self._selected_tier())
-                self._submit_source(self._current_ref_id, payload)
+                payload = source_payload(file_path=file_path, tier=tier)
+                self._submit_source(ref_id, payload)
             except (OSError, ValueError) as exc:
                 QtWidgets.QMessageBox.critical(self, "Source not captured", str(exc))
                 return
-            self._mark_queued(self._current_ref_id, Path(self._selected_file).name)
-            QtWidgets.QMessageBox.information(
-                self,
-                "Source queued",
-                "You confirmed this file is the exact cited work. "
-                + (
-                    "This PDF needs OCR before its text can be assessed. "
-                    if preflight == "ocr_pending" else "Readable text was detected. "
+            self._consumed_file_selections.add(selection_key)
+            self._mark_queued(ref_id, Path(file_path).name,
+                              ocr_pending=preflight == "ocr_pending")
+            if preflight == "ocr_pending" and self._run_ocr is not None:
+                self._start_ocr([{"ref_id": ref_id, "scan_id": None}])
+            else:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Source queued",
+                    "You confirmed this file is the exact cited work. "
+                    + (
+                        "This PDF needs OCR before its text can be assessed. "
+                        if preflight == "ocr_pending" else "Readable text was detected. "
+                    )
+                    + "Final evidence checks will run when Fetch resumes.",
                 )
-                + "Final evidence checks will run when Fetch resumes.",
-            )
 
-        def _mark_queued(self, ref_id: str, source_name: str, *, audit_path: str | None = None):
+        def _mark_queued(self, ref_id: str, source_name: str, *, audit_path: str | None = None,
+                         ocr_pending: bool = False):
             self._queued_sources[ref_id] = (source_name, audit_path)
+            self._ocr_row_status.pop(ref_id, None)
+            if ocr_pending:
+                self._staged_ocr_refs.add(ref_id)
+            else:
+                self._staged_ocr_refs.discard(ref_id)
             self._render_rows(select_ref_id=ref_id)
             self._selected()
             self._show_queued_status(ref_id)
@@ -1079,7 +1728,12 @@ def create_guided_fetch_window(
                 QtWidgets.QMessageBox.critical(self, "Source not discarded", str(exc))
                 return
             self._queued_sources.pop(ref_id, None)
+            self._staged_ocr_refs.discard(ref_id)
+            self._ocr_row_status.pop(ref_id, None)
             self._selected_file = None
+            self._selected_file_ref_id = None
+            self._selected_file_generation = None
+            self._selected_file_ocr_pending = False
             self.file_label.setText("Drop one file here")
             self._render_rows(select_ref_id=ref_id)
             self._selected()
@@ -1102,9 +1756,15 @@ def create_guided_fetch_window(
             audit_suffix = (
                 f" Saved in {Path(audit_path).parent.name}." if audit_path else ""
             )
+            ocr_status = self._ocr_row_status.get(ref_id, {}).get("status")
+            if ocr_status == "done":
+                status_text = f"{source_name} captured/selected and queued; OCR text extracted."
+            elif ref_id in self._staged_ocr_refs or ocr_status in {"queued", "running", "failed"}:
+                status_text = f"{source_name} captured/selected and queued; OCR is required before its text can be assessed."
+            else:
+                status_text = f"{source_name} captured/selected and queued; readability checked before Proceed."
             self.capture_status.setText(
-                f"{source_name} captured/selected and queued; readability checked before Proceed."
-                f"{audit_suffix}"
+                f"{status_text}{audit_suffix}"
             )
             self.capture_status.setToolTip(
                 f"Audit capture saved at: {audit_path}" if audit_path else ""
@@ -1142,13 +1802,14 @@ def create_guided_fetch_window(
             box.activateWindow()
 
         def _proceed_clicked(self):
-            if self._capture_tiers:
+            if self._capture_tiers or self._ocr_thread is not None:
                 return
             pending_reviews = self._pending_identity_reviews()
-            if pending_reviews and any(
+            already_recorded = any(
                 ref_id in self._recorded_identity_refs
                 for ref_id, _number, _review in pending_reviews
-            ):
+            )
+            if already_recorded:
                 QtWidgets.QMessageBox.critical(
                     self,
                     "Identity decision recorded; refresh failed",
@@ -1169,6 +1830,17 @@ def create_guided_fetch_window(
                     "Fetch tasks.",
                 )
                 return
+            all_fetch_answers_staged = all(
+                not self._model.can_submit_source(row.ref_id)
+                or row.ref_id in self._queued_sources
+                for row in self._model.rows()
+            )
+            manual_work_resolved = (
+                all_fetch_answers_staged
+                and not self._ocr_jobs()
+                and not pending_reviews
+                and not already_recorded
+            )
             if pending_reviews:
                 source_numbers = ", ".join(
                     f"[{number}]" if number is not None else f"[{ref_id}]"
@@ -1186,8 +1858,12 @@ def create_guided_fetch_window(
                     "Skipped sources will be recorded as waived and will remain unavailable "
                     "for verification. No source text will be inferred or created."
                 )
+            ocr_count = len(self._ocr_jobs())
+            if ocr_count:
+                question += labels["ocr_skip_note"].format(count=ocr_count)
             if (
-                QtWidgets.QMessageBox.question(self, "Proceed", question)
+                not manual_work_resolved
+                and QtWidgets.QMessageBox.question(self, "Proceed", question)
                 != QtWidgets.QMessageBox.StandardButton.Yes
             ):
                 return
@@ -1255,6 +1931,20 @@ def create_guided_fetch_window(
                 self.close()
 
         def closeEvent(self, event):  # noqa: N802 - Qt API name
+            if self._ocr_thread is not None:
+                self.statusBar().showMessage(labels["ocr_close_busy"], 10_000)
+                event.ignore()
+                return
+            if self._preview_thread is not None:
+                if self._preview_thread.isRunning():
+                    self._clear_preview()
+                    self._preview_close_when_finished = True
+                    event.ignore()
+                    return
+                self._preview_thread.wait()
+                self._preview_thread = None
+                self._preview_worker = None
+                self._preview_inflight_request = None
             if self._browser_worker is not None and self._browser_thread is not None:
                 if self._browser_thread.isRunning():
                     QtCore.QMetaObject.invokeMethod(
@@ -1300,41 +1990,26 @@ def _load_qt():
 
 
 def _callimachus_icon(QtCore, QtGui):
-    """Render the existing report logo's square mark for native Qt chrome."""
-    from PySide6 import QtSvg
+    """Load the shared application icon without duplicating splash logic."""
+    from .startup_splash import _callimachus_icon as load_icon
 
-    svg_path = Path(__file__).resolve().parents[1] / "report" / "human" / "assets" / "logo.svg"
-    renderer = QtSvg.QSvgRenderer(str(svg_path))
-    if not renderer.isValid():
-        return QtGui.QIcon()
-    renderer.setViewBox(QtCore.QRect(0, 0, 390, 360))
-    pixmap = QtGui.QPixmap(96, 96)
-    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
-    painter = QtGui.QPainter(pixmap)
-    renderer.render(painter)
-    painter.end()
-    return QtGui.QIcon(pixmap)
+    return load_icon(QtCore, QtGui)
 
 
-def _callimachus_wordmark(QtCore, QtGui, width: int, height: int, device_pixel_ratio: float = 1.0):
-    """Render the complete existing report logo for the compact in-window header."""
-    from PySide6 import QtSvg
-
-    svg_path = Path(__file__).resolve().parents[1] / "report" / "human" / "assets" / "logo.svg"
-    renderer = QtSvg.QSvgRenderer(str(svg_path))
-    # QtSvg does not load the SVG's embedded webfont on every platform.  Its
-    # wider fallback glyphs otherwise clip the final letter at the asset's
-    # original viewBox edge, so retain a small transparent right-side gutter.
-    renderer.setViewBox(QtCore.QRectF(0, 0, 1700, 360))
-    pixel_width = max(1, round(width * device_pixel_ratio))
-    pixel_height = max(1, round(height * device_pixel_ratio))
-    pixmap = QtGui.QPixmap(pixel_width, pixel_height)
-    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
-    if not renderer.isValid():
-        return pixmap
-    painter = QtGui.QPainter(pixmap)
-    renderer.render(painter)
-    painter.end()
+def _callimachus_wordmark(QtCore, QtGui, width: int, height: int, device_pixel_ratio: float = 1.0, *, dark: bool = False):
+    """Render the official transparent wordmark in the compact header."""
+    name = "logo-dark.png" if dark else "logo.png"
+    path = Path(__file__).resolve().parent / "assets" / name
+    source = QtGui.QPixmap(str(path))
+    if source.isNull():
+        return source
+    source = source.copy(QtCore.QRect(145, 109, 2196, 360))
+    pixmap = source.scaled(
+        max(1, round(width * device_pixel_ratio)),
+        max(1, round(height * device_pixel_ratio)),
+        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        QtCore.Qt.TransformationMode.SmoothTransformation,
+    )
     pixmap.setDevicePixelRatio(device_pixel_ratio)
     return pixmap
 
@@ -1358,12 +2033,14 @@ def _theme_stylesheet(*, dark: bool, font_size: int = 13) -> str:
         selection, button_text, disabled_text, hover_text, active_button,
         active_button_hover, pressed_button,
     ) = colors
+    ocr_background = "#694a16" if dark else "#fff0bf"
+    ocr_hover = "#7b581c" if dark else "#ffe39b"
+    ocr_foreground = "#fff4da" if dark else "#613d00"
+    ocr_border = "#b4832b" if dark else "#b87713"
     return f"""
         QWidget {{ background: {background}; color: {text}; font-family: 'Segoe UI', sans-serif; font-size: {font_size}px; }}
         #brandHeader, #selectionGuidance, #actionPanel {{ background: {surface}; border: 1px solid {border}; border-radius: 10px; padding: 7px; }}
         #brandHeader QWidget, #brandHeader QLabel {{ background: transparent; }}
-        QFrame#brandLogoTile {{ background-color: #ffffff; border: 1px solid #d5dce8; border-radius: 8px; }}
-        QFrame#brandLogoTile QLabel {{ background-color: #ffffff; }}
         #selectionGuidance {{ line-height: 1.25; }}
         #captureStatusPanel {{ background: {accent_surface}; border: 1px solid {blue}; border-radius: 8px; }}
         #captureStatus {{ background: transparent; color: {text}; border: 0; padding: 0; font-weight: 600; }}
@@ -1387,6 +2064,12 @@ def _theme_stylesheet(*, dark: bool, font_size: int = 13) -> str:
         #proceedButton:hover, #discardSourceButton:hover {{ background: {active_button_hover}; color: white; }}
         #proceedButton:pressed, #discardSourceButton:pressed {{ background: {pressed_button}; color: white; border-color: {pressed_button}; }}
         #proceedButton:disabled, #discardSourceButton:disabled {{ background: {background}; color: {disabled_text}; border-color: {border}; }}
+        #runOcrButton {{ background: {ocr_background}; color: {ocr_foreground}; border-color: {ocr_border}; }}
+        #runOcrButton:hover {{ background: {ocr_hover}; color: {ocr_foreground}; }}
+        #runOcrButton:disabled {{ background: {background}; color: {disabled_text}; border-color: {border}; }}
+        #ocrRowProgress {{ background: {surface}; border: 1px solid {ocr_border}; border-radius: 4px; min-height: 8px; }}
+        #ocrRowProgress::chunk {{ background: {ocr_border}; border-radius: 3px; }}
+        QFrame#previewSkeletonBar {{ background-color: {'#40516b' if dark else '#d7e2f1'}; border: 0; border-radius: 7px; }}
         #fileDropArea {{ border: 2px dashed {blue}; border-radius: 8px; padding: 6px; }}
         QScrollBar:vertical {{ background: transparent; width: 10px; margin: 3px 1px; }}
         QScrollBar::handle:vertical {{ background: {border}; border-radius: 5px; min-height: 28px; }}
@@ -1397,6 +2080,13 @@ def _theme_stylesheet(*, dark: bool, font_size: int = 13) -> str:
         QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; background: transparent; }}
         QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
     """
+
+
+def _identity_review_colors(*, dark: bool) -> tuple[str, str, str]:
+    """Readable warning surface, text, and border for a pending identity decision."""
+    return ("#3d331c", "#fff0c2", "#e0ad45") if dark else (
+        "#fff4d1", "#3b2d0a", "#c28a00"
+    )
 
 
 def _status_foregrounds(*, dark: bool) -> dict[str, str]:
@@ -1428,6 +2118,7 @@ def _read_preview(path: str | None) -> str:
     if path is None:
         return "No preview available."
     try:
-        return Path(path).read_text(encoding="utf-8", errors="replace")[:100_000]
-    except OSError:
+        with Path(path).open("r", encoding="utf-8", errors="replace") as source:
+            return source.read(100_000)
+    except (OSError, ValueError):
         return "Preview unavailable."

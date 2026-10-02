@@ -120,6 +120,8 @@ def _remediation_state(repo):
     interventions = []
     footnote_split_required = []
     for row in repo.manual_parse_review_projection():
+        if row.get("action") == "skip_review":
+            continue
         if (
             row.get("subject_type") == "footnote_note"
             and row.get("manual_review_required") is True

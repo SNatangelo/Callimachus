@@ -24,6 +24,7 @@ Commands:
     report         render the final report                 (core.report)
     report-bibliography  export bibliographic findings without Fetch/Verify
     report-html    render an optional human HTML companion (core.report.human.cli)
+    report-export  export a public redacted copy of a completed Verify report
     present        project a run into presentation form    (core.app.commands.present)
     preview        inspect Google Books preview evidence   (core.fetch.fallbacks.preview)
     gaps           report unresolved gaps                  (core.fetch.diagnostics.gaps)
@@ -108,6 +109,7 @@ _COMMANDS = {
     "report": "core.report",
     "report-bibliography": "core.app.commands.report_bibliography",
     "report-html": "core.report.human.cli",
+    "report-export": "core.report.human.public_export",
     "present": "core.app.commands.present",
     "preview": "core.fetch.fallbacks.preview",
     "gaps": "core.fetch.diagnostics.gaps",
@@ -469,6 +471,22 @@ def _dispatch(module_path: str, argv: list[str], prog: str) -> int:
     return rc if isinstance(rc, int) else 0
 
 
+def _launch_desktop(module_path: str, argv: list[str], prog: str) -> int:
+    """Show the desktop splash while the GUI command's imports complete."""
+    from core.gui.startup_splash import run_with_splash
+
+    try:
+        return run_with_splash(
+            prepare=lambda: importlib.import_module(module_path),
+            start=lambda: _dispatch(module_path, argv, prog),
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name != "PySide6":
+            raise
+        # Preserve the desktop command's existing missing-GUI diagnosis.
+        return _dispatch(module_path, argv, prog)
+
+
 def main() -> int:
     _repair_frozen_stdio()
     try:
@@ -746,6 +764,8 @@ def _main() -> int:
         dependency_error = _check_runtime_dependencies()
         if dependency_error is not None:
             return dependency_error
+        if cmd == "app" and not {"-h", "--help"}.intersection(argv[1:]):
+            return _launch_desktop(module_path, argv[1:], f"{program} {cmd}")
         return _dispatch(module_path, argv[1:], f"{program} {cmd}")
     # no command (or leading flag): the full verification pipeline
     if _ensure_local_env():

@@ -10,11 +10,17 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict
+import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 from typing import Any, Callable
 
+from core.app.runtime.settings import DEFAULT_OCR_LANG
+from core.fetch.admission import provided_fulltext
+from core.fetch.extraction import ocr as fetch_ocr
+from core.fetch.extraction import pdf as fetch_pdf
 from core.infra.db.repository import RunRepository
 from core.resolve.resolver_coverage import (
     bibliographic_concern,
@@ -100,12 +106,14 @@ class GuidedFetchController:
         self._admit = admit or _admit_fetch_payload
         self._admit_identity_review = admit_identity_review or _admit_identity_review
         self._staged: dict[str, dict] = {}
+        self._restored_ocr_artifacts = _load_guided_ocr_artifacts(run_dir)
         self._proceeded = False
         self._summary: dict[str, Any] = {
             "proceeded": False,
             "submitted_task_ids": [],
             "waived_ref_ids": [],
         }
+        self._restore_completed_ocr()
 
     @property
     def proceeded(self) -> bool:
@@ -122,6 +130,8 @@ class GuidedFetchController:
 
     def stage_source(self, ref_id: str, payload: dict) -> None:
         """Associate one file-only guided source with exactly one pending task."""
+        if isinstance(payload, dict) and "ocr_scan_file_path" in payload:
+            raise ValueError("guided OCR evidence can only be staged by the OCR action")
         _validate_staged_source(ref_id, payload)
         tasks = self._pending_tasks_by_ref()
         matches = [
@@ -132,6 +142,7 @@ class GuidedFetchController:
             raise ValueError(
                 "guided Fetch source must match exactly one pending Fetch task"
             )
+        self._mark_staged_ocr_discarded(ref_id)
         self._staged[ref_id] = deepcopy(payload)
         self._proceeded = False
 
@@ -178,12 +189,337 @@ class GuidedFetchController:
         """
         if not isinstance(ref_id, str) or not ref_id.strip():
             raise ValueError("Guided Fetch reference id must be non-empty")
+        self._mark_staged_ocr_discarded(ref_id)
         discarded = self._staged.pop(ref_id, None) is not None
         self._proceeded = False
         return discarded
 
+    def run_ocr(
+        self,
+        jobs: list[dict[str, Any]],
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Run confirmed OCR jobs serially and stage hash-bound text answers.
+
+        Scan and result files live in a signed run-owned directory. Each PDF is
+        processed one at a time, and every job produces a structured done or
+        failed result even if another job fails.
+        """
+        if not isinstance(jobs, list):
+            return []
+        total = len(jobs)
+        results: list[dict[str, Any]] = []
+        for index, job in enumerate(jobs, start=1):
+            ref_id = job.get("ref_id") if isinstance(job, dict) else None
+            scan_id = job.get("scan_id") if isinstance(job, dict) else None
+            if not isinstance(ref_id, str) or not ref_id:
+                results.append({
+                    "ref_id": str(ref_id or ""),
+                    "scan_id": scan_id,
+                    "status": "failed",
+                    "reason": "OCR job is missing its reference identity.",
+                })
+                continue
+            effective_scan_id = scan_id if isinstance(scan_id, str) else None
+            self._emit_ocr_progress(on_progress, {
+                "ref_id": ref_id,
+                "scan_id": effective_scan_id,
+                "status": "queued",
+                "index": index,
+                "total": total,
+            })
+            self._emit_ocr_progress(on_progress, {
+                "ref_id": ref_id,
+                "scan_id": effective_scan_id,
+                "status": "running",
+                "index": index,
+                "total": total,
+            })
+            try:
+                artifact = self._run_one_ocr(ref_id, scan_id)
+                result = {
+                    "ref_id": ref_id,
+                    "scan_id": artifact["scan_id"],
+                    "status": "done",
+                    "reason": None,
+                }
+            except Exception as exc:
+                reason = _ocr_failure_reason(exc)
+                result = {
+                    "ref_id": ref_id,
+                    "scan_id": effective_scan_id,
+                    "status": "failed",
+                    "reason": reason,
+                }
+            results.append(result)
+            self._emit_ocr_progress(on_progress, {
+                **result,
+                "index": index,
+                "total": total,
+            })
+        return results
+
+    def _emit_ocr_progress(
+        self,
+        callback: Callable[[dict[str, Any]], None] | None,
+        event: dict[str, Any],
+    ) -> None:
+        if callable(callback):
+            try:
+                callback(event)
+            except Exception:
+                pass
+
+    def _run_one_ocr(self, ref_id: str, requested_scan_id: object) -> dict[str, Any]:
+        retrieval_matches = [
+            task for task in self._pending_tasks_by_ref().get(ref_id, [])
+            if task.get("kind") in {"fetch", "browser_challenge"}
+            or task.get("task_kind") in {"fetch", "browser_challenge"}
+        ]
+        if len(retrieval_matches) > 1:
+            raise ValueError("OCR job matches multiple pending retrieval tasks")
+        can_stage_answer = len(retrieval_matches) == 1
+
+        artifact: dict[str, Any] | None = None
+        if requested_scan_id is None:
+            staged = self._staged.get(ref_id)
+            if staged is None or not isinstance(staged.get("file_path"), str):
+                raise ValueError("the confirmed staged PDF is unavailable")
+            source_path = Path(staged["file_path"])
+            if source_path.suffix.lower() != ".pdf" or not source_path.is_file():
+                raise ValueError("the confirmed source is not an available PDF")
+            try:
+                provided_fulltext.parse_extract.probe_file(str(source_path))
+            except Exception as exc:
+                raise ValueError("the confirmed source is not a valid PDF") from exc
+            digest = _sha256_path(source_path)
+            token = f"staged:{source_path.resolve()}"
+            artifact_id = provided_fulltext.ocr_scan_id(ref_id, token, digest)
+            artifact = self._restored_ocr_artifacts.get(artifact_id)
+            source_ref = str(staged.get("url") or source_path.resolve())
+            display_name = source_path.name
+            if artifact is None:
+                from core.app.commands.tasks import store_guided_ocr_artifact
+                artifact = store_guided_ocr_artifact(
+                    self.run_dir,
+                    scan_id=artifact_id,
+                    ref_id=ref_id,
+                    ref_number=self._reference_number(ref_id),
+                    scan_path=str(source_path),
+                    scan_sha256=digest,
+                    scan_token=token,
+                    source_ref=source_ref,
+                    display_name=display_name,
+                    status="pending",
+                    identity_attested=True,
+                    debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+                    debug_override_reason=self._debug_override_reason,
+                )
+                self._restored_ocr_artifacts[artifact_id] = artifact
+        else:
+            if not isinstance(requested_scan_id, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", requested_scan_id,
+            ):
+                raise ValueError("OCR scan identity is invalid")
+            artifact = self._restored_ocr_artifacts.get(requested_scan_id)
+            if artifact is None:
+                queued = [
+                    item for item in provided_fulltext.list_pending_ocr_scans(
+                        self.run_dir, ref_id=ref_id,
+                    ) if item["scan_id"] == requested_scan_id
+                ]
+                if len(queued) != 1:
+                    raise ValueError("queued OCR scan is missing or ambiguous")
+                scan = queued[0]
+                artifact = {
+                    **scan,
+                    "scan_id": requested_scan_id,
+                    "scan_sha256": scan["sha256"],
+                    "scan_token": scan["source_ref"],
+                    "scan_path": scan["path"],
+                    "text_file_path": None,
+                    "status": "pending",
+                    "reason": scan["reason"],
+                    "identity_attested": False,
+                }
+
+        if artifact.get("ref_id") != ref_id:
+            raise ValueError("OCR scan belongs to a different reference")
+        if artifact.get("status") == "done":
+            if artifact.get("discarded"):
+                artifact = self._persist_discarded_state(artifact, discarded=False)
+            if can_stage_answer:
+                payload = _ocr_artifact_payload(artifact)
+                _validate_staged_source(ref_id, payload, allow_ocr_scan=True)
+                self._staged[ref_id] = payload
+                self._proceeded = False
+            return artifact
+
+        scan_path = artifact.get("scan_path") or artifact.get("path")
+        digest = artifact.get("scan_sha256") or artifact.get("sha256")
+        token = artifact.get("scan_token") or artifact.get("source_ref")
+        source_ref = artifact.get("source_ref") or token
+        if not isinstance(scan_path, str) or not isinstance(digest, str):
+            raise ValueError("OCR scan metadata is incomplete")
+        if _sha256_path(Path(scan_path)) != digest:
+            raise ValueError("OCR PDF bytes changed before OCR")
+        if artifact.get("status") != "pending" or artifact["scan_id"] not in self._restored_ocr_artifacts:
+            from core.app.commands.tasks import store_guided_ocr_artifact
+            artifact = store_guided_ocr_artifact(
+                self.run_dir,
+                scan_id=artifact["scan_id"],
+                ref_id=ref_id,
+                ref_number=self._reference_number(ref_id),
+                scan_path=scan_path,
+                scan_sha256=digest,
+                scan_token=token,
+                source_ref=str(source_ref),
+                display_name=artifact.get("display_name") or Path(scan_path).name,
+                status="pending",
+                identity_attested=artifact["identity_attested"],
+                debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+                debug_override_reason=self._debug_override_reason,
+            )
+            self._restored_ocr_artifacts[artifact["scan_id"]] = artifact
+            can_stage_answer = True
+        try:
+            text, method = fetch_ocr.ocr_pdf(scan_path, lang=DEFAULT_OCR_LANG)
+            if not fetch_pdf._quality(text):
+                raise ValueError("OCR output failed the deterministic text quality gate")
+            from core.app.commands.tasks import store_guided_ocr_artifact
+            completed = store_guided_ocr_artifact(
+                self.run_dir,
+                scan_id=artifact["scan_id"],
+                ref_id=ref_id,
+                ref_number=self._reference_number(ref_id),
+                scan_path=scan_path,
+                scan_sha256=digest,
+                scan_token=token,
+                source_ref=str(source_ref),
+                display_name=artifact.get("display_name") or Path(scan_path).name,
+                status="done",
+                text=text,
+                method=method,
+                identity_attested=artifact["identity_attested"],
+                debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+                debug_override_reason=self._debug_override_reason,
+            )
+        except Exception as exc:
+            reason = _ocr_failure_reason(exc)
+            try:
+                from core.app.commands.tasks import store_guided_ocr_artifact
+                failed = store_guided_ocr_artifact(
+                    self.run_dir,
+                    scan_id=artifact["scan_id"],
+                    ref_id=ref_id,
+                    ref_number=self._reference_number(ref_id),
+                    scan_path=scan_path,
+                    scan_sha256=digest,
+                    scan_token=token,
+                    source_ref=str(source_ref),
+                    display_name=artifact.get("display_name") or Path(scan_path).name,
+                    status="failed",
+                    reason=reason,
+                    identity_attested=artifact["identity_attested"],
+                    debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+                    debug_override_reason=self._debug_override_reason,
+                )
+                self._restored_ocr_artifacts[failed["scan_id"]] = failed
+            except Exception:
+                pass
+            raise
+        if can_stage_answer:
+            payload = _ocr_artifact_payload(completed)
+            _validate_staged_source(ref_id, payload, allow_ocr_scan=True)
+            self._staged[ref_id] = payload
+            self._proceeded = False
+        self._restored_ocr_artifacts[completed["scan_id"]] = completed
+        return completed
+
+    def _reference_number(self, ref_id: str) -> int | None:
+        repo = self._repository_opener(self.run_dir)
+        try:
+            reference = repo.get_reference(ref_id)
+            return None if reference is None else reference.ref_number
+        finally:
+            repo.close()
+
+    def _mark_staged_ocr_discarded(self, ref_id: str) -> None:
+        staged = self._staged.get(ref_id)
+        scan_path = staged.get("ocr_scan_file_path") if isinstance(staged, dict) else None
+        if not isinstance(scan_path, str):
+            return
+        try:
+            target = Path(scan_path).resolve(strict=True)
+        except OSError:
+            return
+        for artifact in self._restored_ocr_artifacts.values():
+            if (
+                artifact.get("ref_id") == ref_id
+                and artifact.get("status") == "done"
+                and Path(artifact["scan_path"]).resolve() == target
+                and not artifact.get("discarded")
+            ):
+                self._persist_discarded_state(artifact, discarded=True)
+
+    def _persist_discarded_state(
+        self, artifact: dict[str, Any], *, discarded: bool,
+    ) -> dict[str, Any]:
+        from core.app.commands.tasks import store_guided_ocr_artifact
+        text_path = artifact.get("text_file_path")
+        if not isinstance(text_path, str):
+            raise ValueError("completed OCR text is unavailable")
+        updated = store_guided_ocr_artifact(
+            self.run_dir,
+            scan_id=artifact["scan_id"],
+            ref_id=artifact["ref_id"],
+            ref_number=artifact.get("ref_number"),
+            scan_path=artifact["scan_path"],
+            scan_sha256=artifact["scan_sha256"],
+            scan_token=artifact["scan_token"],
+            source_ref=artifact["source_ref"],
+            display_name=artifact["display_name"],
+            status="done",
+            text=Path(text_path).read_text(encoding="utf-8"),
+            method=artifact["ocr_method"],
+            discarded=discarded,
+            identity_attested=artifact["identity_attested"],
+            debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+            debug_override_reason=self._debug_override_reason,
+        )
+        self._restored_ocr_artifacts[updated["scan_id"]] = updated
+        return updated
+
+    def _restore_completed_ocr(self) -> None:
+        if not self._restored_ocr_artifacts:
+            return
+        try:
+            pending = self._pending_tasks_by_ref()
+        except Exception:
+            return
+        for artifact in self._restored_ocr_artifacts.values():
+            if artifact.get("status") != "done" or artifact.get("discarded"):
+                continue
+            ref_id = artifact.get("ref_id")
+            if not isinstance(ref_id, str):
+                continue
+            eligible = [
+                task for task in pending.get(ref_id, [])
+                if task.get("kind") in {"fetch", "browser_challenge"}
+                or task.get("task_kind") in {"fetch", "browser_challenge"}
+            ]
+            if len(eligible) != 1:
+                continue
+            try:
+                payload = _ocr_artifact_payload(artifact)
+                _validate_staged_source(ref_id, payload, allow_ocr_scan=True)
+            except (OSError, ValueError, KeyError):
+                continue
+            self._staged[ref_id] = payload
+
     def proceed(self) -> dict[str, Any]:
         """Admit staged sources and explicit waivers for every pending Fetch task."""
+        self._prepare_ocr_only_queue()
         pending = self._pending_task_views()
         planned, staged_refs, waived_refs = self._preflight_proceed(pending)
         submitted: list[str] = []
@@ -216,6 +552,49 @@ class GuidedFetchController:
             "staged_ref_ids": staged_refs,
         }
         return self.summary
+
+    def _prepare_ocr_only_queue(self) -> None:
+        """Make a queued scan answerable before an explicit Proceed/skip."""
+        queued_scans = provided_fulltext.list_pending_ocr_scans(self.run_dir)
+        if not queued_scans:
+            return
+        actionable = {
+            item["scan_id"] for item in build_source_inventory(self.run_dir)["ocr_queue"]
+            if item["status"] in {"pending", "failed"}
+        }
+        for scan in queued_scans:
+            if scan["scan_id"] not in actionable:
+                continue
+            if any(
+                task.get("kind") in {"fetch", "browser_challenge"}
+                for task in self._pending_tasks_by_ref().get(scan["ref_id"], [])
+            ):
+                continue
+            from core.app.commands.tasks import store_guided_ocr_artifact
+            artifact = store_guided_ocr_artifact(
+                self.run_dir,
+                scan_id=scan["scan_id"], ref_id=scan["ref_id"],
+                ref_number=self._reference_number(scan["ref_id"]),
+                scan_path=scan["path"], scan_sha256=scan["sha256"],
+                scan_token=scan["source_ref"], source_ref=scan["source_ref"],
+                display_name=scan["display_name"], status="pending",
+                identity_attested=False,
+                debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+                debug_override_reason=self._debug_override_reason,
+            )
+            self._restored_ocr_artifacts[scan["scan_id"]] = artifact
+
+    def _ocr_waiver(self, ref_id: str) -> dict[str, Any]:
+        scans = sorted(
+            (
+                artifact for artifact in self._restored_ocr_artifacts.values()
+                if artifact.get("ref_id") == ref_id and not artifact.get("discarded")
+            ),
+            key=lambda artifact: artifact["scan_id"],
+        )
+        if not scans:
+            raise ValueError("guided OCR waiver is missing its original PDF")
+        return {**waived_payload(), "ocr_scan_file_path": scans[0]["scan_path"]}
 
     def _pending_tasks_by_ref(self) -> dict[str, list[dict]]:
         by_ref: dict[str, list[dict]] = {}
@@ -278,11 +657,22 @@ class GuidedFetchController:
                 payload = self._staged.get(ref_id)
                 task_staged_refs = []
                 if payload is None:
-                    payload = waived_payload()
+                    payload = (
+                        self._ocr_waiver(ref_id)
+                        if task_id.startswith("fetch:guided-ocr:") else waived_payload()
+                    )
                     waived_refs.append(ref_id)
                 else:
-                    _validate_staged_source(ref_id, payload)
-                    staged_refs.append(ref_id)
+                    payload, was_waived = _proceed_payload(ref_id, payload)
+                    if payload.get("found") is True:
+                        _validate_staged_source(
+                            ref_id, payload,
+                            allow_ocr_scan="ocr_scan_file_path" in payload,
+                        )
+                    if was_waived:
+                        waived_refs.append(ref_id)
+                    else:
+                        staged_refs.append(ref_id)
                     task_staged_refs.append(ref_id)
                 planned.append((
                     task_id,
@@ -298,9 +688,17 @@ class GuidedFetchController:
                     items.append({"ref_id": ref_id, **waived_payload()})
                     waived_refs.append(ref_id)
                 else:
-                    _validate_staged_source(ref_id, payload)
+                    payload, was_waived = _proceed_payload(ref_id, payload)
+                    if payload.get("found") is True:
+                        _validate_staged_source(
+                            ref_id, payload,
+                            allow_ocr_scan="ocr_scan_file_path" in payload,
+                        )
                     items.append({"ref_id": ref_id, **deepcopy(payload)})
-                    staged_refs.append(ref_id)
+                    if was_waived:
+                        waived_refs.append(ref_id)
+                    else:
+                        staged_refs.append(ref_id)
                     task_staged_refs.append(ref_id)
             planned.append((task_id, {"items": items}, task_staged_refs))
         return planned, staged_refs, waived_refs
@@ -322,19 +720,29 @@ def _task_ref_ids(task: dict) -> list[str]:
     return []
 
 
-def _validate_staged_source(ref_id: str, payload: dict) -> None:
+def _validate_staged_source(
+    ref_id: str, payload: dict, *, allow_ocr_scan: bool = False,
+) -> None:
     if not isinstance(ref_id, str) or not ref_id:
         raise ValueError("guided Fetch ref_id must be non-empty")
     if not isinstance(payload, dict):
         raise ValueError("guided Fetch source payload must be an object")
     allowed = {
         "found", "guided_fetch", "identity_attested", "source_tier", "file_path", "url",
+        "ocr_scan_file_path",
     }
     if set(payload) - allowed or payload.get("found") is not True:
         raise ValueError("guided Fetch staged source has an invalid shape")
     if (
         payload.get("guided_fetch") is not True
-        or payload.get("identity_attested") is not True
+        or (
+            payload.get("identity_attested") is not True
+            and not (
+                allow_ocr_scan
+                and "ocr_scan_file_path" in payload
+                and payload.get("identity_attested") is False
+            )
+        )
         or "text" in payload
     ):
         raise ValueError("guided Fetch staged source must be file-only")
@@ -346,6 +754,41 @@ def _validate_staged_source(ref_id: str, payload: dict) -> None:
         not isinstance(payload["url"], str) or not payload["url"].strip()
     ):
         raise ValueError("guided Fetch source_ref must be non-empty")
+    if "ocr_scan_file_path" in payload:
+        if not allow_ocr_scan:
+            raise ValueError("guided OCR evidence can only be staged by the OCR action")
+        if (
+            payload.get("source_tier", "fulltext") != "fulltext"
+            or Path(payload["file_path"]).suffix.lower() != ".txt"
+            or not isinstance(payload.get("ocr_scan_file_path"), str)
+            or Path(payload["ocr_scan_file_path"]).suffix.lower() != ".pdf"
+        ):
+            raise ValueError("guided OCR source requires text and its original PDF")
+        source_ref = payload.get("url")
+        if not isinstance(source_ref, str) or not re.fullmatch(
+            r"urn:callimachus:ocr-scan:sha256:[0-9a-f]{64}", source_ref,
+        ):
+            raise ValueError("guided OCR source requires a hash-bound scan reference")
+        expected = source_ref.rsplit(":", 1)[-1]
+        if _sha256_path(Path(payload["ocr_scan_file_path"])) != expected:
+            raise ValueError("guided OCR source PDF hash does not match its reference")
+
+
+def _proceed_payload(ref_id: str, payload: dict) -> tuple[dict, bool]:
+    """Turn an unprocessed scanned PDF into an explicit waiver with its PDF."""
+    if (
+        payload.get("found") is True
+        and "ocr_scan_file_path" not in payload
+        and isinstance(payload.get("file_path"), str)
+        and Path(payload["file_path"]).suffix.lower() == ".pdf"
+        and Path(payload["file_path"]).is_file()
+        and provided_fulltext.pdf_requires_ocr(payload["file_path"])
+    ):
+        return ({
+            **waived_payload(),
+            "ocr_scan_file_path": payload["file_path"],
+        }, True)
+    return deepcopy(payload), False
 
 
 def _admit_fetch_payload(*args, **kwargs) -> dict:
@@ -362,6 +805,145 @@ def _admit_identity_review(*args, **kwargs) -> dict:
     """Late import keeps the GUI controller independent from CLI parsing."""
     from core.app.commands.tasks import admit_source_identity_review
     return admit_source_identity_review(*args, **kwargs)
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _ocr_artifact_payload(artifact: dict[str, Any]) -> dict:
+    text_path = artifact.get("text_file_path")
+    scan_path = artifact.get("scan_path")
+    digest = artifact.get("scan_sha256")
+    if (
+        not isinstance(text_path, str)
+        or not isinstance(scan_path, str)
+        or not isinstance(digest, str)
+    ):
+        raise ValueError("completed OCR artifact is incomplete")
+    if _sha256_path(Path(scan_path)) != digest:
+        raise ValueError("completed OCR artifact scan hash changed")
+    return {
+        "found": True,
+        "guided_fetch": True,
+        "identity_attested": artifact["identity_attested"],
+        "source_tier": "fulltext",
+        "file_path": text_path,
+        "url": provided_fulltext.ocr_scan_source_ref(digest),
+        "ocr_scan_file_path": scan_path,
+    }
+
+
+def _load_guided_ocr_artifacts(run_dir: str) -> dict[str, dict[str, Any]]:
+    """Load only hash-validated, run-contained Guided Fetch OCR sidecars."""
+    root = Path(run_dir).resolve()
+    sources_dir = root / "sources"
+    artifact_dir = sources_dir / "guided_ocr"
+    if (
+        not artifact_dir.exists()
+        or sources_dir.is_symlink()
+        or artifact_dir.is_symlink()
+        or not artifact_dir.is_dir()
+    ):
+        return {}
+    output: dict[str, dict[str, Any]] = {}
+    for metadata_path in artifact_dir.glob("*.json"):
+        if metadata_path.is_symlink():
+            continue
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if not isinstance(metadata, dict):
+                continue
+            scan_id = metadata.get("scan_id")
+            ref_id = metadata.get("ref_id")
+            scan_token = metadata.get("scan_token")
+            scan_sha256 = metadata.get("scan_sha256")
+            status = metadata.get("status")
+            if (
+                not isinstance(scan_id, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", scan_id)
+                or not isinstance(ref_id, str)
+                or not ref_id
+                or not isinstance(scan_token, str)
+                or not isinstance(scan_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", scan_sha256)
+                or provided_fulltext.ocr_scan_id(ref_id, scan_token, scan_sha256) != scan_id
+                or status not in {"pending", "failed", "done"}
+                or metadata_path.stem != scan_id
+            ):
+                continue
+            scan_path = artifact_dir / f"{scan_id}.pdf"
+            if scan_path.is_symlink() or not scan_path.is_file():
+                continue
+            resolved_scan = scan_path.resolve(strict=True)
+            resolved_scan.relative_to(root)
+            if _sha256_path(resolved_scan) != scan_sha256:
+                continue
+            display_name = metadata.get("display_name")
+            source_ref = metadata.get("source_ref")
+            reason = metadata.get("reason")
+            ref_number = metadata.get("ref_number")
+            if (
+                not isinstance(display_name, str)
+                or Path(display_name).name != display_name
+                or not isinstance(source_ref, str)
+                or (reason is not None and not isinstance(reason, str))
+                or (ref_number is not None and type(ref_number) is not int)
+                or type(metadata.get("discarded", False)) is not bool
+                or type(metadata.get("identity_attested")) is not bool
+            ):
+                continue
+            text_path: Path | None = None
+            if status == "done":
+                relative = metadata.get("text_path")
+                text_sha256 = metadata.get("text_sha256")
+                method = metadata.get("ocr_method")
+                if (
+                    not isinstance(relative, str)
+                    or not re.fullmatch(
+                        rf"sources/guided_ocr/{re.escape(scan_id)}-[0-9a-f]{{64}}\.txt",
+                        relative,
+                    )
+                    or not isinstance(text_sha256, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", text_sha256)
+                    or not isinstance(method, str)
+                    or not method
+                ):
+                    continue
+                text_path = root / Path(*PurePosixPath(relative).parts)
+                if text_path.is_symlink() or not text_path.is_file():
+                    continue
+                text_path.resolve(strict=True).relative_to(root)
+                if _sha256_path(text_path) != text_sha256:
+                    continue
+                metadata["text_file_path"] = str(text_path.resolve())
+            elif (
+                metadata.get("text_path") is not None
+                or metadata.get("text_sha256") is not None
+                or metadata.get("ocr_method") is not None
+            ):
+                continue
+            metadata["scan_path"] = str(resolved_scan)
+            metadata["path"] = str(resolved_scan)
+            metadata["sha256"] = scan_sha256
+            output[scan_id] = metadata
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return output
+
+
+def _ocr_failure_reason(exc: Exception) -> str:
+    if isinstance(exc, FileNotFoundError):
+        return "The selected PDF is unavailable. Replace it and retry OCR."
+    if isinstance(exc, ValueError) and "quality gate" in str(exc):
+        return "OCR did not produce text that passed the quality check. Replace the PDF or provide readable text."
+    if isinstance(exc, RuntimeError):
+        return "The OCR backend could not process this PDF. Check OCR availability or replace the scan."
+    return f"OCR failed ({type(exc).__name__}). Replace the PDF or retry."
 
 
 def build_source_inventory(
@@ -448,6 +1030,13 @@ def build_source_inventory(
             )
             source_by_ref.setdefault(source.ref_id, []).append(item)
 
+        guided_ocr_artifacts = _load_guided_ocr_artifacts(run_dir)
+        guided_ocr_by_ref: dict[str, list[dict[str, Any]]] = {}
+        for artifact in guided_ocr_artifacts.values():
+            ref_id = artifact.get("ref_id")
+            if isinstance(ref_id, str):
+                guided_ocr_by_ref.setdefault(ref_id, []).append(artifact)
+
         entries = []
         for reference in references:
             resolved = repo.get_resolve_result(reference.ref_id)
@@ -460,6 +1049,28 @@ def build_source_inventory(
             best_source = next(
                 (source for source in sources if source["available"]),
                 None,
+            )
+            has_available_fulltext = any(
+                source.get("available") and source.get("tier") == "fulltext"
+                for source in sources
+            )
+            staged_ocr_preview = (
+                None
+                if has_available_fulltext
+                else _staged_guided_ocr_preview_path(
+                    run_dir, guided_ocr_by_ref.get(reference.ref_id, [])
+                )
+            )
+            best_preview_path = (
+                None if best_source is None else best_source["preview_path"]
+            )
+            preview_path = staged_ocr_preview or best_preview_path
+            preview_kind = (
+                "guided_ocr_staged"
+                if staged_ocr_preview is not None
+                else "acquired"
+                if best_preview_path is not None
+                else None
             )
             resolved_abstract = (resolve or {}).get("abstract")
             best_tier = (
@@ -489,9 +1100,8 @@ def build_source_inventory(
                     "sources": sources,
                     "best_source": best_source,
                     "tier": best_tier,
-                    "preview_path": (
-                        None if best_source is None else best_source["preview_path"]
-                    ),
+                    "preview_path": preview_path,
+                    "preview_kind": preview_kind,
                     "attempts": (
                         repo.list_fetch_attempts(reference.ref_id)
                         if include_fetch_attempts
@@ -511,7 +1121,17 @@ def build_source_inventory(
                     "reason": (resolve or {}).get("tag_reason"),
                 },
             })
-        return {"run": asdict(repo.get_run()), "references": entries}
+        ocr_queue = _ocr_queue_projection(
+            run_dir,
+            [reference.ref_id for reference in references],
+            source_by_ref,
+            guided_ocr_artifacts,
+        )
+        return {
+            "run": asdict(repo.get_run()),
+            "references": entries,
+            "ocr_queue": ocr_queue,
+        }
     finally:
         repo.close()
 
@@ -567,6 +1187,109 @@ def _task_views_by_ref(
             view["task_kind"] = task.task_kind
             views.append(view)
     return _tasks_by_ref(views)
+
+
+def _task_is_retrieval(task: dict[str, Any]) -> bool:
+    return task.get("kind") in {"fetch", "browser_challenge"} or task.get(
+        "task_kind"
+    ) in {"fetch", "browser_challenge"}
+
+
+def _ocr_queue_projection(
+    run_dir: str,
+    ref_ids: list[str],
+    source_by_ref: dict[str, list[dict[str, Any]]],
+    guided_ocr_artifacts: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    allowed_refs = set(ref_ids)
+    eligible_refs = {
+        ref_id for ref_id in ref_ids
+        if not any(
+            source.get("available") and source.get("tier") == "fulltext"
+            for source in source_by_ref.get(ref_id, [])
+        )
+    }
+    scans: dict[str, dict[str, Any]] = {}
+    try:
+        for scan in provided_fulltext.list_pending_ocr_scans(run_dir):
+            if scan.get("ref_id") not in eligible_refs:
+                continue
+            scans[scan["scan_id"]] = {
+                "scan_id": scan["scan_id"],
+                "ref_id": scan["ref_id"],
+                "ref_number": scan.get("ref_number"),
+                "display_name": scan.get("display_name") or "scan.pdf",
+                "status": "pending",
+                "reason": "Previously fetched PDF is queued for OCR.",
+            }
+    except Exception:
+        pass
+    for artifact in guided_ocr_artifacts.values():
+        if artifact.get("ref_id") not in eligible_refs or artifact.get("discarded"):
+            continue
+        scans[artifact["scan_id"]] = {
+            "scan_id": artifact["scan_id"],
+            "ref_id": artifact["ref_id"],
+            "ref_number": artifact.get("ref_number"),
+            "display_name": artifact["display_name"],
+            "status": artifact["status"],
+            "reason": artifact.get("reason"),
+        }
+    return sorted(
+        (item for item in scans.values() if item["ref_id"] in allowed_refs),
+        key=lambda item: (item.get("ref_number") or 0, item["scan_id"]),
+    )
+
+
+def _staged_guided_ocr_preview_path(
+    run_dir: str, artifacts: list[dict[str, Any]],
+) -> str | None:
+    """Expose one completed, undiscarded OCR sidecar as an unadmitted preview."""
+    if len(artifacts) != 1:
+        return None
+    artifact = artifacts[0]
+    if artifact.get("status") != "done" or artifact.get("discarded"):
+        return None
+    text_path = artifact.get("text_path")
+    if not isinstance(text_path, str):
+        return None
+    return _preview_path(run_dir, text_path)
+
+
+def pending_ocr_count(run_dir: str) -> int:
+    """Count actionable pending OCR scans without building the full inventory."""
+    repo = RunRepository.open_readonly(run_dir)
+    try:
+        references = repo.list_references()
+        ref_ids = [reference.ref_id for reference in references]
+        manifest = repo.source_manifest_payload()
+        manifest = {
+            "entries": [
+                item for item in manifest.get("entries", [])
+                if isinstance(item, dict) and item.get("tier") == "fulltext"
+            ]
+        }
+        usable, _diagnostics = usable_source_refs(run_dir, manifest)
+    finally:
+        repo.close()
+    eligible = {ref_id for ref_id in ref_ids if ref_id not in usable}
+    artifacts = _load_guided_ocr_artifacts(run_dir)
+    artifact_by_id = {item["scan_id"]: item for item in artifacts.values()}
+    scan_ids = set()
+    for item in provided_fulltext.list_pending_ocr_scans(run_dir):
+        if item["ref_id"] not in eligible:
+            continue
+        artifact = artifact_by_id.get(item["scan_id"])
+        if artifact is None or artifact.get("status") != "done" or artifact.get("discarded"):
+            scan_ids.add(item["scan_id"])
+    scan_ids.update(
+        item["scan_id"]
+        for item in artifacts.values()
+        if item["ref_id"] in eligible
+        and item["status"] != "done"
+        and not item.get("discarded")
+    )
+    return len(scan_ids)
 
 
 def _tasks_by_ref(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

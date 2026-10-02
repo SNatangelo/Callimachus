@@ -37,6 +37,7 @@ import argparse
 import concurrent.futures
 import contextlib
 import hashlib
+import importlib
 import importlib.util
 import logging
 import multiprocessing
@@ -46,6 +47,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from pathlib import Path
 
 try:
     from core.fetch.extraction import pdf as _pdf
@@ -102,7 +104,14 @@ def _new_rapidocr_engine():
     engine_class = _rapidocr_class()
     with _suppress_rapidocr_info_logs():
         if engine_class.__module__.split(".", 1)[0] == "rapidocr":
-            return engine_class(params={"Global.log_level": "warning"})
+            model_root_dir = str(
+                Path(importlib.import_module("rapidocr").__file__).resolve().parent
+                / "models"
+            )
+            return engine_class(params={
+                "Global.log_level": "warning",
+                "Global.model_root_dir": model_root_dir,
+            })
         return engine_class()
 
 

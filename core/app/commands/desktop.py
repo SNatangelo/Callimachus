@@ -53,7 +53,9 @@ from core.app.desktop_config import (
     selected_verify_environment,
 )
 from core.gui.guided_fetch_viewmodel import GuidedFetchViewModel
+from core.app.guided_fetch import pending_ocr_count
 from core.infra.db import RunRepository
+from core.report.human.public_export import export_public_html
 
 
 def _root() -> Path:
@@ -538,7 +540,8 @@ def main(argv: list[str] | None = None) -> int:
                 "automatic manual-task skip cannot handle these tasks: "
                 + ", ".join(unsupported)
             )
-        if not manual:
+        ocr_count = pending_ocr_count(run_dir) if not manual else 0
+        if not manual and not ocr_count:
             return 0
         from core.app.commands.tasks import cmd_guided_proceed, cmd_skip_identity
 
@@ -553,13 +556,13 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
         try:
-            if any(task.task_kind in {"fetch", "browser_challenge"} for task in manual):
+            if ocr_count or any(task.task_kind in {"fetch", "browser_challenge"} for task in manual):
                 cmd_guided_proceed(args)
             if any(task.task_kind == "source_identity_attestation" for task in manual):
                 cmd_skip_identity(args)
         except SystemExit as exc:
             raise ValueError(str(exc) or "manual-task skip was refused") from exc
-        return len(manual)
+        return len(manual) + ocr_count
 
     def report_command(row: dict[str, Any]) -> list[str]:
         return application_argv(
@@ -691,7 +694,9 @@ def main(argv: list[str] | None = None) -> int:
             signing_key_generator=generate_signing_key,
             docs_loader=lambda: _docs_library(root),
             report_callback=report_command,
+            export_report_callback=export_public_html,
             skip_manual_callback=skip_manual_tasks,
+            ocr_pending_count_loader=pending_ocr_count,
             verify_fork_options_loader=verify_fork_options,
             verify_fork_command_builder=verify_fork_command,
             delete_cache_callback=delete_cache,

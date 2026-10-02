@@ -210,9 +210,9 @@ def _copy_payload_files(
         if isinstance(item, dict):
             output = {}
             for key, child in item.items():
-                if key == "file_path":
+                if key in {"file_path", "ocr_scan_file_path"}:
                     if not isinstance(child, str) or not child.strip():
-                        raise AuthorityError("task answer file_path is invalid")
+                        raise AuthorityError(f"task answer {key} is invalid")
                     index = len(source_paths)
                     source_paths.append(child)
                     output[key] = ("__controlled_file__", index)

@@ -13,3 +13,11 @@
 core/storage/
 core/content_store/
 /runs/
+
+# Python / packaging / test output
+__pycache__/
+.pytest_cache/
+.venv/
+build/
+.t/
+/run/

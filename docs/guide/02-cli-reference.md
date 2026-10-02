@@ -96,6 +96,7 @@ Subcommands support inspection, provisioning, and targeted operations. A normal 
 | `verify` | Run the completion/authenticity gate, not the semantic jury. |
 | `report` | Regenerate the deterministic report projection. |
 | `report-html` | Generate or verify a self-contained human-readable companion for an existing run. |
+| `report-export` | Export a public redacted copy from a completed, verified human HTML report. |
 | `present` | Display a report byte-for-byte after required gate and authenticity checks. |
 | `preview` | Check targeted phrases through key-gated Google Books snippets. |
 | `gaps` | Compute missing-source gaps for an accuracy regime. |
@@ -182,12 +183,17 @@ unassociated scan is rejected and remains pending.
 python run.py report --run runs/<id>
 python run.py report-html --run runs/<id> --locale it --theme callimachus
 python run.py report-html --run runs/<id> --verify
+python run.py report-export --run runs/<id> --output public-report.html
 python run.py verify --run runs/<id> --write-status
 python run.py verify --run runs/<id> --strict-crediting --require-signature
 python run.py present --run runs/<id>
 ```
 
 `--strict-crediting` additionally requires at least one semantically crediting terminal. The normal gate can pass a complete run that honestly contains only negative or unverifiable results.
+
+`report-export` requires a completed semantic Verify run and a passing seal on
+`report.html`. It writes a separate redacted HTML file and a `.redaction.json`
+provenance manifest; existing output files are never overwritten.
 
 The normal pipeline generates `report.html` automatically after the canonical
 Markdown report passes its authenticity gate. Set

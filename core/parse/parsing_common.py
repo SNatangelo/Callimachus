@@ -50,6 +50,36 @@ _AY_YEAR = r"(?:1[5-9]|20)\d{2}[a-z]?"
 # next dash is added once rather than in the dozen regexes that read a marker.
 # (The hyphen is last: a character class needs no escaping there.)
 RANGE_DASHES = "–—−‐‑-"
+
+# A terminal journal locator such as ``15(1):1929–1958, 2014`` puts a four-digit
+# page range before the publication year.  A 19xx/20xx first page endpoint looks
+# like a year to both reference-year readers below.  Correct that case only when
+# it is the entry's first year-shaped token; an earlier year (for example, a
+# reprint year or a year in the title) keeps the existing precedence.
+_TERMINAL_ISSUE_PAGE_RANGE_YEAR_RE = re.compile(
+    rf"\b\d+\s*\(\s*\d+\s*\)\s*:\s*"
+    rf"(?P<first_page>(?:19|20)\d{{2}})\s*[{RANGE_DASHES}]\s*\d{{4}}"
+    rf"\s*,\s*(?P<year>(?:19|20)\d{{2}})(?P<suffix>[a-z])?\s*[.]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _terminal_issue_page_range_year(text: str):
+    """Return a publication year after a terminal four-digit journal page range.
+
+    The result is used only when the page range's first endpoint would otherwise
+    be the entry's first author-year-shaped token.  This preserves first-year
+    behaviour for ordinary entries, including reprints.
+    """
+    match = _TERMINAL_ISSUE_PAGE_RANGE_YEAR_RE.search(text or "")
+    if not match:
+        return None
+    first_year = re.search(r"\b" + _AY_YEAR + r"\b", text or "")
+    if not first_year or first_year.start() != match.start("first_page"):
+        return None
+    return int(match.group("year")), (match.group("suffix") or "")
+
+
 # The number run inside a marker: "5", "4,5", "11−18", "8,13,28".
 NUMBER_RUN = rf"\d{{1,3}}(?:\s*[,{RANGE_DASHES}]\s*\d{{1,3}})*"
 
@@ -1749,6 +1779,10 @@ def _make_reference(num: int, raw: str, *, chicago_hanging: bool = False) -> dic
         years = [int(y) for y in re.findall(r"\b((?:19|20)\d{2})[a-z]?\b", _year_src)]
         if years:
             year = years[0]  # first year in the entry, before PDF bleed appends unrelated years
+
+    terminal_issue_year = _terminal_issue_page_range_year(_year_src)
+    if terminal_issue_year is not None:
+        year = terminal_issue_year[0]
 
     classification = _classify_reference(raw, doi=doi, pmid=pmid, isbn=isbn, url=url)
 

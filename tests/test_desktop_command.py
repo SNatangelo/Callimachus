@@ -78,6 +78,7 @@ def test_reference_rows_keep_source_and_verdict_lifecycles_separate():
 
     assert rows == [{
         "ref_id": "r1",
+        "ref_number": 1,
         "title": "A source",
         "phase": "verify",
         "status": "completato",
@@ -246,7 +247,7 @@ def test_desktop_builds_completed_verify_fork_with_selected_backends(
         "backend": "freetoken",
         "model": "local-model",
         "model_env": "FREETOKEN_MODEL",
-        "label": "freetoken — local-model",
+        "label": "freetoken: local-model",
     }]
     specification = captured["verify_fork_command_builder"](
         {"run_dir": str(root / "runs" / "parent"), "paper": "paper.pdf"},
@@ -257,11 +258,13 @@ def test_desktop_builds_completed_verify_fork_with_selected_backends(
     assert str(root / "runs" / "parent") in specification["command"]
     assert specification["run_dir"] != str(root / "runs" / "parent")
     assert specification["environment"] == {
+        "CITATION_VERIFIER_VERIFY_JURY1_ONLY": "freetoken:local-model",
+        "CITATION_VERIFIER_VERIFY_JURY2_ONLY": "",
         "CITATION_VERIFIER_VERIFY_BACKENDS": "freetoken",
         "CITATION_VERIFIER_VERIFY_JURY2_LEVEL": "off",
         "FREETOKEN_MODEL": "local-model",
     }
-    with pytest.raises(ValueError, match="currently configured"):
+    with pytest.raises(ValueError, match="available Verify backend/model"):
         captured["verify_fork_command_builder"](
             {"run_dir": str(root / "runs" / "parent")}, ["unknown"]
         )

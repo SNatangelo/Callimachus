@@ -24,6 +24,12 @@ from core.invocation import run_command, run_prefix
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _child_processes_use_utf8(monkeypatch):
+    """Keep child CLI output deterministic on Windows console code pages."""
+    monkeypatch.setenv("PYTHONIOENCODING", "utf-8")
+
+
 def _shell_quote(value):
     if sys.platform.startswith("win"):
         return subprocess.list2cmdline([value])
@@ -38,9 +44,10 @@ def _child_run_prefix():
     ("command", "module_path"),
     [
         ("tasks", "core.app.commands.tasks"),
+        ("report-export", "core.report.human.public_export"),
         ("present", "core.app.commands.present"),
         ("configure", "core.app.commands.configure"),
-        ("desktop", "core.app.commands.desktop"),
+        ("app", "core.app.commands.desktop"),
         ("benchmark", "core.app.commands.benchmark"),
     ],
 )
@@ -63,7 +70,7 @@ def test_operator_command_help_uses_the_grouped_module_from_any_cwd(
 
 
 @pytest.mark.parametrize(
-    "command", ("configure", "present", "benchmark", "preview", "verify"),
+    "command", ("configure", "present", "benchmark", "preview", "verify", "report-export"),
 )
 def test_operator_command_help_renders_the_current_invocation(command):
     completed = subprocess.run(

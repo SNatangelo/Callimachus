@@ -7,8 +7,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+from pathlib import Path
+import re
+import shutil
 import sys
+import uuid
 from types import SimpleNamespace
 from typing import Any
 
@@ -121,6 +127,248 @@ def admit_fetch_payload(
         )
     except (AuthorityError, IntegrityGateError) as exc:
         raise SystemExit(f"integrity gate rejected task answer: {exc}") from exc
+
+
+def store_guided_ocr_artifact(
+    run_dir: str,
+    *,
+    scan_id: str,
+    ref_id: str,
+    ref_number: int | None,
+    scan_path: str,
+    scan_sha256: str,
+    scan_token: str,
+    source_ref: str,
+    display_name: str,
+    status: str,
+    reason: str | None = None,
+    text: str | None = None,
+    method: str | None = None,
+    discarded: bool = False,
+    identity_attested: bool = False,
+    debug_override_artifact_integrity: bool = False,
+    debug_override_reason: str | None = None,
+) -> dict[str, Any]:
+    """Persist one selected scan/OCR result under an artifact checkpoint.
+
+    Staging an OCR result does not answer its Fetch task. Protected runs record
+    the scan, derived text, and metadata through a signed external-input
+    transition so a closed Guided Fetch window can safely resume the operation.
+    """
+    if not isinstance(scan_id, str) or not re.fullmatch(r"[0-9a-f]{64}", scan_id):
+        raise ValueError("guided OCR scan_id is invalid")
+    if not isinstance(ref_id, str) or not ref_id.strip():
+        raise ValueError("guided OCR ref_id is invalid")
+    if not isinstance(scan_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", scan_sha256):
+        raise ValueError("guided OCR scan hash is invalid")
+    if status not in {"pending", "failed", "done"}:
+        raise ValueError("guided OCR artifact status is invalid")
+    if not isinstance(scan_token, str) or not scan_token:
+        raise ValueError("guided OCR scan token is invalid")
+    if status == "done" and (not isinstance(text, str) or not method):
+        raise ValueError("completed guided OCR artifact requires text and method")
+    if type(discarded) is not bool or (discarded and status != "done"):
+        raise ValueError("only a completed guided OCR artifact can be discarded")
+    if type(identity_attested) is not bool:
+        raise ValueError("guided OCR identity attestation must be boolean")
+    if text is not None and status != "done":
+        raise ValueError("guided OCR text is only valid for a completed artifact")
+    source = Path(scan_path)
+    if not source.is_file() or source.suffix.lower() != ".pdf":
+        raise ValueError("guided OCR source must be an existing PDF")
+
+    run_root = Path(run_dir).resolve()
+    artifact_dir = run_root / "sources" / "guided_ocr"
+    scan_target = artifact_dir / f"{scan_id}.pdf"
+    metadata_target = artifact_dir / f"{scan_id}.json"
+    source_digest = _file_sha256(scan_path)
+    if source_digest != scan_sha256:
+        raise ValueError("guided OCR scan changed before it could be stored")
+    if provided_fulltext.ocr_scan_id(ref_id, scan_token, scan_sha256) != scan_id:
+        raise ValueError("guided OCR scan identity does not match its PDF")
+    text_sha256 = (
+        hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if text is not None else None
+    )
+    text_target = (
+        artifact_dir / f"{scan_id}-{text_sha256}.txt"
+        if text_sha256 is not None else None
+    )
+    relative_text_path = (
+        text_target.relative_to(run_root).as_posix()
+        if text_target is not None else None
+    )
+    metadata = {
+        "scan_id": scan_id,
+        "ref_id": ref_id,
+        "ref_number": ref_number,
+        "display_name": Path(display_name).name or "scan.pdf",
+        "scan_sha256": scan_sha256,
+        "scan_token": scan_token,
+        "source_ref": source_ref,
+        "status": status,
+        "reason": reason,
+        "ocr_method": method,
+        "discarded": discarded,
+        "identity_attested": identity_attested,
+        "text_path": relative_text_path,
+        "text_sha256": text_sha256,
+    }
+
+    gate = None
+    lease_id = None
+    try:
+        try:
+            resolution = _answer_gate(SimpleNamespace(
+                run=run_dir,
+                agent_identity=None,
+                debug_override_artifact_integrity=debug_override_artifact_integrity,
+                debug_override_reason=debug_override_reason,
+            ))
+        except SystemExit as exc:
+            raise ValueError(str(exc)) from exc
+        gate = getattr(resolution, "gate", resolution)
+        if gate is not None:
+            lease_id = gate.begin_transition(
+                run_dir, checkpoint_kind="external_input"
+            )
+
+        sources_dir = run_root / "sources"
+        if sources_dir.is_symlink():
+            raise ValueError("guided OCR sources directory cannot be a symlink")
+        if artifact_dir.is_symlink():
+            raise ValueError("guided OCR artifact directory cannot be a symlink")
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        if artifact_dir.is_symlink():
+            raise ValueError("guided OCR artifact directory cannot be a symlink")
+        if scan_target.is_symlink() or metadata_target.is_symlink():
+            raise ValueError("guided OCR artifact files cannot be symlinks")
+        if scan_target.exists():
+            if _file_sha256(scan_target) != scan_sha256:
+                raise ValueError("guided OCR scan_id already names different PDF bytes")
+        else:
+            with source.open("rb") as reader, scan_target.open("xb") as writer:
+                shutil.copyfileobj(reader, writer, length=1024 * 1024)
+                writer.flush()
+                os.fsync(writer.fileno())
+            if _file_sha256(scan_target) != scan_sha256:
+                raise ValueError("guided OCR copied scan hash does not match source")
+
+        if text_target is not None:
+            if text_target.is_symlink():
+                raise ValueError("guided OCR text artifact cannot be a symlink")
+            if text_target.exists():
+                if _file_sha256(text_target) != text_sha256:
+                    raise ValueError("guided OCR text artifact hash does not match")
+            else:
+                with text_target.open("xb") as handle:
+                    handle.write(text.encode("utf-8"))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+
+        if metadata_target.exists():
+            try:
+                previous = json.loads(metadata_target.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError("guided OCR artifact metadata is unreadable") from exc
+            if (
+                previous.get("scan_id") != scan_id
+                or previous.get("ref_id") != ref_id
+                or previous.get("scan_sha256") != scan_sha256
+                or previous.get("identity_attested") is not identity_attested
+            ):
+                raise ValueError("guided OCR artifact identity changed")
+        temporary = artifact_dir / f".{scan_id}.{uuid.uuid4().hex}.tmp"
+        try:
+            with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+                json.dump(metadata, handle, ensure_ascii=False, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, metadata_target)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        _ensure_guided_ocr_fetch_task(run_dir, ref_id)
+        if gate is not None and lease_id is not None:
+            gate.commit_transition(run_dir, lease_id)
+            lease_id = None
+        return {
+            **metadata,
+            "scan_path": str(scan_target),
+            "text_file_path": (
+                None if text_target is None else str(text_target)
+            ),
+        }
+    except Exception:
+        if gate is not None and lease_id is not None:
+            try:
+                gate.abort_transition(
+                    run_dir, lease_id, reason="guided OCR artifact staging failed"
+                )
+            except Exception:
+                pass
+        raise
+
+
+def _ensure_guided_ocr_fetch_task(run_dir: str, ref_id: str) -> None:
+    """Give a parked scan an answerable Fetch task when retrieval already ended.
+
+    Called inside the same integrity transition as the scan artifact. Existing
+    retrieval tasks retain their original identity and answer boundary.
+    """
+    from core.infra.db.task_storage import (
+        _FETCH_REFERENCE_FIELDS, _operational_reference, _source_identity,
+    )
+
+    repo = RunRepository.open(run_dir)
+    try:
+        matches = []
+        for task in repo.list_pending_tasks(slot="fetch"):
+            view = repo.task_view(task.task_id)
+            if not isinstance(view, dict) or view.get("kind") not in {"fetch", "browser_challenge"}:
+                continue
+            covered = (
+                [view.get("ref_id")] if view["kind"] == "fetch" else
+                [item.get("ref_id") for item in view.get("references") or []]
+            )
+            if ref_id in covered:
+                matches.append(task.task_id)
+        if len(matches) > 1:
+            raise ValueError("OCR scan matches multiple pending Fetch tasks")
+        if matches:
+            return
+        task_id = "fetch:guided-ocr:" + hashlib.sha256(ref_id.encode("utf-8")).hexdigest()
+        if repo.get_task(task_id) is not None:
+            raise ValueError("guided OCR Fetch task has already been answered")
+        reference = _operational_reference(repo._conn, ref_id, _FETCH_REFERENCE_FIELDS)
+        identity = _source_identity(repo._conn, ref_id)
+        repo.create_task(
+            task_id=task_id, slot="fetch", ref_id=ref_id,
+            task_payload={
+                "kind": "fetch", "status": "pending", "ref_id": ref_id,
+                "ref_number": reference["ref_number"], "reference": reference,
+                "source_identity": identity,
+                "instructions": "Review the parked PDF, run OCR, or explicitly waive this source.",
+                "answer": None,
+            },
+        )
+    finally:
+        repo.close()
+
+
+def _file_sha256(path: str | os.PathLike[str]) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
 
 
 def admit_source_identity_review(

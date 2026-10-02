@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.fetch.storage import content_store, fetch_store
-from core.fetch.extraction import fetch_html, ocr as fetch_ocr
+from core.fetch.extraction import fetch_html, ocr as fetch_ocr, pdf as fetch_pdf
 from core.parse import extract as parse_extract
 from core.parse import source_text
 from core.resolve import sources, user_sources
@@ -795,6 +795,7 @@ def ingest_task_answer(
     file_path: str | None = None,
     text: str | None = None,
     source_ref: str | None = None,
+    ocr_scan_file_path: str | None = None,
     origin: str,
     supplied_by: str,
     supplied_via: str,
@@ -815,7 +816,9 @@ def ingest_task_answer(
     ):
         raise ValueError("identity attestation requires authenticated controlled task provenance")
     view = _reference_view(ref, resolve_result)
-    queued_scan = _precomputed_ocr_scan(run_dir, view, source_ref)
+    queued_scan = _precomputed_ocr_scan(
+        run_dir, view, source_ref, scan_file_path=ocr_scan_file_path,
+    )
     if queued_scan is not None and not file_path:
         raise ValueError("precomputed OCR marker requires a text file answer")
     if file_path:
@@ -859,14 +862,16 @@ def ingest_task_answer(
         )
         if result.get("outcome") in {"accepted_fulltext", "duplicate"}:
             if queued_scan is not None:
-                retired = sources.resolve_unreadable(
-                    run_dir,
-                    ref_id=None,
-                    kept_as=queued_scan["kept_as"],
-                    method="ocr:precomputed",
-                )
-                if not retired:
-                    raise RuntimeError("precomputed OCR scan was not retired")
+                kept_as = queued_scan.get("kept_as")
+                if kept_as is not None:
+                    retired = sources.resolve_unreadable(
+                        run_dir,
+                        ref_id=None,
+                        kept_as=kept_as,
+                        method="ocr:precomputed",
+                    )
+                    if not retired:
+                        raise RuntimeError("precomputed OCR scan was not retired")
             return {**result, "status": "stored"}
         return {**result, "status": result.get("status") or "rejected"}
 
@@ -995,7 +1000,93 @@ def precomputed_ocr_source_ref(run_dir: str, ref_id: str) -> str:
     digest = _file_sha256(entries[0]["path"])
     if digest is None:
         raise ValueError("pending unreadable PDF is unavailable")
-    return f"{_PRECOMPUTED_OCR_URN_PREFIX}{digest}"
+    return ocr_scan_source_ref(digest)
+
+
+def ocr_scan_source_ref(sha256: str) -> str:
+    """Return the reserved provenance marker for one exact scanned PDF."""
+    if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise ValueError("OCR scan hash must be a lowercase SHA-256 digest")
+    return f"{_PRECOMPUTED_OCR_URN_PREFIX}{sha256}"
+
+
+def list_pending_ocr_scans(
+    run_dir: str, *, ref_id: str | None = None,
+) -> list[dict]:
+    """Return safe, hash-bound metadata for pending local OCR PDFs.
+
+    ``path`` and ``kept_as`` are backend-only fields. Callers projecting UI data
+    must omit them. Unsafe, missing, or non-PDF queue rows are not actionable.
+    """
+    root = Path(run_dir).resolve()
+    output = []
+    for entry in sources.load_unreadable(run_dir).get("entries", []):
+        item_ref_id = entry.get("ref_id")
+        kept_as = entry.get("kept_as")
+        if (
+            entry.get("ocr_status") != "pending"
+            or (ref_id is not None and item_ref_id != ref_id)
+            or not isinstance(item_ref_id, str)
+            or not item_ref_id
+            or not isinstance(kept_as, str)
+            or Path(kept_as).suffix.lower() != ".pdf"
+        ):
+            continue
+        kept_path = Path(kept_as)
+        if kept_path.is_absolute() or "\\" in kept_as:
+            continue
+        try:
+            path = (root / kept_path).resolve()
+            path.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if not path.is_file():
+            continue
+        digest = _file_sha256(path)
+        if digest is None:
+            continue
+        token = str(entry.get("source_ref") or kept_as)
+        scan_id = ocr_scan_id(item_ref_id, token, digest)
+        output.append({
+            "scan_id": scan_id,
+            "ref_id": item_ref_id,
+            "ref_number": entry.get("ref_number"),
+            "display_name": Path(kept_as).name,
+            "status": "pending",
+            "reason": entry.get("reason") or "Unreadable PDF is queued for OCR",
+            "sha256": digest,
+            "source_ref": token,
+            "kept_as": kept_as,
+            "path": str(path),
+        })
+    return output
+
+
+def ocr_scan_id(ref_id: str, scan_token: str, sha256: str) -> str:
+    """Create an opaque stable identity for one reference-bound scan record."""
+    if not isinstance(ref_id, str) or not ref_id:
+        raise ValueError("OCR scan reference identity is invalid")
+    if not isinstance(scan_token, str) or not scan_token:
+        raise ValueError("OCR scan token is invalid")
+    if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise ValueError("OCR scan hash is invalid")
+    return hashlib.sha256(
+        f"{ref_id}\0{scan_token}\0{sha256}".encode("utf-8")
+    ).hexdigest()
+
+
+def pdf_requires_ocr(path: str | os.PathLike[str]) -> bool:
+    """Check a PDF text layer without invoking OCR or changing run state."""
+    try:
+        parse_extract.probe_file(str(path))
+        text, _method, _meta = parse_extract.extract_text(
+            str(path), manuscript_ocr=False,
+        )
+    except Exception:
+        return True
+    return not fetch_pdf._quality(text) or (
+        _controlled_pdf_sparse_extraction(Path(path), text) is not None
+    )
 
 
 def is_precomputed_ocr_source_ref(source_ref: object) -> bool:
@@ -1003,8 +1094,38 @@ def is_precomputed_ocr_source_ref(source_ref: object) -> bool:
     return isinstance(source_ref, str) and source_ref.startswith(_PRECOMPUTED_OCR_URN_PREFIX)
 
 
+def unpack_ocr_scan_source_ref(source_ref: object) -> tuple[str | None, str | None]:
+    """Remove the closed task-answer attachment marker from OCR provenance.
+
+    The integrity inbox stores the PDF attachment path in the existing typed
+    URL field to avoid a task-answer schema column. The marker is consumed at
+    the Fetch apply boundary; only the canonical hash URN reaches source
+    provenance and reports.
+    """
+    if not isinstance(source_ref, str):
+        return None, None
+    marker = "#callimachus-scan-attachment="
+    if marker not in source_ref:
+        return source_ref, None
+    if source_ref.count(marker) != 1:
+        raise ValueError("OCR scan attachment marker is malformed")
+    base, encoded_path = source_ref.split(marker, 1)
+    if not encoded_path or "#" in encoded_path:
+        raise ValueError("OCR scan attachment path is malformed")
+    path = urllib.parse.unquote(encoded_path)
+    if urllib.parse.quote(path, safe="") != encoded_path or not path:
+        raise ValueError("OCR scan attachment path is malformed")
+    if not is_precomputed_ocr_source_ref(base):
+        if not re.fullmatch(
+            r"urn:callimachus:guided-ocr-skip:sha256:[0-9a-f]{64}", base,
+        ):
+            raise ValueError("OCR scan attachment source reference is malformed")
+    return base, path
+
+
 def _precomputed_ocr_scan(
-    run_dir: str, ref: dict, source_ref: str | None
+    run_dir: str, ref: dict, source_ref: str | None,
+    *, scan_file_path: str | None = None,
 ) -> dict | None:
     """Validate a reserved OCR marker against exactly one queued scan.
 
@@ -1013,12 +1134,38 @@ def _precomputed_ocr_scan(
     """
     if not is_precomputed_ocr_source_ref(source_ref):
         return None
-    match = _PRECOMPUTED_OCR_URN_RE.fullmatch(str(source_ref))
+    canonical_ref, encoded_path = unpack_ocr_scan_source_ref(source_ref)
+    if scan_file_path is not None and encoded_path is not None:
+        raise ValueError("OCR scan attachment was supplied twice")
+    scan_file_path = scan_file_path or encoded_path
+    match = _PRECOMPUTED_OCR_URN_RE.fullmatch(str(canonical_ref))
     if match is None:
         raise ValueError("precomputed OCR source reference is malformed")
     ref_id = ref.get("id")
     if not isinstance(ref_id, str) or not ref_id:
         raise ValueError("precomputed OCR reference is missing")
+    if scan_file_path is not None:
+        root = Path(run_dir).resolve()
+        submitted = Path(scan_file_path)
+        if submitted.suffix.lower() != ".pdf":
+            raise ValueError("precomputed OCR attachment must be a PDF")
+        try:
+            path = submitted.resolve(strict=True)
+            path.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise ValueError("precomputed OCR attachment is outside the run") from exc
+        if not path.is_file() or _file_sha256(path) != match.group(1):
+            raise ValueError("precomputed OCR scan hash does not match attachment bytes")
+        entries = _pending_ocr_pdf_entries(run_dir, ref_id)
+        matching = [
+            entry for entry in entries
+            if _file_sha256(entry["path"]) == match.group(1)
+        ]
+        if len(matching) > 1:
+            raise ValueError("precomputed OCR scan matches multiple queued PDFs")
+        if matching:
+            return matching[0]
+        return {"kept_as": None, "path": path}
     entries = _pending_ocr_pdf_entries(run_dir, ref_id)
     if len(entries) != 1:
         raise ValueError("precomputed OCR scan is missing or ambiguous")

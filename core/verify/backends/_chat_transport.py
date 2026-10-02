@@ -15,6 +15,7 @@ import logging
 import os
 import random
 import socket
+import ssl
 import threading
 import time
 import uuid
@@ -23,6 +24,8 @@ from contextvars import ContextVar
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit, urlunsplit
+
+import certifi
 
 from core.verify.backends.errors import (
     AuthError,
@@ -353,6 +356,11 @@ def _json_post(url: str, body: dict, headers: dict[str, str], timeout: int | Non
         headers=headers,
         method="POST",
     )
+    scheme = urlsplit(url).scheme.lower()
+    context = None
+    if scheme == "https":
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=certifi.where())
     last_exc: Exception | None = None
     attempts = 1 if _SINGLE_PHYSICAL_ATTEMPT.get() else 5
     for attempt in range(attempts):
@@ -365,7 +373,11 @@ def _json_post(url: str, body: dict, headers: dict[str, str], timeout: int | Non
             "attempt": attempt + 1,
         })
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            if context is None:
+                response = urllib.request.urlopen(req, timeout=timeout)
+            else:
+                response = urllib.request.urlopen(req, timeout=timeout, context=context)
+            with response as r:
                 result = json.loads(r.read().decode("utf-8"))
                 _emit_raw_attempt({
                     **trace, "outcome": "response",

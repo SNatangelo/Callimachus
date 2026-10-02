@@ -564,6 +564,8 @@ class FileAuthority:
     @staticmethod
     def _regular_file_digest(path: str) -> tuple[str, int]:
         flags = os.O_RDONLY
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         try:
@@ -637,6 +639,9 @@ class FileAuthority:
         temporary = f"{target}.tmp-{uuid.uuid4().hex}"
         source_flags = os.O_RDONLY
         target_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            source_flags |= os.O_BINARY
+            target_flags |= os.O_BINARY
         if hasattr(os, "O_NOFOLLOW"):
             source_flags |= os.O_NOFOLLOW
             target_flags |= os.O_NOFOLLOW
@@ -723,7 +728,8 @@ class FileAuthority:
             destination = None
             source.close()
             source = None
-            with open(temporary, "rb") as handle:
+            # Windows requires a writable handle to synchronize the snapshot.
+            with open(temporary, "rb+") as handle:
                 os.fsync(handle.fileno())
             os.chmod(temporary, 0o600)
             os.replace(temporary, target)

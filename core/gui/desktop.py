@@ -11,22 +11,37 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+import codecs
 import json
 from html import escape
 import math
 import os
 import posixpath
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
+from core.app.runtime_paths import (
+    application_argv,
+    is_frozen,
+    resource_root,
+    user_data_root,
+)
+
 
 _LOCALE_DIR = Path(__file__).with_name("assets") / "locales"
 _STOP_ESCALATION_GRACE_MS = 10_000
+_CONSOLE_PAGE_BYTES = 128 * 1024
+_CONSOLE_LIVE_WINDOW_BYTES = 128 * 1024
+_CONSOLE_EXPORT_CHUNK_BYTES = 64 * 1024
+_LLM_ROLE_PREFERENCE_KEY = "llm_role_selection"
 _SECRET_SUFFIXES = (
     "_API_KEY", "_API_TOKEN", "_AUTH_TOKEN", "_ACCESS_TOKEN",
     "_SECRET", "_PASSWORD", "_CREDENTIAL",
@@ -43,6 +58,52 @@ def load_translations(language: str = "en") -> dict[str, str]:
     except (OSError, json.JSONDecodeError):
         data = json.loads(fallback.read_text(encoding="utf-8"))
     return {str(key): str(value) for key, value in data.items()}
+
+
+def _commands_displayed_prefix() -> str:
+    if is_frozen():
+        return Path(sys.executable).name
+    return "py run.py" if sys.platform == "win32" else "python3 run.py"
+
+
+def _parse_commands_arguments(
+    value: str, *, displayed_prefix: str
+) -> tuple[list[str] | None, str | None]:
+    """Parse CLI arguments and remove at most one optional application prefix."""
+    try:
+        if sys.platform == "win32":
+            lexer = shlex.shlex(value, posix=True)
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            lexer.escape = ""
+            tokens = list(lexer)
+        else:
+            tokens = shlex.split(value, posix=True)
+    except ValueError:
+        return None, "commands_status_invalid_arguments"
+
+    prefixes = [("py", "run.py"), ("python", "run.py"), ("python3", "run.py")]
+    folded_display = displayed_prefix.strip().casefold()
+    if folded_display in {"py run.py", "python run.py", "python3 run.py"}:
+        display_tokens = tuple(folded_display.split())
+    else:
+        # A frozen executable name is one argv token even when it contains spaces.
+        display_tokens = (displayed_prefix,)
+    if display_tokens:
+        prefixes.append(display_tokens)
+
+    for prefix in prefixes:
+        if len(tokens) >= len(prefix) and tuple(
+            token.casefold() for token in tokens[:len(prefix)]
+        ) == tuple(token.casefold() for token in prefix):
+            tokens = tokens[len(prefix):]
+            break
+
+    if not tokens:
+        return None, "commands_status_invalid_empty"
+    if tokens[0].casefold() == "app":
+        return None, "commands_status_invalid_app"
+    return tokens, None
 
 
 def _edge_candidates() -> tuple[Path, ...]:
@@ -225,7 +286,9 @@ def create_desktop_window(
     docs_loader: Callable[[], Mapping[str, str] | str] | None = None,
     resume_callback: Callable[[Mapping[str, Any]], Any] | None = None,
     report_callback: Callable[[Mapping[str, Any]], Any] | None = None,
+    export_report_callback: Callable[[str, str], Any] | None = None,
     skip_manual_callback: Callable[[str], int] | None = None,
+    ocr_pending_count_loader: Callable[[str], int] | None = None,
     verify_fork_options_loader: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
     verify_fork_command_builder: Callable[[Mapping[str, Any], list[str]], Any] | None = None,
     verify_fork_selector: Callable[[Sequence[Mapping[str, Any]]], Sequence[str] | None] | None = None,
@@ -235,6 +298,8 @@ def create_desktop_window(
     open_path_callback: Callable[[str], Any] | None = None,
     guided_controller_factory: Callable[[str], Any] | None = None,
     guided_window_factory: Callable[..., Any] | None = None,
+    parse_review_controller_factory: Callable[[str], Any] | None = None,
+    parse_review_window_factory: Callable[..., Any] | None = None,
     poll_interval_ms: int = 700,
     background_loading: bool = False,
 ):
@@ -293,6 +358,7 @@ def create_desktop_window(
             self._latest_load_error: str | None = None
             self._latest_loaded = False
             self._display_run_done = False
+            self._display_references_only: bool | None = None
             self._history_rows: list[Mapping[str, Any]] = []
             self._history_requested_dirs: set[str] = set()
             self._cache_rows: list[Mapping[str, Any]] = []
@@ -304,9 +370,35 @@ def create_desktop_window(
             self._skeleton_effects: list[Any] = []
             self._run_environment_by_dir: dict[str, dict[str, str]] = {}
             self._process = None
+            self._commands_process = None
+            self._console_log_path: Path | None = None
+            self._console_log_lock = threading.Lock()
+            self._console_generation = 0
+            self._console_loaded = False
+            self._console_capture_error: str | None = None
+            self._console_load_error = False
+            self._console_loaded_start = 0
+            self._console_history_end_offset = 0
+            self._console_display_end = 0
+            self._console_live_start = 0
+            self._console_live_start_offset = 0
+            self._console_live_text = ""
+            self._console_page_loading = False
+            self._console_page_kind: str | None = None
+            self._analysis_stdout_decoder = codecs.getincrementaldecoder("utf-8")(
+                errors="replace"
+            )
+            self._analysis_stderr_decoder = codecs.getincrementaldecoder("utf-8")(
+                errors="replace"
+            )
             self._auto_open_report_on_finish = True
             self._guided_window = None
             self._guided_fetch_available = False
+            self._parse_review_window = None
+            self._retiring_parse_review_window = None
+            self._parse_review_run_dir = None
+            self._parse_review_available = False
+            self._parse_review_pending = 0
             self._source_rows: list[Mapping[str, Any]] = []
             self._source_paged_rows: list[Mapping[str, Any]] = []
             self._source_paged_total = 0
@@ -325,6 +417,7 @@ def create_desktop_window(
             self._dark = False
             self._spinner_frame = 0
             self._stopping = False
+            self._new_analysis_reset_pending = False
             self._stop_escalation_timer = None
             self._forced_stop_process = None
             self._cooldown_until: float | None = None
@@ -381,6 +474,7 @@ def create_desktop_window(
                 (text["tab_history"], self._history_tab()),
                 (text["tab_cache"], self._cache_tab()),
                 (text["tab_settings"], self._settings_tab()),
+                (text["tab_console"], self._commands_tab()),
                 (text["tab_info"], self._info_tab()),
             ):
                 self.navigation.addItem(label)
@@ -398,17 +492,13 @@ def create_desktop_window(
             header.setObjectName("brandHeader")
             row = QtWidgets.QHBoxLayout(header)
             row.setContentsMargins(10, 6, 10, 6)
-            logo_tile = QtWidgets.QFrame(header)
-            logo_tile.setObjectName("brandLogoTile")
-            logo_layout = QtWidgets.QHBoxLayout(logo_tile)
-            logo_layout.setContentsMargins(8, 3, 8, 3)
-            logo = QtWidgets.QLabel(logo_tile)
+            logo = QtWidgets.QLabel(header)
             logo.setObjectName("brandLogo")
-            logo.setPixmap(_wordmark(QtCore, QtGui, 215, 46, self.devicePixelRatioF()))
+            logo.setPixmap(_wordmark(QtCore, QtGui, 215, 46, self.devicePixelRatioF(), dark=False))
             logo.setFixedSize(215, 46)
             logo.setScaledContents(False)
-            logo_layout.addWidget(logo, 0, QtCore.Qt.AlignmentFlag.AlignCenter)
-            row.addWidget(logo_tile)
+            self.brand_logo = logo
+            row.addWidget(logo)
             row.addStretch()
             self.theme_toggle = QtWidgets.QPushButton(text["theme_dark"], header)
             self.theme_toggle.setObjectName("themeToggle")
@@ -431,6 +521,9 @@ def create_desktop_window(
             tab = QtWidgets.QWidget()
             outer = QtWidgets.QHBoxLayout(tab)
             outer.setContentsMargins(0, 4, 0, 0)
+            splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, tab)
+            splitter.setObjectName("analysisSplitter")
+            splitter.setChildrenCollapsible(False)
             left_widget = QtWidgets.QWidget(tab)
             left_widget.setObjectName("analysisControlsContent")
             left = QtWidgets.QVBoxLayout(left_widget)
@@ -439,17 +532,16 @@ def create_desktop_window(
             config = QtWidgets.QFrame(left_widget)
             config.setObjectName("card")
             form = QtWidgets.QVBoxLayout(config)
-            form.addWidget(QtWidgets.QLabel(text["paper"], config))
             self.paper_drop = QtWidgets.QLabel(text["drop_paper"], config)
             self.paper_drop.setObjectName("paperDropArea")
             self.paper_drop.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             self.paper_drop.setWordWrap(True)
+            self.paper_drop.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+            self.paper_drop.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            self.paper_drop.setAccessibleName(text["drop_paper"])
             self.paper_drop.setAcceptDrops(True)
             self.paper_drop.installEventFilter(self)
             form.addWidget(self.paper_drop)
-            browse = QtWidgets.QPushButton(text["browse"], config)
-            browse.clicked.connect(self._browse_paper)
-            form.addWidget(browse, 0, QtCore.Qt.AlignmentFlag.AlignRight)
             form.addWidget(QtWidgets.QLabel(text["mode"], config))
             modes = QtWidgets.QGridLayout()
             self.mode_group = QtWidgets.QButtonGroup(self)
@@ -489,6 +581,9 @@ def create_desktop_window(
             self.llm_role_choices: dict[str, tuple[Any, Any]] = {}
             self._llm_checkbox_cells: dict[Any, Any] = {}
             self._normalizing_llm_roles = False
+            self._llm_role_preferences_loaded = False
+            self._llm_role_preferences: dict[str, set[str]] | None = None
+            self._llm_role_preferences_invalid = False
             self.llm_choices.setHorizontalHeaderLabels((
                 text["llm_model"], text["jury1_role"], text["jury2_role"],
             ))
@@ -516,7 +611,7 @@ def create_desktop_window(
             self.jury_models.setObjectName("juryModels")
             self.jury_models.setWordWrap(True)
             form.addWidget(self.jury_models)
-            controls = QtWidgets.QHBoxLayout()
+            controls = QtWidgets.QVBoxLayout()
             self.start_button = QtWidgets.QPushButton(text["start"], config)
             self.start_button.setObjectName("runStartButton")
             self.start_button.setIconSize(QtCore.QSize(24, 24))
@@ -534,7 +629,25 @@ def create_desktop_window(
                 QtWidgets.QSizePolicy.Policy.Preferred,
             )
             controls.addWidget(self.resume_latest_button, 1)
+            self.new_analysis_button = QtWidgets.QPushButton(
+                text["new_analysis"], config
+            )
+            self.new_analysis_button.setObjectName("newAnalysisButton")
+            self.new_analysis_button.setAccessibleName(text["new_analysis"])
+            self.new_analysis_button.setToolTip(text["new_analysis_tip"])
+            self.new_analysis_button.setAccessibleDescription(
+                text["new_analysis_tip"]
+            )
+            self.new_analysis_button.clicked.connect(self._new_analysis)
+            self.new_analysis_button.setEnabled(False)
+            controls.addWidget(self.new_analysis_button)
             form.addLayout(controls)
+            self.skip_parse_review = QtWidgets.QCheckBox(
+                text["skip_parse_review"], config
+            )
+            self.skip_parse_review.setObjectName("skipParseReview")
+            self.skip_parse_review.setToolTip(text["skip_parse_review_tip"])
+            form.addWidget(self.skip_parse_review)
             self.skip_manual_checks = QtWidgets.QCheckBox(text["skip_manual_checks"], config)
             self.skip_manual_checks.setToolTip(text["skip_manual_checks_tip"])
             form.addWidget(self.skip_manual_checks)
@@ -544,10 +657,28 @@ def create_desktop_window(
             )
             self.open_guided_fetch_button.setVisible(False)
             form.addWidget(self.open_guided_fetch_button)
+            self.open_parse_review_button = QtWidgets.QPushButton(
+                text["open_parse_review"], config
+            )
+            self.open_parse_review_button.setObjectName("openParseReviewButton")
+            self.open_parse_review_button.clicked.connect(
+                lambda: self._open_parse_review(self._run_dir) if self._run_dir else None
+            )
+            self.open_parse_review_button.setVisible(False)
+            form.addWidget(self.open_parse_review_button)
             self.open_run_report_button = QtWidgets.QPushButton(text["open_report"], config)
             self.open_run_report_button.clicked.connect(self._open_current_report)
             self.open_run_report_button.setVisible(False)
-            form.addWidget(self.open_run_report_button)
+            report_actions = QtWidgets.QHBoxLayout()
+            self.report_actions_layout = report_actions
+            report_actions.addWidget(self.open_run_report_button, 3)
+            self.export_run_report_button = QtWidgets.QPushButton(text["export_report"], config)
+            self.export_run_report_button.setObjectName("exportReportButton")
+            self.export_run_report_button.setToolTip(text["export_report_tip"])
+            self.export_run_report_button.clicked.connect(self._export_current_report)
+            self.export_run_report_button.setVisible(False)
+            report_actions.addWidget(self.export_run_report_button, 1)
+            form.addLayout(report_actions)
             self.phase_progress = QtWidgets.QProgressBar(config)
             self.phase_progress.setObjectName("phaseProgress")
             self.phase_progress.setRange(0, 100)
@@ -579,8 +710,11 @@ def create_desktop_window(
                 QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
             left_scroll.setWidget(left_widget)
-            outer.addWidget(left_scroll, 2)
-            right = QtWidgets.QVBoxLayout()
+            left_scroll.setMinimumWidth(350)
+            splitter.addWidget(left_scroll)
+            right_widget = QtWidgets.QWidget(splitter)
+            right = QtWidgets.QVBoxLayout(right_widget)
+            right.setContentsMargins(0, 0, 0, 0)
             filters = QtWidgets.QHBoxLayout()
             self.source_search = QtWidgets.QLineEdit(tab)
             self.source_search.setPlaceholderText(text["search_sources"])
@@ -634,7 +768,11 @@ def create_desktop_window(
             self.source_table.verticalScrollBar().valueChanged.connect(
                 lambda _value: self._load_more_near_bottom("source")
             )
-            outer.addLayout(right, 5)
+            splitter.addWidget(right_widget)
+            splitter.setStretchFactor(0, 2)
+            splitter.setStretchFactor(1, 5)
+            splitter.setSizes([350, 810])
+            outer.addWidget(splitter)
             self._refresh_llm_choices()
             self._refresh_llm_status()
             self._update_run_controls()
@@ -675,6 +813,11 @@ def create_desktop_window(
             resume.clicked.connect(self._resume_selected_history)
             self.history_resume_button = resume
             self.history_resume_button.setEnabled(False)
+            parse_review = QtWidgets.QPushButton(text["open_parse_review"], tab)
+            parse_review.setObjectName("historyParseReviewButton")
+            parse_review.clicked.connect(self._open_selected_history_parse_review)
+            parse_review.setVisible(False)
+            self.history_parse_review_button = parse_review
             self.history_table.itemSelectionChanged.connect(
                 self._update_history_actions
             )
@@ -686,6 +829,12 @@ def create_desktop_window(
             open_report.clicked.connect(self._open_selected_history_report)
             self.history_open_report_button = open_report
             self.history_open_report_button.setEnabled(False)
+            export_report = QtWidgets.QPushButton(text["export_report"], tab)
+            export_report.setObjectName("exportReportButton")
+            export_report.setToolTip(text["export_report_tip"])
+            export_report.clicked.connect(self._export_selected_history_report)
+            self.history_export_report_button = export_report
+            export_report.setEnabled(False)
             verify_fork = QtWidgets.QPushButton(text["rerun_verify"], tab)
             verify_fork.clicked.connect(self._fork_selected_history_verify)
             self.history_verify_fork_button = verify_fork
@@ -697,9 +846,11 @@ def create_desktop_window(
             actions.addWidget(delete, 0, 1)
             actions.setColumnStretch(2, 1)
             actions.addWidget(resume, 1, 0)
-            actions.addWidget(report, 1, 1)
-            actions.addWidget(verify_fork, 1, 2)
-            actions.addWidget(open_report, 1, 3)
+            actions.addWidget(parse_review, 1, 1)
+            actions.addWidget(report, 1, 2)
+            actions.addWidget(verify_fork, 1, 3)
+            actions.addWidget(open_report, 1, 4)
+            actions.addWidget(export_report, 1, 5)
             actions_scroll = QtWidgets.QScrollArea(tab)
             self.history_actions_scroll = actions_scroll
             actions_scroll.setObjectName("historyActions")
@@ -839,6 +990,91 @@ def create_desktop_window(
             split.setSizes([300, 600])
             content.addWidget(split)
             layout.addLayout(content, 1)
+            return tab
+
+        def _commands_tab(self):
+            tab = QtWidgets.QWidget()
+            layout = QtWidgets.QVBoxLayout(tab)
+            layout.setContentsMargins(8, 4, 8, 8)
+            title = QtWidgets.QLabel(text["commands_title"], tab)
+            title.setObjectName("sectionTitle")
+            layout.addWidget(title)
+
+            self.commands_expert_notice = QtWidgets.QLabel(
+                text["commands_expert_notice"], tab
+            )
+            self.commands_expert_notice.setObjectName("commandsExpertNotice")
+            self.commands_expert_notice.setWordWrap(True)
+            layout.addWidget(self.commands_expert_notice)
+
+            console_tools = QtWidgets.QHBoxLayout()
+            self.console_history_spinner = QtWidgets.QLabel("◐", tab)
+            self.console_history_spinner.setObjectName("consoleHistorySpinner")
+            self.console_history_spinner.setAccessibleName(
+                text["commands_history_loading"]
+            )
+            self.console_history_spinner.hide()
+            console_tools.addWidget(self.console_history_spinner)
+            self.commands_history_button = QtWidgets.QPushButton(
+                text["commands_load_earlier"], tab
+            )
+            self.commands_history_button.setObjectName("commandsHistoryButton")
+            self.commands_history_button.clicked.connect(
+                self._load_older_console_page
+            )
+            self.commands_history_button.hide()
+            console_tools.addWidget(self.commands_history_button)
+            self.commands_gap_button = QtWidgets.QPushButton(
+                text["commands_load_missing"], tab
+            )
+            self.commands_gap_button.setObjectName("commandsGapButton")
+            self.commands_gap_button.clicked.connect(self._load_console_gap_page)
+            self.commands_gap_button.hide()
+            console_tools.addWidget(self.commands_gap_button)
+            console_tools.addStretch(1)
+            self.commands_export_button = QtWidgets.QPushButton(
+                text["commands_export"], tab
+            )
+            self.commands_export_button.setObjectName("commandsExportButton")
+            self.commands_export_button.setEnabled(False)
+            self.commands_export_button.clicked.connect(self._choose_console_export)
+            console_tools.addWidget(self.commands_export_button)
+            layout.addLayout(console_tools)
+
+            self.console_stack = QtWidgets.QStackedWidget(tab)
+            self.commands_output = QtWidgets.QPlainTextEdit(tab)
+            self.commands_output.setObjectName("commandsOutput")
+            self.commands_output.setReadOnly(True)
+            output_font = QtGui.QFontDatabase.systemFont(
+                QtGui.QFontDatabase.SystemFont.FixedFont
+            )
+            output_font.setPixelSize(max(15, self._font_size + 2))
+            self.commands_output.setFont(output_font)
+            self.commands_output.setUndoRedoEnabled(False)
+            self.commands_output.verticalScrollBar().valueChanged.connect(
+                self._on_console_scroll_changed
+            )
+            self.console_stack.addWidget(self.commands_output)
+            self.console_stack.addWidget(self._skeleton_widget(tab))
+            self.console_stack.setCurrentWidget(self.commands_output)
+            layout.addWidget(self.console_stack, 1)
+
+            self.commands_status_label = QtWidgets.QLabel("", tab)
+            self.commands_status_label.setWordWrap(True)
+            self.commands_status_label.hide()
+            layout.addWidget(self.commands_status_label)
+
+            self._commands_displayed_prefix = _commands_displayed_prefix()
+            self.commands_input = QtWidgets.QLineEdit(tab)
+            self.commands_run_button = QtWidgets.QPushButton(
+                text["commands_run"], tab
+            )
+            self.commands_run_button.clicked.connect(self._run_commands)
+            self.commands_input.returnPressed.connect(self.commands_run_button.click)
+            prompt = QtWidgets.QHBoxLayout()
+            prompt.addWidget(self.commands_input, 1)
+            prompt.addWidget(self.commands_run_button)
+            layout.addLayout(prompt)
             return tab
 
         @staticmethod
@@ -1094,15 +1330,30 @@ def create_desktop_window(
                 self.settings_stack.setCurrentIndex(1)
                 self._queue_load("settings", settings_loader)
             elif index == 4:
+                self._load_console_capture()
+            elif index == 5:
                 self.docs_stack.setCurrentIndex(1)
                 self._queue_load("docs", docs_loader)
             if self._pending_finish is not None:
                 self._request_snapshot(force=True)
 
         def _release_page_data(self, index: int):
+            if index == 4:
+                if self._background_loading:
+                    self._invalidate_load("console")
+                    self._invalidate_load("console_older")
+                    self._invalidate_load("console_gap")
+                self._console_loaded = False
+                self._console_page_loading = False
+                self.console_history_spinner.hide()
+                self.commands_history_button.hide()
+                self.commands_gap_button.hide()
+                self.commands_output.clear()
+                self._reset_console_document_state()
+                return
             if not self._background_loading:
                 return
-            kind = {0: "snapshot", 1: "history", 2: "cache", 3: "settings", 4: "docs"}.get(index)
+            kind = {0: "snapshot", 1: "history", 2: "cache", 3: "settings", 5: "docs"}.get(index)
             if kind:
                 self._invalidate_load(kind)
             if index == 0:
@@ -1137,7 +1388,7 @@ def create_desktop_window(
                 self.cache_more_button.hide()
             elif index == 3:
                 self._settings_loaded = False
-            elif index == 4:
+            elif index == 5:
                 self._documents.clear()
                 self.docs_outline.clear()
                 self.docs_view.clear()
@@ -1147,6 +1398,34 @@ def create_desktop_window(
                 return
             self._loading_kinds.discard(kind)
             self._load_futures.pop(kind, None)
+            if kind in {"console", "console_older", "console_gap"}:
+                if self._page_index == 4:
+                    if kind in {"console_older", "console_gap"}:
+                        self._console_page_loading = False
+                        self._console_page_kind = None
+                        self.console_history_spinner.hide()
+                    if error:
+                        self._set_commands_status(
+                            text["load_failed"].format(reason=error), error=True
+                        )
+                        self._console_load_error = True
+                        self.console_stack.setCurrentWidget(self.commands_output)
+                    elif isinstance(payload, tuple):
+                        try:
+                            if kind == "console":
+                                self._apply_console_snapshot(payload)
+                            elif kind == "console_older":
+                                self._apply_console_history_page(payload)
+                            else:
+                                self._apply_console_gap_page(payload)
+                        except OSError as exc:
+                            self._set_commands_status(
+                                text["load_failed"].format(reason=exc), error=True
+                            )
+                            self._console_load_error = True
+                            self.console_stack.setCurrentWidget(self.commands_output)
+                    self._update_console_history_controls()
+                return
             if kind == "snapshot":
                 self._snapshot_loading_run = None
                 run_dir, snapshot = payload if isinstance(payload, tuple) else (None, None)
@@ -1302,7 +1581,7 @@ def create_desktop_window(
             elif kind == "settings" and self._page_index == 3:
                 self._apply_settings_payload(payload or {})
                 self.settings_stack.setCurrentIndex(0)
-            elif kind == "docs" and self._page_index == 4:
+            elif kind == "docs" and self._page_index == 5:
                 self._render_documentation(payload or {"README.md": text["no_documentation"]})
                 self.docs_stack.setCurrentIndex(0)
             elif kind == "detail" and self._detail_dialog is not None:
@@ -1362,6 +1641,16 @@ def create_desktop_window(
             self._dark = bool(dark)
             self.theme_toggle.setText(text["theme_light"] if self._dark else text["theme_dark"])
             self.setStyleSheet(_stylesheet(dark=self._dark, font_size=self._font_size))
+            if self._parse_review_window is not None and hasattr(
+                self._parse_review_window, "set_dark_theme"
+            ):
+                self._parse_review_window.set_dark_theme(self._dark)
+            console_font = self.commands_output.font()
+            console_font.setPixelSize(max(15, self._font_size + 2))
+            self.commands_output.setFont(console_font)
+            self.brand_logo.setPixmap(_wordmark(
+                QtCore, QtGui, 215, 46, self.devicePixelRatioF(), dark=self._dark
+            ))
             if hasattr(self, "start_button"):
                 self._balance_run_button_geometry()
             for combo in self.findChildren(QtWidgets.QComboBox):
@@ -1458,6 +1747,16 @@ def create_desktop_window(
             ):
                 self._begin_secret_replacement(str(watched.property("secretName")), watched)
                 return True
+            if watched is self.paper_drop and event.type() == QtCore.QEvent.Type.MouseButtonRelease:
+                if event.button() == QtCore.Qt.MouseButton.LeftButton:
+                    self._browse_paper()
+                    return True
+            if watched is self.paper_drop and event.type() == QtCore.QEvent.Type.KeyPress:
+                if event.key() in (
+                    QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter, QtCore.Qt.Key.Key_Space
+                ):
+                    self._browse_paper()
+                    return True
             if watched is self.paper_drop and event.type() == QtCore.QEvent.Type.DragEnter:
                 if len(event.mimeData().urls()) == 1 and event.mimeData().urls()[0].isLocalFile():
                     event.acceptProposedAction()
@@ -1484,7 +1783,93 @@ def create_desktop_window(
 
         def _set_paper(self, path: str):
             self._paper_path = path
-            self.paper_drop.setText(Path(path).name)
+            self.paper_drop.setText(Path(path).name if path else text["drop_paper"])
+            if hasattr(self, "new_analysis_button"):
+                self._update_run_controls()
+
+        def _new_analysis(self):
+            if (
+                self._new_analysis_reset_pending
+                or self._commands_process is not None
+                or self._guided_window is not None
+                or self._parse_review_window is not None
+            ):
+                return
+            if self._process is not None:
+                if self._stopping:
+                    return
+                self._new_analysis_reset_pending = True
+                if not self._request_process_stop():
+                    self._new_analysis_reset_pending = False
+                    self._update_run_controls()
+                return
+            self._clear_analysis()
+
+        def _clear_analysis(self):
+            """Clear only the Analysis view; run files and History remain durable."""
+            if self._process is not None:
+                return False
+
+            self._run_dir = None
+            self._new_analysis_reset_pending = False
+            self._pending_finish = None
+            self._auto_open_report_on_finish = True
+            self._stopping = False
+            self._cancel_stop_escalation()
+            self._forced_stop_process = None
+            self._cooldown_until = None
+            self._cooldown_activity = ""
+            self.cooldown_status.hide()
+
+            if self._background_loading:
+                for kind in ("snapshot", "source_page", "source_refresh", "source_query"):
+                    self._invalidate_load(kind)
+            self._snapshot_loading_run = None
+            self._snapshot_loaded_run = None
+            self._next_snapshot_at = 0.0
+            self._source_query_timer.stop()
+            self._source_rows = []
+            self._source_paged_rows = []
+            self._source_paged_total = 0
+            self._source_next_offset = 0
+            self._source_page_loaded_run = None
+            self._source_query_signature = None
+            self._source_overview_signature = None
+            self._source_page_stale = False
+            self._source_visible_count = self._page_batch_size(self.source_table)
+            self._source_sort_column = None
+            self._source_sort_ascending = True
+            self._pending_child_source_dir = None
+            self.source_search.clear()
+            self.source_filter.setCurrentIndex(0)
+            self.source_phase_filter.setCurrentIndex(0)
+            self.source_table.setRowCount(0)
+            self.source_table.clearSelection()
+            self.source_table.horizontalHeader().setSortIndicator(
+                -1, QtCore.Qt.SortOrder.AscendingOrder
+            )
+            self.source_more_button.hide()
+            self.source_stack.setCurrentWidget(self.source_table)
+
+            self._set_paper("")
+            self._display_run_done = False
+            self._display_references_only = None
+            self._guided_fetch_available = False
+            self._parse_review_available = False
+            self._parse_review_pending = 0
+            self._last_phase_progress = None
+            self._set_error_state(False)
+            self.phase_label.setToolTip("")
+            self.phase_label.setText(text["phase_waiting"])
+            self.phase_progress.setRange(0, 100)
+            self.phase_progress.setValue(0)
+            self.phase_progress.setFormat(text["phase_progress"])
+            self.current_activity.setText(
+                text["current_activity"].format(activity=text["activity_waiting"])
+            )
+            self._update_run_controls()
+            self._update_history_actions()
+            return True
 
         def _selected_mode(self) -> str:
             button = self.mode_group.checkedButton()
@@ -1494,11 +1879,749 @@ def create_desktop_window(
             button = self.jury_group.checkedButton()
             return str(button.property("jury2_level")) if button is not None else "medium"
 
+        def _set_commands_status(self, value: str, *, error: bool = False):
+            self._console_load_error = False
+            self.commands_status_label.setText(value)
+            self.commands_status_label.setProperty("error", error)
+            self.commands_status_label.setVisible(bool(value))
+            self.commands_status_label.style().unpolish(self.commands_status_label)
+            self.commands_status_label.style().polish(self.commands_status_label)
+
+        def _clear_console_load_error(self):
+            if self._console_load_error:
+                self._set_commands_status("")
+                self._console_load_error = False
+
+        def _reset_console_document_state(self):
+            self._console_loaded_start = 0
+            self._console_history_end_offset = 0
+            self._console_display_end = 0
+            self._console_live_start = 0
+            self._console_live_start_offset = 0
+            self._console_live_text = ""
+            self._console_page_loading = False
+            self._console_page_kind = None
+
+        @staticmethod
+        def _console_utf16_length(value: str) -> int:
+            return len(value.encode("utf-16-le")) // 2
+
+        def _update_console_history_controls(self):
+            has_older = bool(
+                self._page_index == 4
+                and self._console_loaded
+                and self._console_log_path is not None
+                and self._console_loaded_start > 0
+            )
+            has_gap = bool(
+                self._page_index == 4
+                and self._console_loaded
+                and self._console_log_path is not None
+                and self._console_history_end_offset
+                < self._console_live_start_offset
+            )
+            loading_older = (
+                self._console_page_loading and self._console_page_kind == "older"
+            )
+            loading_gap = (
+                self._console_page_loading and self._console_page_kind == "gap"
+            )
+            self.commands_history_button.setVisible(has_older or loading_older)
+            self.commands_history_button.setEnabled(
+                has_older and not self._console_page_loading
+            )
+            self.commands_history_button.setText(
+                text["commands_history_loading"]
+                if loading_older
+                else text["commands_load_earlier"]
+            )
+            self.commands_gap_button.setVisible(has_gap or loading_gap)
+            self.commands_gap_button.setEnabled(
+                has_gap and not self._console_page_loading
+            )
+            self.commands_gap_button.setText(
+                text["commands_gap_loading"]
+                if loading_gap
+                else text["commands_load_missing"]
+            )
+            self.console_history_spinner.setAccessibleName(
+                text["commands_gap_loading"]
+                if loading_gap
+                else text["commands_history_loading"]
+            )
+            self.console_history_spinner.setVisible(self._console_page_loading)
+            self.commands_export_button.setEnabled(
+                self._console_log_path is not None
+            )
+
+        def _on_console_scroll_changed(self, value: int):
+            if (
+                self._page_index != 4
+                or not self._console_loaded
+                or self._console_page_loading
+                or self._console_loaded_start <= 0
+            ):
+                return
+            scrollbar = self.commands_output.verticalScrollBar()
+            if value <= scrollbar.minimum() + 1:
+                QtCore.QTimer.singleShot(0, self._load_older_console_page)
+
+        def _load_older_console_page(self):
+            if (
+                self._page_index != 4
+                or not self._console_loaded
+                or self._console_page_loading
+                or self._console_loaded_start <= 0
+            ):
+                return
+            path = self._console_log_path
+            if path is None:
+                return
+            generation = self._console_generation
+            end_offset = self._console_loaded_start
+            self._console_page_loading = True
+            self._console_page_kind = "older"
+            self._update_console_history_controls()
+            loader = lambda: self._read_console_history_page(
+                path, generation, end_offset
+            )
+            if self._background_loading:
+                self._queue_load("console_older", loader)
+                return
+            try:
+                self._apply_console_history_page(loader())
+            except OSError as exc:
+                self._set_commands_status(
+                    text["load_failed"].format(reason=exc), error=True
+                )
+                self._console_load_error = True
+            finally:
+                self._console_page_loading = False
+                self._console_page_kind = None
+                self._update_console_history_controls()
+
+        def _load_console_gap_page(self):
+            if (
+                self._page_index != 4
+                or not self._console_loaded
+                or self._console_page_loading
+                or self._console_history_end_offset
+                >= self._console_live_start_offset
+            ):
+                return
+            path = self._console_log_path
+            if path is None:
+                return
+            generation = self._console_generation
+            start_offset = self._console_history_end_offset
+            end_offset = min(
+                start_offset + _CONSOLE_PAGE_BYTES,
+                self._console_live_start_offset,
+            )
+            if end_offset <= start_offset:
+                return
+            self._console_page_loading = True
+            self._console_page_kind = "gap"
+            self._update_console_history_controls()
+            loader = lambda: self._read_console_gap_page(
+                path, generation, start_offset, end_offset
+            )
+            if self._background_loading:
+                self._queue_load("console_gap", loader)
+                return
+            try:
+                self._apply_console_gap_page(loader())
+            except OSError as exc:
+                self._set_commands_status(
+                    text["load_failed"].format(reason=exc), error=True
+                )
+                self._console_load_error = True
+            finally:
+                self._console_page_loading = False
+                self._console_page_kind = None
+                self._update_console_history_controls()
+
+        def _read_console_page(
+            self,
+            path: Path,
+            generation: int,
+            *,
+            end_offset: int | None = None,
+            limit_bytes: int = _CONSOLE_PAGE_BYTES,
+            start_offset: int | None = None,
+            preserve_start: bool = False,
+        ):
+            try:
+                with self._console_log_lock:
+                    if (
+                        generation != self._console_generation
+                        or path != self._console_log_path
+                    ):
+                        return "", 0, 0, generation
+                    file_size = path.stat().st_size
+                end = file_size if end_offset is None else min(end_offset, file_size)
+                requested_start = max(0, end - limit_bytes)
+                read_start = (
+                    min(max(0, start_offset), end)
+                    if start_offset is not None
+                    else requested_start
+                )
+                with path.open("rb") as stream:
+                    if preserve_start and end < file_size:
+                        stream.seek(end)
+                        following = stream.read(1)
+                        while following and following[0] & 0xC0 == 0x80:
+                            end -= 1
+                            stream.seek(end)
+                            following = stream.read(1)
+                    stream.seek(read_start)
+                    payload = stream.read(max(0, end - read_start))
+                skipped = 0
+                if read_start > 0 and not preserve_start:
+                    newline = payload.find(b"\n")
+                    if newline >= 0 and newline + 1 < len(payload):
+                        # Keep page boundaries between lines so a prepend does
+                        # not change the wrapping of already visible content.
+                        skipped = newline + 1
+                    else:
+                        # A single oversized line, or a page ending at a
+                        # newline, must still make progress from a valid UTF-8
+                        # code point boundary.
+                        while (
+                            skipped < len(payload)
+                            and payload[skipped] & 0xC0 == 0x80
+                        ):
+                            skipped += 1
+                start = read_start + skipped
+                return (
+                    payload[skipped:].decode("utf-8", errors="replace"),
+                    start,
+                    end,
+                    generation,
+                )
+            finally:
+                with self._console_log_lock:
+                    retired = path != self._console_log_path
+                if retired:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+        def _begin_console_capture(self):
+            if self._background_loading:
+                self._invalidate_load("console")
+                self._invalidate_load("console_older")
+                self._invalidate_load("console_gap")
+            self._console_capture_error = None
+            self._console_load_error = False
+            self._console_page_loading = False
+            previous_path = self._console_log_path
+            try:
+                with self._console_log_lock:
+                    self._console_generation += 1
+                    log_dir = Path(user_data_root()) / "logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    descriptor, name = tempfile.mkstemp(
+                        prefix="callimachus-console-", suffix=".log", dir=log_dir
+                    )
+                    os.close(descriptor)
+                    self._console_log_path = Path(name)
+                    if previous_path is not None:
+                        try:
+                            previous_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+            except OSError as exc:
+                with self._console_log_lock:
+                    self._console_log_path = None
+                    if previous_path is not None:
+                        try:
+                            previous_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                self._console_capture_error = str(exc)
+            self._console_loaded = False
+            self.commands_output.clear()
+            self._reset_console_document_state()
+            self._update_console_history_controls()
+            if self._console_capture_error:
+                self._console_loaded = self._page_index == 4
+                self._set_commands_status(
+                    text["commands_capture_error"].format(
+                        reason=self._console_capture_error
+                    ),
+                    error=True,
+                )
+                if self._page_index == 4:
+                    self.console_stack.setCurrentWidget(self.commands_output)
+            elif self._page_index == 4:
+                self._set_commands_status("")
+                self.console_stack.setCurrentIndex(1)
+                self._load_console_capture()
+            else:
+                self._set_commands_status("")
+
+        def _read_console_snapshot(self, path: Path, generation: int):
+            return self._read_console_page(path, generation)
+
+        def _read_console_history_page(
+            self, path: Path, generation: int, end_offset: int
+        ):
+            return self._read_console_page(
+                path, generation, end_offset=end_offset
+            )
+
+        def _read_console_gap_page(
+            self,
+            path: Path,
+            generation: int,
+            start_offset: int,
+            end_offset: int,
+        ):
+            return self._read_console_page(
+                path,
+                generation,
+                end_offset=end_offset,
+                limit_bytes=end_offset - start_offset,
+                start_offset=start_offset,
+                preserve_start=True,
+            )
+
+        def _load_console_capture(self):
+            if self._console_loaded:
+                self.console_stack.setCurrentWidget(self.commands_output)
+                return
+            path = self._console_log_path
+            if path is None:
+                self._console_loaded = True
+                self.console_stack.setCurrentWidget(self.commands_output)
+                self._update_console_history_controls()
+                return
+            self.console_stack.setCurrentIndex(1)
+            generation = self._console_generation
+            loader = lambda path=path, generation=generation: self._read_console_snapshot(
+                path, generation
+            )
+            if self._background_loading:
+                self._queue_load("console", loader)
+                return
+            try:
+                self._apply_console_snapshot(loader())
+            except OSError as exc:
+                self._set_commands_status(
+                    text["load_failed"].format(reason=exc), error=True
+                )
+                self._console_load_error = True
+                self.console_stack.setCurrentWidget(self.commands_output)
+
+        def _apply_console_snapshot(self, payload):
+            content, start_offset, loaded_end, generation = payload
+            if (
+                self._page_index != 4
+                or generation != self._console_generation
+                or self._console_log_path is None
+            ):
+                return
+            with self._console_log_lock:
+                path = self._console_log_path
+                if generation != self._console_generation or path is None:
+                    return
+                end_offset = path.stat().st_size
+            if end_offset - loaded_end > _CONSOLE_LIVE_WINDOW_BYTES:
+                content, start_offset, loaded_end, generation = self._read_console_page(
+                    path,
+                    generation,
+                    limit_bytes=_CONSOLE_LIVE_WINDOW_BYTES,
+                )
+                end_offset = loaded_end
+            with path.open("rb") as stream:
+                stream.seek(loaded_end)
+                trailing = stream.read(max(0, end_offset - loaded_end))
+            self.commands_output.setPlainText(content)
+            self._console_loaded_start = start_offset
+            self._console_history_end_offset = start_offset
+            self._console_display_end = loaded_end
+            self._console_live_start = 0
+            self._console_live_start_offset = start_offset
+            self._console_live_text = content
+            if trailing:
+                self._insert_console_text(
+                    trailing.decode("utf-8", errors="replace")
+                )
+            self._console_display_end = end_offset
+            self._console_loaded = True
+            self._console_page_loading = False
+            self.commands_output.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+            scrollbar = self.commands_output.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+            self.console_stack.setCurrentWidget(self.commands_output)
+            self._clear_console_load_error()
+            self._update_console_history_controls()
+
+        def _apply_console_history_page(self, payload):
+            content, start_offset, end_offset, generation = payload
+            if (
+                self._page_index != 4
+                or not self._console_loaded
+                or generation != self._console_generation
+                or self._console_log_path is None
+                or end_offset > self._console_loaded_start
+                or not content
+            ):
+                return
+            scrollbar = self.commands_output.verticalScrollBar()
+            old_value = scrollbar.value()
+            old_maximum = scrollbar.maximum()
+            cursor = QtGui.QTextCursor(self.commands_output.document())
+            cursor.movePosition(QtGui.QTextCursor.MoveOperation.Start)
+            cursor.insertText(content)
+            inserted_units = self._console_utf16_length(content)
+            if self._console_live_start == 0:
+                # Live output may have trimmed while this first history page
+                # was loading. Its saved end is the actual prefix boundary.
+                self._console_history_end_offset = end_offset
+            self._console_live_start += inserted_units
+            self._console_loaded_start = start_offset
+            scrollbar.setValue(old_value + scrollbar.maximum() - old_maximum)
+            self._clear_console_load_error()
+            self._update_console_history_controls()
+
+        def _apply_console_gap_page(self, payload):
+            content, start_offset, end_offset, generation = payload
+            if (
+                self._page_index != 4
+                or not self._console_loaded
+                or generation != self._console_generation
+                or self._console_log_path is None
+                or start_offset != self._console_history_end_offset
+                or end_offset > self._console_live_start_offset
+                or end_offset <= start_offset
+                or not content
+            ):
+                return
+            scrollbar = self.commands_output.verticalScrollBar()
+            old_value = scrollbar.value()
+            old_maximum = scrollbar.maximum()
+            insertion_position = self._console_live_start
+            anchor = self.commands_output.cursorForPosition(
+                QtCore.QPoint(2, 2)
+            )
+            anchor_position = anchor.position()
+            cursor = QtGui.QTextCursor(self.commands_output.document())
+            cursor.setPosition(insertion_position)
+            cursor.insertText(content)
+            inserted_units = self._console_utf16_length(content)
+            self._console_live_start += inserted_units
+            self._console_history_end_offset = end_offset
+            if anchor_position >= insertion_position:
+                scrollbar.setValue(
+                    old_value + scrollbar.maximum() - old_maximum
+                )
+            else:
+                scrollbar.setValue(old_value)
+            self._clear_console_load_error()
+            self._update_console_history_controls()
+
+        def _append_console_output(self, output: str):
+            if not output:
+                return
+            payload = output.encode("utf-8")
+            try:
+                with self._console_log_lock:
+                    path = self._console_log_path
+                    if path is not None:
+                        with path.open("ab") as stream:
+                            stream.write(payload)
+                            stream.flush()
+            except OSError as exc:
+                self._console_capture_error = str(exc)
+                self._set_commands_status(
+                    text["commands_capture_error"].format(reason=exc), error=True
+                )
+                with self._console_log_lock:
+                    self._console_generation += 1
+                    self._console_log_path = None
+                if path is not None:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                if self._background_loading:
+                    self._invalidate_load("console")
+                    self._invalidate_load("console_older")
+                    self._invalidate_load("console_gap")
+                if self._page_index == 4:
+                    self._console_loaded = True
+                    cursor = self.commands_output.textCursor()
+                    cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                    self._console_live_start = cursor.position()
+                    self._console_live_text = ""
+                    self._console_live_start_offset = 0
+                    self._console_loaded_start = 0
+                    self._console_history_end_offset = 0
+                    self._update_console_history_controls()
+                    self.console_stack.setCurrentWidget(self.commands_output)
+            else:
+                if path is not None and self._console_loaded:
+                    self._console_display_end += len(payload)
+            if self._page_index == 4 and self._console_loaded:
+                self._insert_console_text(output)
+
+        def _insert_console_text(self, output: str):
+            if not output:
+                return
+            combined = self._console_live_text + output
+            encoded = combined.encode("utf-8")
+            removed_bytes = max(0, len(encoded) - _CONSOLE_LIVE_WINDOW_BYTES)
+            while removed_bytes < len(encoded) and encoded[removed_bytes] & 0xC0 == 0x80:
+                removed_bytes += 1
+            removed_prefix = encoded[:removed_bytes].decode("utf-8", errors="replace")
+            live_text = encoded[removed_bytes:].decode("utf-8", errors="replace")
+            removed_units = self._console_utf16_length(removed_prefix)
+
+            scrollbar = self.commands_output.verticalScrollBar()
+            follows_output = scrollbar.value() >= scrollbar.maximum() - 1
+            anchor = self.commands_output.cursorForPosition(QtCore.QPoint(2, 2))
+            anchor_position = anchor.position()
+            insert = self.commands_output.textCursor()
+            insert.movePosition(QtGui.QTextCursor.MoveOperation.End)
+            insert.insertText(output)
+            if removed_units:
+                trim = QtGui.QTextCursor(self.commands_output.document())
+                trim.setPosition(self._console_live_start)
+                trim.setPosition(
+                    self._console_live_start + removed_units,
+                    QtGui.QTextCursor.MoveMode.KeepAnchor,
+                )
+                trim.removeSelectedText()
+                if anchor_position >= self._console_live_start:
+                    anchor_position = max(
+                        self._console_live_start,
+                        anchor_position - removed_units,
+                    )
+                self._console_live_start_offset += removed_bytes
+                if self._console_live_start == 0:
+                    self._console_loaded_start = self._console_live_start_offset
+                    self._console_history_end_offset = (
+                        self._console_live_start_offset
+                    )
+            self._console_live_text = live_text
+            if follows_output:
+                self.commands_output.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+                scrollbar.setValue(scrollbar.maximum())
+            else:
+                anchor.setPosition(anchor_position)
+                self.commands_output.setTextCursor(anchor)
+                self.commands_output.ensureCursorVisible()
+                scrollbar.setValue(min(scrollbar.value(), scrollbar.maximum()))
+            self._update_console_history_controls()
+
+        def _choose_console_export(self):
+            destination, _selected_filter = QtWidgets.QFileDialog.getSaveFileName(
+                self,
+                text["commands_export_title"],
+                "",
+                text["commands_export_filter"],
+            )
+            if destination:
+                self._export_console_log_to(Path(destination))
+
+        def _export_console_log_to(self, destination: Path) -> bool:
+            try:
+                with self._console_log_lock:
+                    path = self._console_log_path
+                    if path is None:
+                        raise OSError(text["commands_export_unavailable"])
+                    size = path.stat().st_size
+                if path.resolve() == destination.resolve():
+                    raise OSError(text["commands_export_same_file"])
+                remaining = size
+                with path.open("rb") as source, destination.open("wb") as target:
+                    while remaining:
+                        chunk = source.read(
+                            min(_CONSOLE_EXPORT_CHUNK_BYTES, remaining)
+                        )
+                        if not chunk:
+                            raise OSError(text["commands_export_incomplete"])
+                        target.write(chunk)
+                        remaining -= len(chunk)
+                self._set_commands_status(
+                    text["commands_export_done"].format(path=destination),
+                    error=False,
+                )
+                return True
+            except OSError as exc:
+                self._set_commands_status(
+                    text["commands_export_error"].format(reason=exc),
+                    error=True,
+                )
+                return False
+
+        def _cleanup_console_capture(self):
+            with self._console_log_lock:
+                path = self._console_log_path
+                self._console_log_path = None
+                self._console_generation += 1
+                if path is not None:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            self._console_loaded = False
+            self._console_capture_error = None
+            self.commands_output.clear()
+            self._reset_console_document_state()
+            self._update_console_history_controls()
+
+        def _run_commands(self):
+            if self._process is not None:
+                self._set_commands_status(text["commands_status_busy_analysis"], error=True)
+                return
+            if self._guided_window is not None:
+                self._set_commands_status(text["commands_status_busy_guided"], error=True)
+                return
+            if self._commands_process is not None:
+                self._set_commands_status(text["commands_status_busy_commands"], error=True)
+                return
+
+            arguments, error_key = _parse_commands_arguments(
+                self.commands_input.text(),
+                displayed_prefix=self._commands_displayed_prefix,
+            )
+            if error_key is not None:
+                self._set_commands_status(text[error_key], error=True)
+                return
+
+            try:
+                command = application_argv(*arguments, source_root=resource_root())
+                working_directory = user_data_root() if is_frozen() else resource_root()
+            except (OSError, RuntimeError, ValueError) as exc:
+                self._set_commands_status(
+                    text["commands_status_start_failed"].format(reason=str(exc)),
+                    error=True,
+                )
+                return
+
+            self._begin_console_capture()
+            process = QtCore.QProcess(self)
+            self._commands_process = process
+            self._commands_stdout_decoder = codecs.getincrementaldecoder("utf-8")(
+                errors="replace"
+            )
+            self._commands_stderr_decoder = codecs.getincrementaldecoder("utf-8")(
+                errors="replace"
+            )
+            process.setWorkingDirectory(str(working_directory))
+            process_environment = QtCore.QProcessEnvironment.systemEnvironment()
+            process_environment.insert("PYTHONIOENCODING", "utf-8:replace")
+            process.setProcessEnvironment(process_environment)
+            process.readyReadStandardOutput.connect(
+                lambda process=process: self._read_commands_output(process, stderr=False)
+            )
+            process.readyReadStandardError.connect(
+                lambda process=process: self._read_commands_output(process, stderr=True)
+            )
+            process.finished.connect(
+                lambda exit_code, exit_status, process=process:
+                self._on_commands_finished(process, exit_code, exit_status)
+            )
+            process.errorOccurred.connect(
+                lambda error, process=process:
+                self._on_commands_process_error(process, error)
+            )
+            self._set_commands_status(
+                text["commands_capture_error"].format(
+                    reason=self._console_capture_error
+                ) if self._console_capture_error
+                else text["commands_status_running"],
+                error=bool(self._console_capture_error),
+            )
+            self._update_run_controls()
+            self._update_history_actions()
+            process.start(command[0], list(command[1:]))
+            process.closeWriteChannel()
+
+        def _read_commands_output(self, process, *, stderr: bool, final: bool = False):
+            if process is not self._commands_process:
+                return
+            data = (
+                process.readAllStandardError()
+                if stderr else process.readAllStandardOutput()
+            )
+            decoder_name = (
+                "_commands_stderr_decoder" if stderr
+                else "_commands_stdout_decoder"
+            )
+            decoder = getattr(self, decoder_name)
+            if decoder is None:
+                return
+            output = decoder.decode(bytes(data), final=final)
+            if final:
+                setattr(self, decoder_name, None)
+            if not output:
+                return
+            if stderr:
+                output = text["commands_stderr_prefix"].format(output=output)
+            self._append_console_output(output)
+
+        def _on_commands_process_error(self, process, error):
+            if process is not self._commands_process:
+                return
+            if error == QtCore.QProcess.ProcessError.FailedToStart:
+                self._set_commands_status(
+                    text["commands_status_start_failed"].format(
+                        reason=process.errorString()
+                    ),
+                    error=True,
+                )
+                self._commands_process = None
+                self._commands_stdout_decoder = None
+                self._commands_stderr_decoder = None
+                process.deleteLater()
+                self._update_run_controls()
+                self._update_history_actions()
+            else:
+                self._set_commands_status(
+                    text["commands_status_error"].format(reason=process.errorString()),
+                    error=True,
+                )
+
+        def _on_commands_finished(self, process, exit_code: int, exit_status):
+            if process is not self._commands_process:
+                return
+            self._read_commands_output(process, stderr=False)
+            self._read_commands_output(process, stderr=True)
+            self._read_commands_output(process, stderr=False, final=True)
+            self._read_commands_output(process, stderr=True, final=True)
+            normal_exit = exit_status == QtCore.QProcess.ExitStatus.NormalExit
+            status = text[
+                "commands_status_exit" if normal_exit else "commands_status_crashed"
+            ].format(exit_code=exit_code)
+            if self._console_capture_error:
+                status += "\n" + text["commands_capture_error"].format(
+                    reason=self._console_capture_error
+                )
+            self._set_commands_status(
+                status,
+                error=not normal_exit or exit_code != 0 or bool(self._console_capture_error),
+            )
+            self._commands_process = None
+            process.deleteLater()
+            self._update_run_controls()
+            self._update_history_actions()
+
         def _start_analysis(self):
+            if self._commands_process is not None or self._new_analysis_reset_pending:
+                return
             paper = getattr(self, "_paper_path", "")
             command, run_dir, environment = _command_spec(
                 command_builder(paper, self._selected_mode(), self._selected_jury_level())
             )
+            if self.skip_parse_review.isChecked():
+                command = [item for item in command if item != "--manual-review"]
+            elif "--manual-review" not in command:
+                command.append("--manual-review")
             selected_preview = self._selected_llm_preview()
             if selected_preview.get("available"):
                 environment = {**(environment or {}), **dict(selected_preview.get("overlay") or {})}
@@ -1517,6 +2640,8 @@ def create_desktop_window(
                 return
             if run_dir:
                 self._run_dir = run_dir
+                self._display_run_done = False
+                self._display_references_only = None
                 self._run_environment_by_dir[run_dir] = dict(environment or {})
             self._start_process(command, environment=environment)
 
@@ -1527,23 +2652,39 @@ def create_desktop_window(
             environment: Mapping[str, str] | None = None,
             auto_open_report: bool = True,
         ):
-            if self._process is not None:
+            if (
+                self._process is not None
+                or self._commands_process is not None
+                or self._new_analysis_reset_pending
+            ):
                 return
             command = self._command_with_manual_policy(command)
+            self._begin_console_capture()
             self._cancel_stop_escalation()
             self._forced_stop_process = None
             self._cooldown_until = None
             self.cooldown_status.hide()
             self._process = QtCore.QProcess(self)
+            self._analysis_stdout_decoder = codecs.getincrementaldecoder("utf-8")(
+                errors="replace"
+            )
+            self._analysis_stderr_decoder = codecs.getincrementaldecoder("utf-8")(
+                errors="replace"
+            )
             self._auto_open_report_on_finish = auto_open_report
-            self._process.readyReadStandardOutput.connect(self._read_output)
-            self._process.readyReadStandardError.connect(self._read_output)
+            self._process.readyReadStandardOutput.connect(
+                lambda: self._read_output(stream="stdout")
+            )
+            self._process.readyReadStandardError.connect(
+                lambda: self._read_output(stream="stderr")
+            )
             self._process.finished.connect(self._on_process_finished)
             self._process.errorOccurred.connect(self._on_process_error)
             process_environment = QtCore.QProcessEnvironment.systemEnvironment()
             for name, value in (environment or {}).items():
                 process_environment.insert(str(name), str(value))
             process_environment.insert("CALLIMACHUS_DESKTOP_CONTROL", "1")
+            process_environment.insert("PYTHONIOENCODING", "utf-8:replace")
             self._process.setProcessEnvironment(process_environment)
             self._stopping = False
             self._last_phase_progress = None
@@ -1574,9 +2715,9 @@ def create_desktop_window(
         def _on_process_error(self, error):
             if self._process is None:
                 return
-            self.phase_label.setText(
-                f"{text['process_error']}: {self._process.errorString()}"
-            )
+            message = f"{text['process_error']}: {self._process.errorString()}"
+            self.phase_label.setText(message)
+            self._append_console_output(f"{message}\n")
             if error == QtCore.QProcess.ProcessError.FailedToStart:
                 self._set_error_state(True)
                 self._cancel_stop_escalation()
@@ -1586,6 +2727,8 @@ def create_desktop_window(
                 self._poll_timer.stop()
                 self._refresh_llm_status()
                 self._update_run_controls()
+                if self._new_analysis_reset_pending:
+                    self._clear_analysis()
 
         def _cancel_stop_escalation(self):
             timer = self._stop_escalation_timer
@@ -1624,6 +2767,10 @@ def create_desktop_window(
             opacity = 0.35 + 0.5 * (1 + math.sin(time.monotonic() * 4)) / 2
             for effect in self._skeleton_effects:
                 effect.setOpacity(opacity)
+            if self._console_page_loading:
+                self.console_history_spinner.setText(
+                    "◐◓◑◒"[self._spinner_frame % 4]
+                )
             self._update_cooldown_status()
             if self._process is not None:
                 self.start_button.setIcon(_spinner_icon(QtCore, QtGui, self._spinner_frame))
@@ -1641,13 +2788,23 @@ def create_desktop_window(
             ):
                 self._render_sources()
 
-        def _read_output(self):
+        def _read_output(self, *, stream: str | None = None, final: bool = False):
             if self._process is None:
                 return
+            if not all(callable(getattr(self._process, name, None)) for name in (
+                "readAllStandardOutput", "readAllStandardError"
+            )):
+                return
             # Terminal output is diagnostic only: durable snapshots own phase/progress.
-            payload = bytes(self._process.readAllStandardOutput()) + bytes(
-                self._process.readAllStandardError()
+            stdout = (
+                bytes(self._process.readAllStandardOutput())
+                if stream in (None, "stdout") else b""
             )
+            stderr = (
+                bytes(self._process.readAllStandardError())
+                if stream in (None, "stderr") else b""
+            )
+            payload = stdout + stderr
             for line in payload.decode("utf-8", errors="replace").splitlines():
                 seconds = _cooldown_seconds(line)
                 if seconds is not None:
@@ -1659,6 +2816,17 @@ def create_desktop_window(
                 self.current_activity.setText(
                     text["current_activity"].format(activity=activity)
                 )
+            stdout_decoder = self._analysis_stdout_decoder
+            stderr_decoder = self._analysis_stderr_decoder
+            stdout_text = stdout_decoder.decode(stdout, final=final) if stdout_decoder else ""
+            stderr_text = stderr_decoder.decode(stderr, final=final) if stderr_decoder else ""
+            if final:
+                self._analysis_stdout_decoder = None
+                self._analysis_stderr_decoder = None
+            if stdout_text:
+                self._append_console_output(stdout_text)
+            if stderr_text:
+                self._append_console_output(stderr_text)
 
         def _update_cooldown_status(self):
             if self._process is None or self._cooldown_until is None:
@@ -1678,6 +2846,8 @@ def create_desktop_window(
 
         def _on_process_finished(self, exit_code: int, _exit_status):
             process = self._process
+            if process is not None:
+                self._read_output(final=True)
             auto_open_report = self._auto_open_report_on_finish
             self._auto_open_report_on_finish = True
             forced_stop = (
@@ -1691,6 +2861,9 @@ def create_desktop_window(
             self._poll_timer.stop()
             self._stopping = False
             self._refresh_llm_status()
+            if self._new_analysis_reset_pending:
+                self._clear_analysis()
+                return
             if self._background_loading:
                 self._pending_finish = (exit_code, _exit_status, forced_stop, auto_open_report)
                 self.phase_label.setText(text["loading_run"])
@@ -1711,6 +2884,9 @@ def create_desktop_window(
             self, snapshot, exit_code: int, _exit_status, forced_stop: bool,
             auto_open_report: bool,
         ):
+            if self._new_analysis_reset_pending:
+                self._clear_analysis()
+                return
             self.phase_label.setToolTip("")
             if forced_stop:
                 self._set_error_state(True)
@@ -1727,7 +2903,9 @@ def create_desktop_window(
                     self.phase_label.setText(text["snapshot_unavailable"])
                     self._update_run_controls()
                     return
-                if self.skip_manual_checks.isChecked():
+                if self._parse_review_available:
+                    self._open_parse_review(self._run_dir)
+                elif self.skip_manual_checks.isChecked():
                     if self._skip_pending_manual_tasks(self._run_dir):
                         self._resume_after_manual_skip(self._run_dir)
                 elif self._guided_fetch_available:
@@ -1786,11 +2964,22 @@ def create_desktop_window(
             self._display_run_done = bool(
                 snapshot.get("phase") == "done" and snapshot.get("run_status") == "completed"
             )
+            self._display_references_only = snapshot.get("references_only") if isinstance(
+                snapshot.get("references_only"), bool
+            ) else None
             self._guided_fetch_available = bool(
                 snapshot.get("phase") == "fetch"
                 and (
                     snapshot.get("fetch_paused")
                     or (snapshot.get("paused") and snapshot.get("action_required"))
+                )
+            )
+            self._parse_review_pending = int(snapshot.get("parse_review_pending") or 0)
+            self._parse_review_available = bool(
+                snapshot.get("phase") == "parse"
+                and (
+                    snapshot.get("paused")
+                    or snapshot.get("run_status") == "paused"
                 )
             )
             phase = snapshot.get("phase")
@@ -1845,9 +3034,6 @@ def create_desktop_window(
             if phase == "done" and snapshot.get("references_only"):
                 self.phase_label.setText(text["phase_references_only_done"])
                 self.phase_progress.setFormat(text["progress_references_only_done"])
-            llm_available = snapshot.get("llm_available")
-            if llm_available is not None:
-                self.llm_status.setText(text["llm_ready"] if llm_available else text["llm_unavailable"])
             refs = snapshot.get("references") or snapshot.get("source_inventory") or []
             if self._source_page_mode:
                 self._update_run_controls()
@@ -1903,9 +3089,41 @@ def create_desktop_window(
 
         def _update_run_controls(self):
             active = self._process is not None
-            guided = self._guided_window is not None
-            self.start_button.setEnabled(not active and not guided)
-            self.skip_manual_checks.setEnabled(not active and not guided)
+            commands_active = self._commands_process is not None
+            review_open = self._guided_window is not None or self._parse_review_window is not None
+            reset_pending = self._new_analysis_reset_pending
+            has_analysis_state = bool(
+                self._run_dir or getattr(self, "_paper_path", "")
+            )
+            self.start_button.setEnabled(
+                not active and not review_open and not commands_active and not reset_pending
+            )
+            self.skip_manual_checks.setEnabled(
+                not active and not review_open and not commands_active and not reset_pending
+            )
+            self.skip_parse_review.setEnabled(
+                not active and not review_open and not commands_active and not reset_pending
+            )
+            commands_button = getattr(self, "commands_run_button", None)
+            if commands_button is not None:
+                commands_button.setEnabled(
+                    not active and not review_open and not commands_active and not reset_pending
+                )
+            new_analysis_tip = text[
+                "new_analysis_pending_tip" if reset_pending or self._stopping
+                else "new_analysis_stop_tip" if active
+                else "new_analysis_tip"
+            ]
+            new_analysis_label = text["new_analysis_stop" if active else "new_analysis"]
+            self.new_analysis_button.setText(new_analysis_label)
+            self.new_analysis_button.setAccessibleName(new_analysis_label)
+            self.new_analysis_button.setToolTip(new_analysis_tip)
+            self.new_analysis_button.setAccessibleDescription(new_analysis_tip)
+            self.new_analysis_button.setEnabled(
+                (active or has_analysis_state)
+                and not review_open and not commands_active and not self._stopping
+                and not reset_pending
+            )
             self.start_button.setText("" if active else text["start"])
             self.start_button.setIcon(_spinner_icon(QtCore, QtGui, self._spinner_frame) if active else QtGui.QIcon())
             if active:
@@ -1917,15 +3135,57 @@ def create_desktop_window(
                 self.resume_latest_button.setText(text["resume_latest"])
                 row, tooltip = self._latest_resume_state()
                 self.resume_latest_button.setToolTip(tooltip)
-                self.resume_latest_button.setEnabled(not guided and row is not None)
+                self.resume_latest_button.setEnabled(
+                    not review_open and not commands_active and not reset_pending
+                    and row is not None
+                )
             self.resume_latest_button.style().unpolish(self.resume_latest_button)
             self.resume_latest_button.style().polish(self.resume_latest_button)
             self._balance_run_button_geometry()
             self.open_guided_fetch_button.setVisible(
-                bool(self._run_dir and self._guided_fetch_available and not active and not guided)
+                bool(
+                    self._run_dir and self._guided_fetch_available
+                    and not active and not review_open and not commands_active
+                )
             )
-            self.open_run_report_button.setVisible(
-                bool(self._current_report_path() and not active and not guided)
+            self.open_parse_review_button.setVisible(
+                bool(
+                    self._run_dir and self._parse_review_available
+                    and not active and not commands_active
+                    and self._guided_window is None
+                    and (
+                        self._parse_review_window is None
+                        or (
+                            self._parse_review_window.isHidden()
+                            and self._parse_review_run_dir == str(self._run_dir)
+                        )
+                    )
+                )
+            )
+            self.open_parse_review_button.setText(
+                text["open_parse_review_count"].format(count=self._parse_review_pending)
+                if self._parse_review_pending else text["resume"]
+            )
+            report_visible = bool(
+                self._current_report_path()
+                and not active and not review_open and not commands_active
+            )
+            self.open_run_report_button.setVisible(report_visible)
+            self.export_run_report_button.setVisible(report_visible)
+            self.export_run_report_button.setEnabled(
+                not active and not review_open and not commands_active
+                and self._current_run_exportable()
+            )
+
+        def _current_run_exportable(self) -> bool:
+            report_path = self._current_report_path()
+            return bool(
+                export_report_callback is not None
+                and self._run_dir
+                and self._display_run_done
+                and self._display_references_only is False
+                and report_path
+                and Path(report_path).name == "report.html"
             )
 
         def _current_report_path(self) -> str | None:
@@ -1956,6 +3216,32 @@ def create_desktop_window(
             if report_path:
                 self._open_path(report_path)
 
+        def _export_current_report(self):
+            if self._current_run_exportable() and self._run_dir:
+                self._export_report_for_run(self._run_dir)
+
+        def _export_report_for_run(self, run_dir: str):
+            if export_report_callback is None:
+                return
+            default_path = str(Path(run_dir).parent / f"{Path(run_dir).name}.public.html")
+            output, _filter = QtWidgets.QFileDialog.getSaveFileName(
+                self, text["export_report"], default_path, "HTML (*.html)"
+            )
+            if not output:
+                return
+            try:
+                path = export_report_callback(run_dir, output)
+            except (OSError, RuntimeError, ValueError, sqlite3.DatabaseError) as exc:
+                QtWidgets.QMessageBox.warning(
+                    self, text["export_report"],
+                    text["export_report_failed"].format(reason=exc),
+                )
+                return
+            QtWidgets.QMessageBox.information(
+                self, text["export_report"],
+                text["export_report_done"].format(path=path),
+            )
+
         def _open_path(self, path: str):
             try:
                 opened = open_path_callback(path)
@@ -1974,6 +3260,18 @@ def create_desktop_window(
             try:
                 if not run_dir or skip_manual_callback is None:
                     raise ValueError("automatic task handling is unavailable")
+                if ocr_pending_count_loader is not None:
+                    ocr_count = ocr_pending_count_loader(run_dir)
+                    if not isinstance(ocr_count, int) or isinstance(ocr_count, bool) or ocr_count < 0:
+                        raise ValueError("pending OCR count is unavailable")
+                    if ocr_count and (
+                        QtWidgets.QMessageBox.question(
+                            self,
+                            text["skip_ocr_title"],
+                            text["skip_ocr_question"].format(count=ocr_count),
+                        ) != QtWidgets.QMessageBox.StandardButton.Yes
+                    ):
+                        return False
                 count = skip_manual_callback(run_dir)
                 if not isinstance(count, int) or count <= 0:
                     raise ValueError("no supported pending manual task was found")
@@ -2013,14 +3311,10 @@ def create_desktop_window(
                 button.updateGeometry()
 
         def _resume_latest_or_stop(self):
+            if self._commands_process is not None:
+                return
             if self._process is not None:
-                if self._stopping:
-                    return
-                process = self._process
-                self._stopping = True
-                process.write(b"STOP\n")
-                self._schedule_stop_escalation(process)
-                self._update_run_controls()
+                self._request_process_stop()
                 return
             row, _tooltip = self._latest_resume_state()
             if not isinstance(row, Mapping):
@@ -2030,7 +3324,27 @@ def create_desktop_window(
                 return
             self._resume_run_row(row)
 
+        def _request_process_stop(self) -> bool:
+            if (
+                self._process is None
+                or self._commands_process is not None
+                or self._stopping
+            ):
+                return False
+            process = self._process
+            self._stopping = True
+            process.write(b"STOP\n")
+            self._schedule_stop_escalation(process)
+            self._update_run_controls()
+            return True
+
         def _resume_run_row(self, row: Mapping[str, Any]):
+            if self._commands_process is not None or self._new_analysis_reset_pending:
+                return
+            if self._parse_review_window is not None:
+                self._parse_review_window.raise_()
+                self._parse_review_window.activateWindow()
+                return
             run_dir = row.get("run_dir")
             if not isinstance(run_dir, str) or not run_dir:
                 return
@@ -2059,6 +3373,9 @@ def create_desktop_window(
             self._pending_child_source_dir = target_dir if target_dir != run_dir else None
             self.set_run_dir(target_dir)
             self.navigation.setCurrentRow(0)
+            if target_dir == run_dir and self._history_row_has_parse_review(row):
+                self._open_parse_review(run_dir)
+                return
             if target_dir == run_dir and self._guided_fetch_available and not self.skip_manual_checks.isChecked():
                 self._open_guided_fetch(run_dir)
                 return
@@ -2071,6 +3388,9 @@ def create_desktop_window(
                 selector: (jury1.isChecked(), jury2.isChecked())
                 for selector, (jury1, jury2) in self.llm_role_choices.items()
             }
+            if not self._llm_role_preferences_loaded:
+                self._llm_role_preferences = self._load_llm_role_preferences()
+                self._llm_role_preferences_loaded = True
             self.llm_choices.setRowCount(0)
             self.llm_role_choices: dict[str, tuple[Any, Any]] = {}
             self._llm_checkbox_cells = {}
@@ -2087,13 +3407,19 @@ def create_desktop_window(
                 self.llm_choices.setItem(row, 0, item)
 
                 initial_both = bool(option.get("configured")) or len(options) == 1
-                jury1_selected, jury2_selected = existing_states.get(
-                    selector,
-                    (
+                if selector in existing_states:
+                    initial_states = existing_states[selector]
+                elif self._llm_role_preferences is not None:
+                    initial_states = (
+                        selector in self._llm_role_preferences["jury1"],
+                        selector in self._llm_role_preferences["jury2"],
+                    )
+                else:
+                    initial_states = (
                         bool(option.get("jury1_selected", initial_both)),
                         bool(option.get("jury2_selected", initial_both)),
-                    ),
-                )
+                    )
+                jury1_selected, jury2_selected = initial_states
                 jury1 = QtWidgets.QCheckBox("", self.llm_choices)
                 jury1.setChecked(jury1_selected)
                 jury1.setAccessibleName(f"{selector}: {text['jury1_role']}")
@@ -2118,6 +3444,50 @@ def create_desktop_window(
                 self.llm_choices.setCellWidget(row, 2, self._llm_checkbox_cell(jury2))
                 self.llm_role_choices[selector] = (jury1, jury2)
             self._normalize_single_active_model()
+
+        def _load_llm_role_preferences(self) -> dict[str, set[str]] | None:
+            settings = QtCore.QSettings("Callimachus", "Callimachus")
+            if not settings.contains(_LLM_ROLE_PREFERENCE_KEY):
+                return None
+            try:
+                raw = settings.value(_LLM_ROLE_PREFERENCE_KEY)
+                if not isinstance(raw, str):
+                    raise ValueError("stored role preference is not JSON text")
+                data = json.loads(raw)
+            except (TypeError, ValueError):
+                self._llm_role_preferences_invalid = True
+                return {"jury1": set(), "jury2": set()}
+            if type(data) is not dict or set(data) != {"jury1", "jury2"}:
+                self._llm_role_preferences_invalid = True
+                return {"jury1": set(), "jury2": set()}
+            preferences: dict[str, set[str]] = {}
+            for role in ("jury1", "jury2"):
+                selectors = data[role]
+                if type(selectors) is not list or any(
+                    type(selector) is not str or not selector
+                    for selector in selectors
+                ):
+                    self._llm_role_preferences_invalid = True
+                    return {"jury1": set(), "jury2": set()}
+                preferences[role] = set(selectors)
+            return preferences
+
+        def _save_llm_role_preferences(self) -> bool:
+            selected = self._selected_llm_roles()
+            settings = QtCore.QSettings("Callimachus", "Callimachus")
+            settings.setValue(
+                _LLM_ROLE_PREFERENCE_KEY,
+                json.dumps(selected, separators=(",", ":")),
+            )
+            settings.sync()
+            if settings.status() != QtCore.QSettings.Status.NoError:
+                return False
+            self._llm_role_preferences = {
+                role: set(selectors) for role, selectors in selected.items()
+            }
+            self._llm_role_preferences_loaded = True
+            self._llm_role_preferences_invalid = False
+            return True
 
         def _llm_checkbox_cell(self, checkbox):
             cell = QtWidgets.QWidget(self.llm_choices)
@@ -2172,7 +3542,14 @@ def create_desktop_window(
                     jury2.setChecked(jury2_checked)
                 finally:
                     self._normalizing_llm_roles = False
+            saved = self._save_llm_role_preferences()
             self._refresh_llm_status()
+            if not saved:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    text["llm_role_save_failed_title"],
+                    text["llm_role_save_failed"],
+                )
 
         def _selected_llm_roles(self) -> dict[str, list[str]]:
             selected = {"jury1": [], "jury2": []}
@@ -2195,7 +3572,9 @@ def create_desktop_window(
             preview = self._selected_llm_preview()
             available = bool(preview.get("available"))
             reason = str(preview.get("reason") or "")
-            if available:
+            if self._llm_role_preferences_invalid:
+                status = text["llm_role_preferences_invalid"]
+            elif available:
                 status = text["llm_ready"]
             elif "jury1" in reason.casefold() and "no eligible lane" in reason.casefold():
                 status = text["llm_jury1_required"]
@@ -2222,6 +3601,8 @@ def create_desktop_window(
 
         def set_run_dir(self, run_dir: str):
             """Attach an existing run for display or history-driven resume."""
+            self._display_run_done = False
+            self._display_references_only = None
             if self._background_loading:
                 self._invalidate_load("snapshot")
                 self._snapshot_loading_run = None
@@ -2243,6 +3624,8 @@ def create_desktop_window(
                 self._display_run_done = False
             self._run_dir = run_dir
             self._guided_fetch_available = False
+            self._parse_review_available = False
+            self._parse_review_pending = 0
             self._set_error_state(False)
             if self._background_loading:
                 self._request_snapshot(force=True)
@@ -2450,6 +3833,8 @@ def create_desktop_window(
             if self._background_loading:
                 self._request_page_data(self._page_index)
                 return
+            if self._page_index == 4:
+                self._load_console_capture()
             self._apply_history_rows(history_loader() or ())
             self._apply_cache_rows(cache_loader() or ())
             self._apply_settings_payload(settings_loader() or {})
@@ -3299,11 +4684,22 @@ def create_desktop_window(
                 and not bool(row.get("completed"))
             )
 
+        @staticmethod
+        def _history_row_has_parse_review(row: Mapping[str, Any]) -> bool:
+            return bool(
+                row.get("available", True) is True
+                and row.get("phase") == "parse"
+                and row.get("run_status") == "paused"
+            )
+
         def _history_row_is_deletable(self, row: Mapping[str, Any]) -> bool:
             run_dir = str(row.get("run_dir") or "")
             protected = (
                 run_dir == str(self._run_dir or "")
                 and (self._process is not None or self._guided_window is not None)
+            ) or (
+                self._parse_review_window is not None
+                and run_dir == self._parse_review_run_dir
             )
             return bool(
                 run_dir
@@ -3320,6 +4716,20 @@ def create_desktop_window(
                 and bool(row.get("completed", True))
             )
 
+        @staticmethod
+        def _history_row_is_exportable(row: Mapping[str, Any]) -> bool:
+            path = row.get("report_html_path")
+            return bool(
+                row.get("available") is True
+                and row.get("run_status") == "completed"
+                and row.get("phase") == "done"
+                and row.get("references_only") is False
+                and row.get("report_html_present") is True
+                and isinstance(path, str)
+                and Path(path).name == "report.html"
+                and str(row.get("run_dir") or "")
+            )
+
         def _update_history_actions(self):
             checked_rows = self._checked_history_rows()
             row = self._single_history_action_row()
@@ -3331,7 +4741,32 @@ def create_desktop_window(
                 text["continue_fetch_verify"] if preview_selected else text["rerun_verify"]
             )
             self.history_resume_button.setEnabled(
-                isinstance(row, Mapping) and self._history_row_is_resumable(row)
+                isinstance(row, Mapping)
+                and self._history_row_is_resumable(row)
+                and self._commands_process is None
+                and self._parse_review_window is None
+            )
+            show_parse_review = isinstance(row, Mapping) and self._history_row_has_parse_review(row)
+            self.history_parse_review_button.setVisible(show_parse_review)
+            self.history_parse_review_button.setText(
+                text["open_parse_review"]
+                if isinstance(row, Mapping) and row.get("parse_review_pending")
+                else text["resume"]
+            )
+            parse_review_window_reopenable = (
+                self._parse_review_window is None
+                or (
+                    isinstance(row, Mapping)
+                    and self._parse_review_window.isHidden()
+                    and self._parse_review_run_dir == str(row.get("run_dir") or "")
+                )
+            )
+            self.history_parse_review_button.setEnabled(
+                show_parse_review
+                and self._process is None
+                and self._commands_process is None
+                and self._guided_window is None
+                and parse_review_window_reopenable
             )
             self.history_report_button.setEnabled(
                 isinstance(row, Mapping) and row.get("available", True) is True
@@ -3341,10 +4776,17 @@ def create_desktop_window(
                 and bool(row.get("report_html_present"))
                 and isinstance(row.get("report_html_path"), str)
             )
+            self.history_export_report_button.setEnabled(
+                export_report_callback is not None
+                and isinstance(row, Mapping)
+                and self._history_row_is_exportable(row)
+            )
             self.history_verify_fork_button.setEnabled(
                 isinstance(row, Mapping)
                 and self._history_row_is_verify_forkable(row)
                 and self._process is None
+                and self._commands_process is None
+                and self._parse_review_window is None
             )
             deletable = [
                 candidate for candidate in checked_rows
@@ -3367,6 +4809,11 @@ def create_desktop_window(
             row = self._single_history_action_row()
             if isinstance(row, Mapping):
                 self._open_history_report(row, fallback_to_run=False)
+
+        def _export_selected_history_report(self):
+            row = self._single_history_action_row()
+            if isinstance(row, Mapping) and self._history_row_is_exportable(row):
+                self._export_report_for_run(str(row["run_dir"]))
 
         def _open_history_report(self, row: Mapping[str, Any], *, fallback_to_run: bool):
             report_path = row.get("report_html_path")
@@ -3398,6 +4845,22 @@ def create_desktop_window(
                 return
             current_row = matches[0]
             self._resume_run_row(current_row)
+
+        def _open_selected_history_parse_review(self):
+            row = self._single_history_action_row()
+            if not isinstance(row, Mapping) or not self._history_row_has_parse_review(row):
+                return
+            run_dir = row.get("run_dir")
+            if not isinstance(run_dir, str) or not run_dir:
+                return
+            if (
+                self._parse_review_window is not None
+                and self._parse_review_run_dir != run_dir
+            ):
+                return
+            self.set_run_dir(run_dir)
+            self.navigation.setCurrentRow(0)
+            self._open_parse_review(run_dir)
 
         def _regenerate_report(self):
             row = self._single_history_action_row()
@@ -3466,6 +4929,15 @@ def create_desktop_window(
             ]
 
         def _fork_selected_history_verify(self):
+            if self._parse_review_window is not None:
+                self._parse_review_window.raise_()
+                self._parse_review_window.activateWindow()
+                return
+            if self._commands_process is not None:
+                QtWidgets.QMessageBox.warning(
+                    self, text["tab_history"], text["commands_status_busy_commands"]
+                )
+                return
             if self._process is not None:
                 QtWidgets.QMessageBox.warning(
                     self, text["tab_history"], text["verify_fork_process_active"]
@@ -3594,7 +5066,101 @@ def create_desktop_window(
                 else:
                     self._refresh_static_tabs()
 
+        def _open_parse_review(self, run_dir: str):
+            if self._process is not None or self._commands_process is not None:
+                return
+            if self._parse_review_window is not None:
+                if self._parse_review_run_dir != run_dir:
+                    return
+                if self._parse_review_window.isHidden():
+                    self._parse_review_window.show()
+                self._parse_review_window.raise_()
+                self._parse_review_window.activateWindow()
+                self._update_run_controls()
+                self._update_history_actions()
+                return
+            controller_factory = parse_review_controller_factory
+            if controller_factory is None:
+                from core.app.parse_review import ParseReviewController
+                controller_factory = ParseReviewController
+            try:
+                controller = controller_factory(run_dir)
+                if controller.pending_count() == 0:
+                    self._continue_parse_review(run_dir)
+                    return
+            except (OSError, RuntimeError, ValueError, sqlite3.DatabaseError) as exc:
+                QtWidgets.QMessageBox.warning(self, text["open_parse_review"], str(exc))
+                return
+
+            def complete():
+                if controller.pending_count() != 0:
+                    raise ValueError(text["parse_review_pending_warning"])
+                self._continue_parse_review(run_dir)
+
+            def review_dismissed():
+                self._update_run_controls()
+                self._update_history_actions()
+
+            factory = parse_review_window_factory
+            if factory is None:
+                from .parse_review import create_parse_review_window as factory
+            self._parse_review_window = factory(
+                run_dir,
+                load_tasks=controller.load_tasks,
+                answer_task=controller.submit_decision,
+                skip_remaining=lambda: controller.skip_remaining_reviews(),
+                on_complete=complete,
+                on_dismiss=review_dismissed,
+                review_text=text,
+            )
+            self._parse_review_run_dir = run_dir
+            if hasattr(self._parse_review_window, "set_dark_theme"):
+                self._parse_review_window.set_dark_theme(self._dark)
+            self._parse_review_window.setAttribute(
+                QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, False
+            )
+            self._parse_review_window.show()
+            self.phase_label.setText(text["parse_review_waiting"])
+            self._update_run_controls()
+            self._update_history_actions()
+
+        def _continue_parse_review(self, run_dir: str):
+            command, _ignored, environment = _command_spec(
+                resume_command_builder(run_dir)
+            )
+            if not command:
+                raise ValueError(text["resume_latest_no_history"])
+            environment = {
+                **self._run_environment_by_dir.get(run_dir, {}),
+                **environment,
+            }
+            window = (
+                self._parse_review_window
+                if self._parse_review_run_dir == run_dir else None
+            )
+            if window is not None:
+                self._parse_review_window = None
+                self._parse_review_run_dir = None
+                # Resume is called from the dialog's own button handler. Qt
+                # must finish dispatching that handler before destroying it.
+                self._retiring_parse_review_window = window
+                window.hide()
+                window.destroyed.connect(
+                    lambda *_args: QtCore.QTimer.singleShot(
+                        0, lambda: setattr(self, "_retiring_parse_review_window", None)
+                    )
+                )
+                window.deleteLater()
+            self._start_process(command, environment=environment)
+            self._update_run_controls()
+            self._update_history_actions()
+
         def _open_guided_fetch(self, run_dir: str):
+            if self._commands_process is not None:
+                self._set_commands_status(
+                    text["commands_status_busy_commands"], error=True
+                )
+                return
             if self._guided_window is not None:
                 self._guided_window.raise_()
                 self._guided_window.activateWindow()
@@ -3622,11 +5188,23 @@ def create_desktop_window(
                         },
                     )
 
+            def on_ocr_event(event):
+                ref_id = event.get("ref_id") if isinstance(event, dict) else None
+                status = event.get("status") if isinstance(event, dict) else None
+                if not isinstance(ref_id, str) or status not in {"queued", "running", "done", "failed"}:
+                    return
+                reason = str(event.get("reason") or "").strip()
+                suffix = f": {reason}" if reason else ""
+                self._append_console_output(f"OCR [{ref_id}] {status}{suffix}\n")
+
             self._guided_window = factory(
                 run_dir,
                 submit_source=controller.stage_source,
                 proceed=proceed,
                 discard_source=controller.discard_source,
+                run_ocr=getattr(controller, "run_ocr", None),
+                on_ocr_event=on_ocr_event,
+                ocr_text=text,
                 submit_identity_review=controller.submit_identity_decision,
                 identity_review_allowed=controller.identity_review_allowed,
             )
@@ -3642,6 +5220,14 @@ def create_desktop_window(
             self._update_run_controls()
 
         def closeEvent(self, event):
+            if self._commands_process is not None:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    text["app_title"],
+                    text["commands_running_close"],
+                )
+                event.ignore()
+                return
             if self._process is not None:
                 QtWidgets.QMessageBox.warning(
                     self,
@@ -3665,6 +5251,7 @@ def create_desktop_window(
                 for kind in tuple(self._load_futures):
                     self._invalidate_load(kind)
                 self._load_pool.shutdown(wait=False, cancel_futures=True)
+            self._cleanup_console_capture()
             super().closeEvent(event)
 
     return DesktopWindow()
@@ -3677,6 +5264,10 @@ def run_desktop(**kwargs: Any) -> int:
     kwargs.setdefault("background_loading", True)
     window = create_desktop_window(**kwargs)
     window.show()
+    startup = getattr(app, "_callimachus_startup_session", None)
+    if startup is not None:
+        startup.window_ready(window)
+        return 0
     return app.exec()
 
 
@@ -3705,17 +5296,19 @@ def _load_qt():
     return QtCore, QtGui, QtWidgets
 
 
-def _wordmark(QtCore, QtGui, width: int, height: int, ratio: float):
-    from PySide6 import QtSvg
-    path = Path(__file__).resolve().parents[1] / "report" / "human" / "assets" / "logo.svg"
-    renderer = QtSvg.QSvgRenderer(str(path))
-    pixmap = QtGui.QPixmap(max(1, round(width * ratio)), max(1, round(height * ratio)))
-    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
-    if renderer.isValid():
-        renderer.setViewBox(QtCore.QRectF(0, 0, 1700, 360))
-        painter = QtGui.QPainter(pixmap)
-        renderer.render(painter)
-        painter.end()
+def _wordmark(QtCore, QtGui, width: int, height: int, ratio: float, *, dark: bool = False):
+    name = "logo-dark.png" if dark else "logo.png"
+    path = Path(__file__).resolve().parent / "assets" / name
+    source = QtGui.QPixmap(str(path))
+    if source.isNull():
+        return source
+    # Trim the transparent padding in the official 2400x576 raster asset.
+    source = source.copy(QtCore.QRect(145, 109, 2196, 360))
+    pixmap = source.scaled(
+        max(1, round(width * ratio)), max(1, round(height * ratio)),
+        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        QtCore.Qt.TransformationMode.SmoothTransformation,
+    )
     pixmap.setDevicePixelRatio(ratio)
     return pixmap
 
@@ -3816,6 +5409,7 @@ def _stylesheet(*, dark: bool, font_size: int = 13) -> str:
     progress_error_fill = "#843341" if dark else "#f4adb7"
     return f"""
         QWidget {{ background: {background}; color: {text}; font-family: 'Segoe UI', sans-serif; font-size: {font_size}px; }}
+        QPlainTextEdit#commandsOutput {{ font-size: {max(15, font_size + 2)}px; }}
         #brandHeader, #card, #phaseLabel, #settingsSection {{ background: {surface}; border: 1px solid {border}; border-radius: 10px; padding: 8px; }}
         #brandHeader QLabel, #settingsSection QWidget, #settingsSection QLabel {{ background: transparent; }}
         QFrame#brandLogoTile {{ background-color: #ffffff; border: 1px solid #d5dce8; border-radius: 8px; }}
@@ -3856,6 +5450,9 @@ def _stylesheet(*, dark: bool, font_size: int = 13) -> str:
         #runResumeButton:disabled {{ color: #725615; background: #f6dfa8; border-color: #ead39c; }}
         #runStopButton {{ background: #b52b36; color: white; border-color: #b52b36; }}
         #runStopButton:hover {{ background: #94222c; border-color: #94222c; }}
+        #exportReportButton {{ background: {'#174b49' if dark else '#d7f2ee'}; color: {'#d8faf4' if dark else '#075d55'}; border-color: {'#3b9288' if dark else '#69b8ac'}; }}
+        #exportReportButton:hover {{ background: {'#24645f' if dark else '#bce7df'}; border-color: {'#62bcae' if dark else '#298e80'}; }}
+        #exportReportButton:disabled {{ background: {background}; color: #8795a8; border-color: {border}; }}
         #phaseProgress {{ min-height: 18px; max-height: 18px; border: 0; border-radius: 8px; background: {accent}; color: {progress_text}; text-align: center; font-size: {max(10, font_size - 2)}px; }}
         #phaseProgress::chunk {{ border-radius: 6px; background: {progress_fill}; }}
         #phaseProgress[error="true"] {{ background: {'#3b1d24' if dark else '#ffe5e8'}; color: {progress_error_text}; }}

@@ -1,0 +1,101 @@
+{
+  "created_at_utc": "2026-09-27T21:10:28.474058+00:00",
+  "kind": "public_redacted_derivative",
+  "metadata_corrections": {
+    "fields": [
+      {
+        "new": 2014,
+        "old": 1929,
+        "path": "projection.sources[32].display_year"
+      },
+      {
+        "new": "Srivastava et al., 2014",
+        "old": "Srivastava et al., 1929",
+        "path": "projection.sources[32].display_citation"
+      },
+      {
+        "new": 2014,
+        "old": 1929,
+        "path": "projection.sources[32].reference.year"
+      },
+      {
+        "new": 2014,
+        "old": 1929,
+        "path": "projection.sources[32].reference.ay_year"
+      },
+      {
+        "new": "Srivastava et al., 2014",
+        "old": "Srivastava et al., 1929",
+        "path": "projection.pairs[47].source_display_citation"
+      }
+    ],
+    "historical_resolver_metadata_unchanged": true,
+    "reason": "1929 is the first page of 1929-1958; the bibliography gives 2014 as the publication year",
+    "ref_id": "ref-9637a32158",
+    "ref_number": 33,
+    "title": "Dropout: a simple way to prevent neural networks from overfitting"
+  },
+  "original_html_sha256": "002a156a9944bcfea9f368c3a83dcb51772b0b5dc2ab811bbfffa7e17e71982b",
+  "original_seal_present": true,
+  "public_html_sha256": "1318957ec9e0880ef9b7edbe5286f9bf0d93a5c138650f441d1380063fa74fb6",
+  "reason": "Omitted manuscript/source prose not needed to explain verdicts",
+  "redacted_fields": {
+    "claims.claim.context_window": 44,
+    "manuscript.input_path": 1,
+    "pairs.candidate_events.payload": 187,
+    "pairs.candidates.evidence": 63,
+    "pairs.candidates.explanation": 63,
+    "pairs.candidates.grounded": 63,
+    "pairs.candidates.outcome_fields": 63,
+    "pairs.dispatch_events.payload": 756,
+    "pairs.logical_requests.payload": 252,
+    "pairs.rejected_jury2_attempts.jury2_review.reason": 6,
+    "sources.fetch_attempts.trace": 177,
+    "sources.resolve.abstract": 40,
+    "sources.resolve.attempts.abstract": 92
+  },
+  "redacted_source_ref_ids": [
+    "ref-0054d6ae6f",
+    "ref-022451985b",
+    "ref-08fcf24ced",
+    "ref-27536afa33",
+    "ref-29fbe7d74e",
+    "ref-2ec40cd520",
+    "ref-2f14ec8886",
+    "ref-342d2cd2f1",
+    "ref-3591eff7f7",
+    "ref-3dc82d518c",
+    "ref-47745b7a2e",
+    "ref-52a5b6bb59",
+    "ref-61cb4e1051",
+    "ref-634683c637",
+    "ref-64843f6a21",
+    "ref-6c414edef6",
+    "ref-70b6c592f1",
+    "ref-7274156ae6",
+    "ref-73c8ab5404",
+    "ref-762f485ea7",
+    "ref-804e3d5137",
+    "ref-84382cef70",
+    "ref-852ad82906",
+    "ref-89824c7a9d",
+    "ref-89f1d40a47",
+    "ref-8e59f42242",
+    "ref-952d4179cf",
+    "ref-953e91bd8b",
+    "ref-95f8fef698",
+    "ref-9637a32158",
+    "ref-aa50385362",
+    "ref-b201cb080f",
+    "ref-b23ce82fa7",
+    "ref-b5e15fbf63",
+    "ref-cbf526722d",
+    "ref-e77bafb030",
+    "ref-e935a528dc",
+    "ref-f290671b19",
+    "ref-f5bac64c45",
+    "ref-faae8d8cf5"
+  ],
+  "tool": "core.report.human.redaction",
+  "tool_version": "1.1.0"
+}
