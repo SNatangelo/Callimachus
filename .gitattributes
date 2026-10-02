@@ -5,3 +5,6 @@ examples/report/index.html.redaction.json -text
 # Keep the public CLA copy and its versioned source byte-stable for hashing.
 CLA.md text eol=lf
 .github/cla/agreements/CLA-v1.1.md text eol=lf
+
+# Preserve the synthetic PDF smoke fixture without newline conversion.
+tests/fixtures/parse_golden/inputs/pdf_author_year_basic.pdf -text
