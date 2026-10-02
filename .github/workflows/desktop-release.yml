@@ -102,6 +102,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Verify version-matched dependency source archives
         run: python packaging/assemble_sources.py build/source-audit
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: callimachus-dependency-sources
+          path: build/source-audit/*
+          if-no-files-found: error
+          retention-days: 14
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')

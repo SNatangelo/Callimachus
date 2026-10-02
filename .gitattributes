@@ -1,3 +1,7 @@
 # Preserve publication artifacts byte-for-byte for their provenance hashes.
 examples/report/index.html -text
 examples/report/index.html.redaction.json -text
+
+# Keep the public CLA copy and its versioned source byte-stable for hashing.
+CLA.md text eol=lf
+.github/cla/agreements/CLA-v1.1.md text eol=lf

@@ -1,6 +1,7 @@
 """Offline regression tests. These tests never access GitHub or collect real signatures."""
 import base64
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -10,7 +11,15 @@ HERE = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("cla_bot", HERE / "cla_bot.py")
 bot = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bot)
-DOC = (HERE / "agreements/CLA-v1.1.md").read_bytes()
+
+
+def git_file_bytes(path):
+    """Read text files as GitHub's Contents API serves the committed blob."""
+    return path.read_bytes().replace(b"\r\n", b"\n")
+
+
+DOC = git_file_bytes(HERE / "agreements/CLA-v1.1.md")
+ROOT_DOC = git_file_bytes(HERE.parents[1] / "CLA.md")
 
 
 def encode(raw):
@@ -24,6 +33,7 @@ class FakePublic:
         self.comments = []
         self.statuses = []
         self.doc = DOC
+        self.root_doc = DOC
         self.pages_called = 0
         self.pr = {"state": "open", "head": {"sha": "a"*40},
                    "user": {"id": 17, "login": "contributor"}, "html_url": "https://github.com/SNatangelo/Callimachus/pull/7"}
@@ -36,7 +46,12 @@ class FakePublic:
         if "/statuses/" in path:
             self.statuses.append(copy.deepcopy(data)); return {}
         if "/contents/" in path:
-            return encode(self.doc)
+            file_path = path.split("/contents/", 1)[1].split("?", 1)[0]
+            if file_path == "CLA.md":
+                return encode(self.root_doc)
+            if file_path == bot.AGREEMENT_PATH:
+                return encode(self.doc)
+            raise AssertionError((method, path))
         if path == "/graphql":
             return {"data": {"repository": {"pullRequest": {"commits": {
                 "nodes": [{"commit": {"authors": {"nodes": [{"user": p} for p in self.people],
@@ -117,6 +132,11 @@ class WorkflowTests(unittest.TestCase):
         self.public.doc = DOC + b"changed"
         with self.assertRaises(bot.Failure): self.run_flow()
         self.assertFalse(self.private.files)
+    def test_different_root_agreement_fails(self):
+        self.public.root_doc = DOC + b"changed root"
+        with self.assertRaises(bot.Failure): self.run_flow()
+        self.assertFalse(self.private.files)
+        self.assertEqual(self.public.statuses[-1]["state"], "failure")
     def test_archive_write_failure_fails(self):
         self.private.fail_put = True
         with self.assertRaises(bot.ApiError): self.run_flow()
@@ -171,6 +191,12 @@ class WorkflowTests(unittest.TestCase):
         self.event["issue"]["pull_request"] = {"url": "https://api.github.com/repos/SNatangelo/Callimachus/pulls/7"}
         self.run_flow(); self.add_signature(); self.run_flow()
         self.assertEqual(self.public.statuses[-1]["context"], "cla/signatures")
+
+
+class AgreementMirrorTests(unittest.TestCase):
+    def test_root_copy_matches_versioned_document_and_pinned_hash(self):
+        self.assertEqual(ROOT_DOC, DOC)
+        self.assertEqual(hashlib.sha256(DOC).hexdigest(), bot.AGREEMENT_SHA256)
 
 
 if __name__ == "__main__":

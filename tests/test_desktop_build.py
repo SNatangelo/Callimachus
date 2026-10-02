@@ -62,6 +62,86 @@ def test_release_runner_requires_binary_dependency_wheels():
     assert "python packaging/assemble_sources.py build/source-audit" in workflow
 
 
+@pytest.mark.parametrize(
+    "ref_name",
+    [
+        pytest.param("Callimachus-v1.1.0", id="branch-ref"),
+        pytest.param("v1.1.0", id="tag-ref"),
+        pytest.param(None, id="no-ref"),
+    ],
+)
+def test_build_metadata_uses_project_version_for_every_git_ref(
+    monkeypatch, tmp_path, ref_name,
+):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_metadata", "build_desktop.py")
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path / "build")
+    (tmp_path / "VERSION").write_text(" 1.1.0 \n", encoding="utf-8")
+    if ref_name is None:
+        monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_REF_NAME", ref_name)
+
+    git_calls = []
+
+    def check_output(arguments, **kwargs):
+        git_calls.append((arguments, kwargs))
+        if arguments == ["git", "rev-parse", "HEAD"]:
+            return "a" * 40
+        if arguments == ["git", "status", "--porcelain", "--untracked-files=normal"]:
+            return " M tracked.py\n"
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(build.subprocess, "check_output", check_output)
+    metadata_path = build._metadata()
+
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == {
+        "revision": "a" * 40,
+        "version": "1.1.0",
+        "dirty": True,
+    }
+    assert [arguments for arguments, _ in git_calls] == [
+        ["git", "rev-parse", "HEAD"],
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
+    ]
+
+
+@pytest.mark.parametrize("version_contents", [None, "", " \n\t"])
+def test_build_metadata_rejects_missing_or_empty_version(
+    monkeypatch, tmp_path, version_contents,
+):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_metadata_invalid", "build_desktop.py")
+    monkeypatch.setattr(build, "ROOT", tmp_path)
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path / "build")
+    if version_contents is not None:
+        (tmp_path / "VERSION").write_text(version_contents, encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="non-empty VERSION"):
+        build._metadata()
+
+
+def test_manual_source_audit_uploads_verified_archives_without_publishing():
+    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(
+        encoding="utf-8"
+    )
+    source_audit = workflow.split("\n  source-audit:\n", 1)[1].split(
+        "\n  release:\n", 1
+    )[0]
+    assert "if: github.event_name == 'workflow_dispatch'" in source_audit
+    assert "run: python packaging/assemble_sources.py build/source-audit" in source_audit
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7" in source_audit
+    assert "name: callimachus-dependency-sources" in source_audit
+    assert "path: build/source-audit/*" in source_audit
+    assert "if-no-files-found: error" in source_audit
+    assert "retention-days: 14" in source_audit
+
+    release = workflow.split("\n  release:\n", 1)[1]
+    assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
+    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --generate-notes' in release
+
+
 def test_release_runner_builds_and_smokes_windows_installer():
     workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(
         encoding="utf-8"

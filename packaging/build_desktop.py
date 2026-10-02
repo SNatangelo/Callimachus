@@ -70,6 +70,12 @@ def _dispatch_modules() -> tuple[str, ...]:
 
 
 def _metadata() -> Path:
+    try:
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("a non-empty VERSION file is required to build a release") from exc
+    if not version:
+        raise RuntimeError("a non-empty VERSION file is required to build a release")
     revision = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=5,
     ).strip()
@@ -82,7 +88,7 @@ def _metadata() -> Path:
     destination = BUILD_ROOT / "build-metadata.json"
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps({
-        "revision": revision, "version": os.environ.get("GITHUB_REF_NAME", ""),
+        "revision": revision, "version": version,
         "dirty": dirty,
     }) + "\n", encoding="utf-8")
     return destination
