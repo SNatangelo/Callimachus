@@ -1,7 +1,14 @@
 # Changelog
 
-## 1.1.0 — prepared
+## 1.1.0 — 2026-10-02
 
+- Add a paged desktop Console for CLI commands and analysis output, with
+  on-demand history loading and complete session-log export.
+- Add assisted OCR in Guided Fetch for scanned PDFs, with operator confirmation,
+  per-source progress and on-demand preview of extracted text.
+- Add manual Parse review for ambiguous citation/reference links and source
+  identities, recording operator decisions with provenance and blocking Verify
+  forks while review is pending.
 - Correct publication-year parsing when the first year-shaped token is the
   start of a terminal four-digit page range, as in Dropout (`1929–1958,
   2014`).
