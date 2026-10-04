@@ -135,7 +135,7 @@ def test_manual_source_audit_uploads_verified_archives_without_publishing():
     assert "name: callimachus-dependency-sources" in source_audit
     assert "path: build/source-audit/*" in source_audit
     assert "if-no-files-found: error" in source_audit
-    assert "retention-days: 14" in source_audit
+    assert "retention-days: 1" in source_audit
 
     release = workflow.split("\n  release:\n", 1)[1]
     assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
