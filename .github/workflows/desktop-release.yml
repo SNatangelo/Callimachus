@@ -93,7 +93,7 @@ jobs:
           name: callimachus-${{ matrix.platform }}
           path: build/desktop/artifacts/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   source-audit:
     if: github.event_name == 'workflow_dispatch'
@@ -107,7 +107,7 @@ jobs:
           name: callimachus-dependency-sources
           path: build/source-audit/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
