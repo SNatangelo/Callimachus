@@ -19,6 +19,9 @@
 
 <p align="center"><strong>Download the desktop app</strong></p>
 
+<p align="center"><strong><a href="https://apps.microsoft.com/detail/9pf67kq4543z">Get Callimachus for Windows from Microsoft Store</a></strong></p>
+<p align="center"><sub>Install and receive updates through Microsoft Store. Linux, macOS and standalone Windows packages are available from <a href="https://github.com/SNatangelo/Callimachus/releases/latest">GitHub Releases</a>.</sub></p>
+
 <p align="center">
   <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-Setup.exe"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-windows-dark.svg"><img src="assets/readme/download-windows.svg" alt="Download Callimachus installer for Windows x64" width="184"></picture></a>
   <a href="https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-linux-x64.tar.gz"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/readme/download-linux-dark.svg"><img src="assets/readme/download-linux.svg" alt="Download Callimachus archive for Linux x64" width="184"></picture></a>
@@ -193,11 +196,13 @@ requirements with `python -m pip`.
 
 ### Native desktop releases
 
-Download the latest desktop build:
+For Windows, [install Callimachus from Microsoft Store](https://apps.microsoft.com/detail/9pf67kq4543z) to receive updates through the Store. Automatic updates follow your Microsoft Store settings; you can also check for updates in the Store. GitHub packages are updated separately and may be released at a different time.
+
+Choose a desktop download:
 
 | Platform | Download |
 | --- | --- |
-| Windows x64 | [Installer](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-Setup.exe) · [Portable ZIP](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-windows-x64.zip) |
+| Windows x64 | [Microsoft Store](https://apps.microsoft.com/detail/9pf67kq4543z) · [Installer](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-Setup.exe) · [Portable ZIP](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-windows-x64.zip) |
 | Linux x64 | [Archive](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-linux-x64.tar.gz) |
 | macOS Apple Silicon | [Archive](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-arm64.tar.gz) |
 | macOS Intel | [Archive](https://github.com/SNatangelo/Callimachus/releases/latest/download/Callimachus-macos-x64.tar.gz) |
