@@ -3,8 +3,10 @@
 This contract concerns the separate Windows MSIX channel. It does not certify
 the app. NSIS and Linux remain separate channels. Do not compile until authorised.
 
-For the exact first-submission baseline, preserved native recipes, package
-identity and local build commands, see [Recorded Microsoft Store build](microsoft-store-build.md).
+The preserved native recipes and their build plan are in
+[the Store build plan](../../packaging/store/native-recipes/build-plan.json).
+Build an MSIX with [`packaging/build_msix.py`](../../packaging/build_msix.py)
+after the required package identity and tested Windows distribution are ready.
 
 ## Before submission
 
