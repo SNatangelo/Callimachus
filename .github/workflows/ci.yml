@@ -44,6 +44,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Linux Qt library
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1
       - name: Install desktop test dependencies
         run: |
           python -m pip install --upgrade pip
@@ -138,11 +141,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install Linux Qt library
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt pytest
       - name: Run selected test suite
         env:
           CITATION_VERIFIER_LLM_BACKEND: dummy
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
         run: python -m pytest tests -q
