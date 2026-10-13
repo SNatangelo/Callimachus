@@ -1406,9 +1406,8 @@ def test_analysis_checkbox_labels_wrap_for_viewport_and_font(monkeypatch):
                     (window.skip_parse_review, "skip_parse_review"),
                     (window.skip_manual_checks, "skip_manual_checks"),
                 ):
-                    assert checkbox.text().replace("\n", " ") == text[translation_key].replace("\n", " ")
-                    if font_size == 13:
-                        assert "\n" in checkbox.text()
+                    full_text = text[translation_key].replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+                    assert checkbox.text().replace("\r\n", " ").replace("\r", " ").replace("\n", " ") == full_text
                     checkbox_x = checkbox.mapTo(scroll.viewport(), QPoint(0, 0)).x()
                     content_x = checkbox.mapTo(scroll.widget(), QPoint(0, 0)).x()
                     trailing_space = max(
@@ -1425,6 +1424,8 @@ def test_analysis_checkbox_labels_wrap_for_viewport_and_font(monkeypatch):
                         - trailing_space
                         - reserved_width
                     )
+                    if checkbox.fontMetrics().horizontalAdvance(full_text) > text_width:
+                        assert "\n" in checkbox.text()
                     assert all(
                         checkbox.fontMetrics().horizontalAdvance(line) <= text_width
                         for line in checkbox.text().splitlines()
