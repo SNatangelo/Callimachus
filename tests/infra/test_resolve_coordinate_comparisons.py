@@ -13,7 +13,8 @@ from core.resolve import service as resolve
 from core.resolve.journal_authority import assess_local_journal, build_catalog
 from core.resolve.matching import _cited_coordinate_comparisons, _metadata_match_profile
 from core.resolve.providers import crossref_metadata
-from tools.build_journal_authority import _marcxml_records, _nlm_records
+from core.resolve.journal_authority_sources import marcxml_records as _marcxml_records
+from core.resolve.journal_authority_sources import nlm_records as _nlm_records
 
 
 def _ref(*, coordinates=()):
