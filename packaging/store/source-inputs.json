@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "publication_channel": "supplementary Microsoft Store sources for existing release v1.1.0",
+  "release_tag": "v1.1.0",
+  "app_version": "1.1.0",
+  "msix_version": "1.1.0.0",
+  "base_revision": "3485a3932525ed25da2a6c4b5317d860c8679573",
+  "working_tree_dirty": true,
+  "store_certification": "not performed; no certification outcome is claimed",
+  "store_certification_guaranteed": false,
+  "msix_sha256": "b74b7155fcefa0dd675357b2fd371de038d1eb9c8b557bb925534d1871325312",
+  "msix_included": false,
+  "application_source_archive": {
+    "filename": "Callimachus-source-v1.1.0-microsoft-store.tar.gz",
+    "sha256": "c9fd0bd332dcc0b1a7ca465076664442f3746a5005c2f828e8a726586a6f846a",
+    "size_bytes": 3539793,
+    "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/Callimachus-source-v1.1.0-microsoft-store.tar.gz"
+  },
+  "native_build_source_archive": {
+    "filename": "Callimachus-microsoft-store-build-sources.tar.gz",
+    "sha256": "f66a2225f636155367dbff8eb4ffbe876c73d1dd114cab3ac8d92cb1972a107d",
+    "size_bytes": 162568181,
+    "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/Callimachus-microsoft-store-build-sources.tar.gz"
+  },
+  "native_build_baseline": {
+    "compiler_toolset": "14.39.33523",
+    "linker": "14.39.33523",
+    "framework_runtime": "14.40.33728.0",
+    "cpython": "3.13.15"
+  },
+  "existing_release_source_assets": [
+    {
+      "filename": "qt-everywhere-src-6.11.2.tar.xz",
+      "sha256": "6dcfbca271d76a6502741a2c0dc6fc98ef7dd0b7b4cfd0abcebb285a86a26f33",
+      "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/qt-everywhere-src-6.11.2.tar.xz"
+    },
+    {
+      "filename": "qt-everywhere-opensource-src-5.15.19.tar.xz",
+      "sha256": "173c2326dae138bbb0d98921e9d911e55c00163d93a6db29f294b5e19ff306ae",
+      "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/qt-everywhere-opensource-src-5.15.19.tar.xz"
+    },
+    {
+      "filename": "pyside-setup-everywhere-src-6.11.2.tar.xz",
+      "sha256": "cba47efbaad1bedd529725cbc14e21f156c7a19366f07b3edfbb076ffd7afdf8",
+      "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/pyside-setup-everywhere-src-6.11.2.tar.xz"
+    },
+    {
+      "filename": "pymupdf-1.28.0.tar.gz",
+      "sha256": "e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d",
+      "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/pymupdf-1.28.0.tar.gz"
+    },
+    {
+      "filename": "mupdf-1.28.0-source.tar.gz",
+      "sha256": "21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2",
+      "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/mupdf-1.28.0-source.tar.gz"
+    },
+    {
+      "filename": "opencv_python-5.0.0.93.tar.gz",
+      "sha256": "66aac3e5b5faa48d4025816592f3af19e4bfc2c68dec067bae2dbb4ca10aa9e2",
+      "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/opencv_python-5.0.0.93.tar.gz"
+    },
+    {
+      "filename": "ffmpeg-8.1.1.tar.xz",
+      "sha256": "b6863adde98898f42602017462871b5f6333e65aec803fdd7a6308639c52edf3",
+      "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/ffmpeg-8.1.1.tar.xz"
+    },
+    {
+      "filename": "pyinstaller-6.22.3.tar.gz",
+      "sha256": "05eb2f5615503e72939a7224d68b4aff572c6b0438ee4a17d0a4b481f399362d",
+      "url": "https://github.com/SNatangelo/Callimachus/releases/download/v1.1.0/pyinstaller-6.22.3.tar.gz"
+    }
+  ],
+  "additional_sources_in_build_archive": [
+    {
+      "path": "sources/brotli-1.2.0.tar.gz",
+      "sha256": "e310f77e41941c13340a95976fe66a8a95b01e783d430eeaf7a2f87e0a57dd0a",
+      "size_bytes": 7388632,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/f7/16/c92ca344d646e71a43b8bb353f0a6490d7f6e06210f8554c8f874e454285/brotli-1.2.0.tar.gz"
+    },
+    {
+      "path": "sources/cffi-2.1.1.tar.gz",
+      "sha256": "dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be",
+      "size_bytes": 530807,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz"
+    },
+    {
+      "path": "sources/charset_normalizer-3.5.1.tar.gz",
+      "sha256": "6117b84ea48435e5356dc737f5121485c30920ba43375fa7b434fd753df0eac3",
+      "size_bytes": 171764,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/e5/3f/143b048436775b0f76ac3eec145c019e8173ccc2885c8f20319b996d5e83/charset_normalizer-3.5.1.tar.gz"
+    },
+    {
+      "path": "sources/cryptography-50.0.1.tar.gz",
+      "sha256": "5dd9bda1c12b4162f6ff568eeb5e0ff956c28d14406e875cfe8a63a2d414ff20",
+      "size_bytes": 880381,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/bb/ad/5d6702db60b1e40b41ef513b6967ff5848f307d50f8449baf1634f5908f1/cryptography-50.0.1.tar.gz"
+    },
+    {
+      "path": "sources/geos-3.13.1.tar.bz2",
+      "sha256": "df2c50503295f325e7c8d7b783aca8ba4773919cde984193850cf9e361dfd28c",
+      "size_bytes": 6839955,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://download.osgeo.org/geos/geos-3.13.1.tar.bz2"
+    },
+    {
+      "path": "sources/greenlet-3.5.6.tar.gz",
+      "sha256": "8e67c43bdfc88d5fee6db0d3e40175b362fc95fb85f0412d233b9b203c53a575",
+      "size_bytes": 207653,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/3e/6e/0091f175ccd02b02bc8811bbcbcc6ac2e980be116e3b2f7a736ca322bf84/greenlet-3.5.6.tar.gz"
+    },
+    {
+      "path": "sources/libyaml-0.2.5.tar.gz",
+      "sha256": "fa240dbf262be053f3898006d502d514936c818e422afdcf33921c63bed9bf2e",
+      "size_bytes": 85055,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://github.com/yaml/libyaml/releases/download/0.2.5/yaml-0.2.5.tar.gz"
+    },
+    {
+      "path": "sources/numpy-2.5.3.tar.gz",
+      "sha256": "df2d5874ff183595a4ba404edd04f6bd9b5505c1d7708573f6a6c17489a67563",
+      "size_bytes": 20791231,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/13/01/11703282db468b85f6f7b8c7f22d058de5970d5c7e60a3a8aaa313c3de36/numpy-2.5.3.tar.gz"
+    },
+    {
+      "path": "sources/openssl-4.0.2.tar.gz",
+      "sha256": "736b467530f916737b7031310ccb21d8218c6229e61e8e160cd1d3458cd543a8",
+      "size_bytes": 55153883,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://mirror.openssl-library.org/source/old/4.0/openssl-4.0.2.tar.gz"
+    },
+    {
+      "path": "sources/pillow-12.3.0.tar.gz",
+      "sha256": "3b8182a766685eaa002637e28b4ec8d6b18819a0c71f579bf0dbaa5830297cce",
+      "size_bytes": 47025035,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/1c/3d/bb7fca845737cf9d7dbde16ed1843984665ff2e0a518f5db43e77ec540b9/pillow-12.3.0.tar.gz"
+    },
+    {
+      "path": "sources/pyclipper-1.4.0.tar.gz",
+      "sha256": "9882bd889f27da78add4dd6f881d25697efc740bf840274e749988d25496c8e1",
+      "size_bytes": 54489,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/f6/21/3c06205bb407e1f79b73b7b4dfb3950bd9537c4f625a68ab5cc41177f5bc/pyclipper-1.4.0.tar.gz"
+    },
+    {
+      "path": "sources/Python-3.13.15.tar.xz",
+      "sha256": "1e66a7945a48390ee4c2a4268a0e4185884059a13c4aab6d148aa208deea4a76",
+      "size_bytes": 23160540,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://www.python.org/ftp/python/3.13.15/Python-3.13.15.tar.xz"
+    },
+    {
+      "path": "sources/pyyaml-6.0.3.tar.gz",
+      "sha256": "d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f",
+      "size_bytes": 130960,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz"
+    },
+    {
+      "path": "sources/shapely-2.1.2.tar.gz",
+      "sha256": "2ed4ecb28320a433db18a5bf029986aa8afcfd740745e78847e330d5d94922a9",
+      "size_bytes": 315489,
+      "origin": "pinned upstream source archive",
+      "upstream_url": "https://files.pythonhosted.org/packages/4d/bc/0989043118a27cccb4e906a46b7565ce36ca7b57f5a18b78f4f1b0f72d9d/shapely-2.1.2.tar.gz"
+    }
+  ],
+  "native_recipe_files": [
+    {
+      "path": "native-recipes/audit-wheels.py",
+      "sha256": "bd08e69c5ef1e954540776e8200818c825f9bb6968426e046026895669d926fd"
+    },
+    {
+      "path": "native-recipes/build-mupdf-binding.py",
+      "sha256": "537b39e916ffab82afcc695887e8143ad63cb4e6f472fc2028509daf39fbf05b"
+    },
+    {
+      "path": "native-recipes/build-opencv-portable.py",
+      "sha256": "6df4336e754df3dea18f1fc6e2274d4ec4a9a70f78db0b82d28d2589f6084e5f"
+    },
+    {
+      "path": "native-recipes/build-plan.json",
+      "sha256": "c5ae0ed559bd3db3b73ed7a583f693ed3177ed1d2fd54e89e864c0992686d224"
+    },
+    {
+      "path": "native-recipes/cpython-build.ps1",
+      "sha256": "41c51048fc3a523d91a292310119c5028de00e99a34d7858a3d9f4ff60629d18"
+    },
+    {
+      "path": "native-recipes/finish-onnxruntime.ps1",
+      "sha256": "d9b8fe92f0d5f5837b1c6825c236a5413f50bb6eb90d282c95ddd150c17bb66b"
+    },
+    {
+      "path": "native-recipes/framework-runtime-manifest.json",
+      "sha256": "926628090d139d3a3a8d12a3e873268f5b73e93605942f68e047fe1adbf37234"
+    },
+    {
+      "path": "native-recipes/freeze-store-native.py",
+      "sha256": "abfec84425f15754cbe2e0834b423a510250f43653ee9a1461be45dbc1ecf234"
+    },
+    {
+      "path": "native-recipes/original-distributions.json",
+      "sha256": "5a552e74ddea4d2a38cec8f87c323b382941cdda67f661e2e2dc0db940dbe6f1"
+    },
+    {
+      "path": "native-recipes/prepare-final-requirements.py",
+      "sha256": "bd06572b11ad4f5b8549b36d8ffc2537e42b4c68cbb352e5d224e934b138a743"
+    },
+    {
+      "path": "native-recipes/prepare-openblas.py",
+      "sha256": "4d1607c9ac98a30cb1a58e81d3ea875dca9384ca3c5bc71fb32bd38c59271476"
+    },
+    {
+      "path": "native-recipes/python-sources/manifest.json",
+      "sha256": "32961a8b36947e68966dbd2fad6cf6f7717de4c2bddc2e1c03599811903714fe"
+    },
+    {
+      "path": "native-recipes/resume-onnxruntime-sdk.ps1",
+      "sha256": "30e29df73b116aa7e128e590f35729a6d62eddff3d68cd3e18868deb9d50f456"
+    },
+    {
+      "path": "native-recipes/resume-onnxruntime.ps1",
+      "sha256": "948b17db346632cdf6885c2861f5abb5a3e859aa1495c3e1d11675ba734af685"
+    },
+    {
+      "path": "native-recipes/run_waf.py",
+      "sha256": "17656783095c988ecabb06bd5255c3ddecd6924b81051058f33c190213249fbc"
+    },
+    {
+      "path": "native-recipes/source-manifest.json",
+      "sha256": "0cdcf2f700bdd592660e9b052252b29dae3a0d07c23165240dea6a45fe780ada"
+    },
+    {
+      "path": "native-recipes/stage-framework-runtime.py",
+      "sha256": "8766286c37210f4477753c2f9e33cfeabd5411554ef80a5c78c0db5d9f4cd7e1"
+    },
+    {
+      "path": "native-recipes/stage-original-omegaconf.py",
+      "sha256": "a44cdeda9d6e3ad0050c82a63a7179f9082428c8074ce7a1a28bed5bf7e70144"
+    },
+    {
+      "path": "native-recipes/validate-frozen-runtime.py",
+      "sha256": "cf50f71fb6cd927fb13dcc654458865045bd1320abe64701334e0e09fc3a8acd"
+    }
+  ],
+  "bundle_contents": [
+    "native-recipes/**",
+    "native-build-source-manifest.json",
+    "project-source-manifest.json",
+    "Callimachus-dependency-sources.json",
+    "sources/<pinned source archives not already present on v1.1.0>",
+    "README.md",
+    "LICENSE",
+    "LICENSING.md"
+  ]
+}

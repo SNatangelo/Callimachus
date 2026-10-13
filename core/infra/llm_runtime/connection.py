@@ -35,7 +35,10 @@ def db_path(environ: dict[str, str] | None = None) -> str:
         if not root.is_absolute():
             raise RuntimeStateError("CITATION_VERIFIER_STATE_DIR must be absolute")
     else:
-        root = _repository_root() / "storage"
+        from core.app import runtime_paths
+
+        user_root = runtime_paths.user_data_root(source_root=_repository_root())
+        root = Path(user_root) / "storage"
     return str(root / "llm_runtime" / DB_FILENAME)
 
 

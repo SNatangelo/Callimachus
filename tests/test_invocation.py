@@ -28,6 +28,17 @@ def test_project_venv_prefix_is_relative_on_windows():
     ) == r".\.venv\Scripts\python.exe run.py"
 
 
+def test_frozen_prefix_does_not_reference_source_entrypoint(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    assert run_prefix(executable="/opt/Callimachus/Callimachus", platform_name="linux") == (
+        "/opt/Callimachus/Callimachus"
+    )
+    assert run_command(
+        "--run", "/operator path/run", "--resume",
+        executable="/opt/Callimachus/Callimachus", platform_name="linux",
+    ) == "/opt/Callimachus/Callimachus --run '/operator path/run' --resume"
+
+
 def test_windows_project_venv_command_quotes_spaced_arguments():
     command = run_command(
         "--run", r"C:\operator path\run", "--resume",
@@ -91,14 +102,3 @@ def test_generic_run_examples_use_the_current_prefix():
         f"{run_prefix()} --input paper.pdf; "
         f"{run_prefix()} verify --run runs/example"
     )
-
-
-def test_frozen_prefix_does_not_reference_source_entrypoint(monkeypatch):
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    assert run_prefix(executable="/opt/Callimachus/Callimachus", platform_name="linux") == (
-        "/opt/Callimachus/Callimachus"
-    )
-    assert run_command(
-        "--run", "/operator path/run", "--resume",
-        executable="/opt/Callimachus/Callimachus", platform_name="linux",
-    ) == "/opt/Callimachus/Callimachus --run '/operator path/run' --resume"

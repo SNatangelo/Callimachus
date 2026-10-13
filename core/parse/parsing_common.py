@@ -27,9 +27,23 @@ except ImportError:  # direct execution fallback
     import reference_readers
 
 try:
-    from core.parse.citation_coordinates import extract_cited_coordinates
+    from core.parse.citation_coordinates import (
+        _container_suffix_is_closed,
+        _has_closed_issue_scalar_postyear_tuple,
+        _has_closed_parenthesized_journal_tuple,
+        _has_closed_pre_year_colon_journal_tuple,
+        _has_source_spanned_title_bounded_terminal_scalar,
+        extract_cited_coordinates,
+    )
 except ImportError:  # direct execution fallback
-    from citation_coordinates import extract_cited_coordinates
+    from citation_coordinates import (
+        _container_suffix_is_closed,
+        _has_closed_issue_scalar_postyear_tuple,
+        _has_closed_parenthesized_journal_tuple,
+        _has_closed_pre_year_colon_journal_tuple,
+        _has_source_spanned_title_bounded_terminal_scalar,
+        extract_cited_coordinates,
+    )
 
 # Year pattern used across author-year detection, biblio splitting, and
 # reference parsing.  Exported so citation_schemes can use it without
@@ -58,10 +72,145 @@ RANGE_DASHES = "–—−‐‑-"
 # reprint year or a year in the title) keeps the existing precedence.
 _TERMINAL_ISSUE_PAGE_RANGE_YEAR_RE = re.compile(
     rf"\b\d+\s*\(\s*\d+\s*\)\s*:\s*"
-    rf"(?P<first_page>(?:19|20)\d{{2}})\s*[{RANGE_DASHES}]\s*\d{{4}}"
+    rf"(?P<first_page>(?:19|20)\d{{2}})\s*[{RANGE_DASHES}]\s*(?P<last_page>\d{{4}})"
     rf"\s*,\s*(?P<year>(?:19|20)\d{{2}})(?P<suffix>[a-z])?\s*[.]?\s*$",
     re.IGNORECASE,
 )
+_TERMINAL_VOLUME_PAGE_RANGE_YEAR_RE = re.compile(
+    rf"\b\d{{1,4}}\s*(?:\(\s*\d+\s*\))?\s*[,;:]\s*"
+    rf"(?P<first_page>(?:19|20)\d{{2}})\s*[{RANGE_DASHES}]\s*(?P<last_page>(?:19|20)\d{{2}})"
+    rf"\s*\(\s*(?P<year>(?:19|20)\d{{2}})(?P<suffix>[a-z])?\s*\)\s*[.]?\s*$",
+    re.IGNORECASE,
+)
+_TITLE_EMBEDDED_PAGE_RANGE_YEAR_RE = re.compile(
+    rf"(?P<first_page>\d{{1,9}})\s*[{RANGE_DASHES}]\s*"
+    rf"(?P<last_page>\d{{1,9}})\s*"
+    rf"\(\s*(?P<year>(?:19|20)\d{{2}})(?P<suffix>[a-z])?\s*\)\s*[.]?\s*$",
+    re.IGNORECASE,
+)
+_CLOSED_TERMINAL_VENUE_YEAR_VOLUME_RE = re.compile(
+    r"^[A-Z][A-Za-zÀ-ÖØ-öø-ÿ&.\-]*(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ&.\-]+)*"
+    r"\s+(?:1[5-9]|20)\d{2}\s*;\s*\d{1,4}"
+    r"(?:\s*\(\s*\d+\s*\))?"
+    r"(?:\s*[:,.]\s*\d{1,9}(?:\s*[–—−‐‑-]\s*\d{1,9})?)?"
+    r"\s*[.,;:]?\s*$"
+)
+
+
+def _coordinate_span_matches(raw: str, coordinate: dict) -> tuple[int, int] | None:
+    """Return a source-aligned coordinate span when its stored value is exact."""
+    spans = coordinate.get("spans") or []
+    if len(spans) != 1:
+        return None
+    span = spans[0]
+    start, end = span.get("raw_start"), span.get("raw_end")
+    if (
+        not isinstance(start, int)
+        or isinstance(start, bool)
+        or not isinstance(end, int)
+        or isinstance(end, bool)
+        or not 0 <= start < end <= len(raw)
+        or raw[start:end] != coordinate.get("raw_value")
+    ):
+        return None
+    return start, end
+
+
+def _closed_journal_range_matches_year(raw: str, match: re.Match) -> bool:
+    """Require a typed journal, volume, and closed page range at the matched span."""
+    coordinates = {
+        item.get("kind"): item for item in extract_cited_coordinates(raw, None)
+    }
+    container = coordinates.get("container")
+    volume = coordinates.get("volume")
+    page_range = coordinates.get("article_page_range")
+    if not container or not volume or not page_range:
+        return False
+    container_span = _coordinate_span_matches(raw, container)
+    volume_span = _coordinate_span_matches(raw, volume)
+    range_span = _coordinate_span_matches(raw, page_range)
+    if not container_span or not volume_span or not range_span:
+        return False
+    return (
+        container_span[1] <= volume_span[0]
+        and volume_span[1] <= range_span[0]
+        and range_span == (match.start("first_page"), match.end("last_page"))
+    )
+
+
+def _literal_title_span(raw: str, title: str | None) -> tuple[int, int] | None:
+    """Find one exact whitespace-normalized occurrence of the parsed title."""
+    if not isinstance(title, str) or not title.strip():
+        return None
+    pieces = re.split(r"\s+", title.strip())
+    pattern = r"(?<!\w)" + r"\s+".join(re.escape(piece) for piece in pieces) + r"(?!\w)"
+    matches = list(re.finditer(pattern, raw))
+    if len(matches) != 1:
+        return None
+    return matches[0].span()
+
+
+def _literal_title_terminal_journal_year(raw: str, title: str | None):
+    """Return a closed journal year only when the first year is inside its title.
+
+    A complete source-spanned journal container, volume, and definite locator must
+    follow the literal title, and the year must close that tuple.  This does not
+    reinterpret author-year dates, title-only dates, or incomplete tails.
+    """
+    title_span = _literal_title_span(raw, title)
+    if title_span is None:
+        return None
+    match = _TERMINAL_ISSUE_PAGE_RANGE_YEAR_RE.search(raw)
+    if match is None:
+        match = _TERMINAL_VOLUME_PAGE_RANGE_YEAR_RE.search(raw)
+    if match is None:
+        match = _TITLE_EMBEDDED_PAGE_RANGE_YEAR_RE.search(raw)
+    article_number_tuple = match is None
+    if article_number_tuple:
+        match = re.search(
+            r"(?P<volume>\d{1,4})\s*,\s*(?P<locator>\d{2,9})\s*"
+            r"\(\s*(?P<year>(?:19|20)\d{2})(?P<suffix>[a-z])?\s*\)\s*[.]?\s*$",
+            raw, re.IGNORECASE,
+        )
+    if match is None:
+        return None
+    first_year = re.search(r"\b" + _AY_YEAR + r"\b", raw)
+    if (first_year is None or first_year.start() < title_span[0]
+            or first_year.end() > title_span[1]):
+        return None
+
+    coordinates = extract_cited_coordinates(raw, title)
+    if article_number_tuple and not _has_closed_parenthesized_journal_tuple(
+        raw, coordinates, int(match.group("year")),
+    ):
+        return None
+    locator_kind = "article_number" if article_number_tuple else "article_page_range"
+    by_kind = {
+        kind: [item for item in coordinates if item.get("kind") == kind]
+        for kind in ("container", "volume", locator_kind)
+    }
+    if any(len(items) != 1 for items in by_kind.values()):
+        return None
+    spans = {
+        kind: _coordinate_span_matches(raw, items[0])
+        for kind, items in by_kind.items()
+    }
+    container_span = spans["container"]
+    volume_span = spans["volume"]
+    range_span = spans[locator_kind]
+    if not container_span or not volume_span or not range_span:
+        return None
+    if not (
+        title_span[1] <= container_span[0]
+        and container_span[1] <= volume_span[0]
+        and volume_span[1] <= range_span[0]
+        and range_span == (
+            match.span("locator") if article_number_tuple
+            else (match.start("first_page"), match.end("last_page"))
+        )
+    ):
+        return None
+    return int(match.group("year")), (match.group("suffix") or "")
 
 
 def _terminal_issue_page_range_year(text: str):
@@ -71,11 +220,18 @@ def _terminal_issue_page_range_year(text: str):
     be the entry's first author-year-shaped token.  This preserves first-year
     behaviour for ordinary entries, including reprints.
     """
-    match = _TERMINAL_ISSUE_PAGE_RANGE_YEAR_RE.search(text or "")
+    text = text or ""
+    match = _TERMINAL_ISSUE_PAGE_RANGE_YEAR_RE.search(text)
+    if match is None:
+        match = _TERMINAL_VOLUME_PAGE_RANGE_YEAR_RE.search(text)
     if not match:
         return None
-    first_year = re.search(r"\b" + _AY_YEAR + r"\b", text or "")
-    if not first_year or first_year.start() != match.start("first_page"):
+    first_year = re.search(r"\b" + _AY_YEAR + r"\b", text)
+    if (
+        not first_year
+        or first_year.start() != match.start("first_page")
+        or not _closed_journal_range_matches_year(text, match)
+    ):
         return None
     return int(match.group("year")), (match.group("suffix") or "")
 
@@ -845,23 +1001,26 @@ _INDEXABILITY_RANK = {"low": 0, "medium": 1, "high": 2}
 
 
 def apply_reference_readers(refs: list[dict]) -> list[dict]:
-    """Re-type a manuscript's references through the readers its list elected.
-
-    Typing runs twice by necessity, not by accident: `_make_reference` builds one
-    entry at a time and cannot see the list, while election is a property OF the
-    list. So entries are first typed from raw text alone, and re-typed here once
-    the whole bibliography exists and has shown which format it is written in.
-
-    A manuscript that elects nothing keeps its heuristic typing untouched, which
-    is every paper in the corpus but the law-review one.
-    """
-    readers = reference_readers.elect([r.get("raw_entry") or "" for r in refs])
-    if not readers:
-        return refs
+    """Apply classification carried by each entry's canonical field parse."""
     for ref in refs:
+        parse = ref.get("bibliographic_parse")
+        if parse is None:
+            parse = reference_readers.parse_entry(ref.get("raw_entry") or "")
+            ref["bibliographic_parse"] = parse
+        else:
+            if not reference_readers.validate_parse(parse, ref.get("raw_entry") or ""):
+                raise ValueError("bibliographic Parse evidence is invalid")
+            # Identifier/title enrichment can happen after _make_reference
+            # (for example, completing a DOI from a PDF link annotation).
+            # Retain only proofs that still agree with the projected value;
+            # malformed spans remain a hard error below.
+            _align_bibliographic_parse(ref)
+            if not reference_readers.validate_parse(parse, ref.get("raw_entry") or ""):
+                raise ValueError("bibliographic Parse evidence is invalid")
         classification = _classify_reference(
             ref.get("raw_entry") or "", doi=ref.get("doi"), pmid=ref.get("pmid"),
-            isbn=ref.get("isbn"), url=ref.get("url"), readers=readers)
+            isbn=ref.get("isbn"), url=ref.get("url"),
+            bibliographic_parse=parse)
         ref.update({
             "source_type": classification["source_type"],
             "source_kind": classification["source_kind"],
@@ -872,14 +1031,28 @@ def apply_reference_readers(refs: list[dict]) -> list[dict]:
     return refs
 
 
+def _align_bibliographic_parse(reference: dict) -> None:
+    """Keep raw-span proofs only for values still projected by the reference.
+
+    Footnote/year and end-bibliography enrichment can legitimately update a
+    projected value using evidence outside ``raw_entry``. Such a value must not
+    retain a proof claiming it came from this entry.
+    """
+    record = reference.get("bibliographic_parse")
+    if not isinstance(record, dict) or record.get("status") != "parsed":
+        return
+    fields = record.get("fields")
+    if not isinstance(fields, dict):
+        return
+    for name, item in list(fields.items()):
+        if isinstance(item, dict) and item.get("value") != reference.get(name):
+            fields.pop(name, None)
+
+
 def _classify_reference(raw: str, doi=None, pmid=None, isbn=None, url=None,
-                        readers=()) -> dict:
+                        bibliographic_parse=None) -> dict:
     """The reference's type, from a reader that recognised its format where one
     does, and from raw-text heuristics otherwise.
-
-    `readers` are the ones this manuscript elected. It defaults to none, so an
-    entry typed outside a manuscript's context — one reference at a time, before
-    the list exists — is read by the heuristics alone.
 
     A reader outranks the heuristics on the TYPE: it identified the entry's format
     and read the anchor positionally, which is stronger evidence than "the text
@@ -893,14 +1066,16 @@ def _classify_reference(raw: str, doi=None, pmid=None, isbn=None, url=None,
     forget what the heuristic knew.
     """
     heuristic = _classify_by_text(raw, doi, pmid, isbn, url)
-    if doi or pmid or isbn or not readers:
+    if doi or pmid or isbn:
         return heuristic
-    record = reference_readers.read(raw, readers=readers)
+    record = bibliographic_parse or reference_readers.parse_entry(raw, include_generic=False)
     reader = (record or {}).get("classification")
     if not reader:
         return heuristic
     evidence = list(heuristic.get("source_type_evidence") or [])
-    evidence.append(f"{record['reader']}_{record['anchor']}_anchor")
+    anchor = (record.get("fields", {}).get("title", {}).get("rule")
+              or "legal_instrument")
+    evidence.append(f"{record['reader']}_{anchor}_anchor")
     indexability = max(
         (reader["indexability"], heuristic["indexability"]),
         key=lambda level: _INDEXABILITY_RANK.get(level, 0))
@@ -922,6 +1097,14 @@ def _classify_by_text(raw: str, doi=None, pmid=None, isbn=None, url=None) -> dic
         r"\(\s*(?:in\s+press|forthcoming|n\.\s*d\.)\s*\)", "", raw,
         flags=re.IGNORECASE,
     )
+    # These two labels are linked-page UI, not imprint evidence, when an
+    # independently closed colon-author entry confirms the complete footer.
+    # Keep the original raw text for every other classification heuristic.
+    if _closed_colon_author_entry(raw):
+        classification_raw = re.sub(
+            r"\s*(?:[.,;:]\s*)?(?:PubMed Abstract\s*\|\s*)?Publisher Full Text\s*$",
+            "", classification_raw, flags=re.IGNORECASE,
+        )
     evidence = []
     has_accessed = bool(re.search(r"accessed|consultato|retrieved", raw, re.IGNORECASE))
     journal_like = bool(
@@ -991,10 +1174,42 @@ def _classify_by_text(raw: str, doi=None, pmid=None, isbn=None, url=None) -> dic
         return {"source_type": "webpage", "source_kind": "webpage_like",
                 "source_type_confidence": "medium", "source_type_evidence": evidence,
                 "indexability": "medium"}
+    if (
+        not (isbn or url or chapter_like or institution_like or edition_like or pub_like)
+        and re.search(r"\b(?!(?:19|20)\d{2}\b)\d{1,4}\s*,\s*\d{1,9}\.?\s*$", raw)
+    ):
+        title = _extract_title(raw)
+        coordinates = extract_cited_coordinates(raw, title)
+        if _has_source_spanned_title_bounded_terminal_scalar(raw, title, coordinates):
+            evidence.append("source_spanned_title_bounded_terminal_scalar")
+            return {"source_type": "article", "source_kind": "article_like",
+                    "source_type_confidence": "high", "source_type_evidence": evidence,
+                    "indexability": "high"}
     if journal_like:
         return {"source_type": "article", "source_kind": "article_like",
                 "source_type_confidence": "high", "source_type_evidence": evidence,
                 "indexability": "high"}
+    attached_tuple = re.search(
+        r"(?<=[^\W\d_])\d{1,4}\s*,\s*\d+\s*[–—-]\s*\d+\s*"
+        r"\(\s*(?P<year>(?:19|20)\d{2})\s*\)\s*[.]?\s*$",
+        raw,
+    )
+    if attached_tuple is not None:
+        title = _extract_title(raw)
+        coordinates = extract_cited_coordinates(raw, title)
+        if (
+            any(
+                row.get("rule_id") == "attached_venue_volume_page_range_year"
+                for row in coordinates
+            )
+            and _closed_journal_title_extent(
+                raw, int(attached_tuple.group("year")), coordinates,
+            ) is not None
+        ):
+            evidence.append("journal_volume_issue_pages")
+            return {"source_type": "article", "source_kind": "article_like",
+                    "source_type_confidence": "high", "source_type_evidence": evidence,
+                    "indexability": "high"}
     return {"source_type": "unknown", "source_kind": "unknown",
             "source_type_confidence": "low", "source_type_evidence": evidence,
             "indexability": "low"}
@@ -1124,7 +1339,35 @@ def _title_after_initials(raw: str) -> str | None:
         r"(?P<title>(?:(?:A|An|The)(?:\s+[^.!?]+)?|[A-Z][a-z][^.!?]*?))\."
     )
     for match in pattern.finditer(raw):
+        if (
+            match.end() < len(raw)
+            and raw[match.end()].isdigit()
+            and raw[match.end() - 2].isdigit()
+        ):
+            # A decimal point inside the title is not its sentence boundary.
+            # Leave the complete title to the source-bounded extraction paths.
+            continue
         candidate = match.group("title").strip(" ,;")
+        if (
+            re.fullmatch(r"[A-Z][a-zÀ-ÿ'’-]+\s+[a-zÀ-ÿ][a-zÀ-ÿ'’-]*", candidate)
+        ):
+            coordinates = {
+                item["kind"]: item
+                for item in extract_cited_coordinates(raw, candidate)
+            }
+            container = coordinates.get("container")
+            if (
+                container
+                and coordinates.get("volume")
+                and coordinates.get("article_page_range")
+            ):
+                container_start = min(
+                    span["raw_start"] for span in container["spans"]
+                )
+                if re.fullmatch(
+                    r"\.\s*", raw[match.end("title"):container_start]
+                ):
+                    return _trim_title_tail(candidate)
         # ``V. Le, Ilya Sutskever, ...`` is still inside a long author
         # block, not a title boundary.  Surname-first text after an initial is
         # sufficiently distinct from the anonymous tranche titles to reject.
@@ -1156,7 +1399,11 @@ def _is_title_fragment(part: str) -> bool:
     # A volume plus page range/e-locator is a venue tail, not a title.  It can
     # look title-like in abbreviated Nature footnotes, where keeping it would
     # prevent enrichment from the fuller end bibliography.
-    if re.search(r"\b\d{1,4}\s*,\s*(?:e?\d+)(?:\s*[–—-]\s*\d+)?\b(?!\s*\+)", clean):
+    if re.search(
+        r"\b\d{1,4}\s*,\s*(?:e?\d+)"
+        r"(?:\s*[–—-]\s*\d+)?(?:\s+\((?:19|20)\d{2}\))?\.?$",
+        clean,
+    ):
         return False
     if re.search(r"\bproject,?\s+(?:19|20)\d{2}\b", clean, re.I):
         return False
@@ -1221,6 +1468,22 @@ _STRICT_AIP_QUOTED_TITLE_RE = re.compile(
     r"(?P<venue>[A-Za-z][A-Za-z .,:;()&'’\-]*?)\s+"
     r"\d+\s*,\s*\d+\s*\((?:19|20)\d{2}\)\.?\s*$"
 )
+_CLOSED_INITIAL_QUOTED_ARTICLE_RE = re.compile(
+    r"^\s*(?:[A-Z]\.\s*){1,3}[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’\-]{1,60}\.\s+"
+    r"(?:“(?P<curly_title>[^“”\r\n]+)”|\"(?P<ascii_title>[^\"\r\n]+)\")\s+"
+    r"(?P<venue>[A-Z][A-Za-zÀ-ÖØ-öø-ÿ .,:;()&'’\-]{2,100}?)\s+"
+    r"\d{1,4}\s*\((?:19|20)\d{2}\)\s*:\s*"
+    r"\d{1,9}\s*[-–—−‐‑]\s*\d{1,9}\.?\s*$"
+)
+_CLOSED_LABELED_ARTICLE_MONTH_RE = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)"
+)
+_CLOSED_LABELED_ARTICLE_TERMINAL_DATE_RE = re.compile(
+    rf"(?i:{_CLOSED_LABELED_ARTICLE_MONTH_RE})\.?\s+"
+    r"(?:19|20)\d{2}\s*\.?\s*$"
+)
 
 _VANCOUVER_UNDOTTED_INITIAL_TITLE_RE = re.compile(
     r"^\s*(?:[A-ZÀ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+\s+[A-Z]{1,4},\s+){1,20}"
@@ -1247,6 +1510,25 @@ _VANCOUVER_TERMINAL_INITIAL_HEAD_RE = re.compile(
     r"^\s*(?:" + _VANCOUVER_TERMINAL_INITIAL_AUTHOR_RE + r",\s+)+"
     r"(?:et\s+al\.\s+|" + _VANCOUVER_TERMINAL_INITIAL_AUTHOR_RE + r"\.\s+)"
 )
+_VANCOUVER_TERMINAL_INITIAL_COMPACT_ARTICLE_TAIL_RE = re.compile(
+    r"(?P<title>.+?)\."
+    r"(?P<venue>[A-Z][A-Za-zÀ-ÖØ-öø-ÿ .&'’()\-]{1,100}?)"
+    r"(?P<year>(?:19|20)\d{2});"
+    r"(?P<volume>\d{1,4})\((?P<issue>[A-Za-z0-9/]+)\):"
+    r"(?P<pages>\d{1,9}\s*[-–—−‐‑]\s*\d{1,9})\.?\s*$"
+)
+
+
+def _match_vancouver_terminal_initial_compact_article(raw: str | None) -> re.Match[str] | None:
+    """Match a closed initialized-author citation with its compact full-page tail."""
+    if not raw:
+        return None
+    author_head = _VANCOUVER_TERMINAL_INITIAL_HEAD_RE.match(raw)
+    if not author_head:
+        return None
+    return _VANCOUVER_TERMINAL_INITIAL_COMPACT_ARTICLE_TAIL_RE.fullmatch(
+        raw[author_head.end():]
+    )
 
 
 def _extract_vancouver_terminal_initial_title(raw: str) -> str | None:
@@ -1262,6 +1544,15 @@ def _extract_vancouver_terminal_initial_title(raw: str) -> str | None:
     if not match:
         return None
     tail = raw[match.end():]
+    # A parenthesized date immediately after this closed author head belongs to
+    # the author-date style boundary. Let the later year-aware extractor handle
+    # it instead of treating ``(YYYY) Title`` as the title sentence.
+    if re.match(r"\((?:19|20)\d{2}[a-z]?\)\s+(?=[A-Z])", tail):
+        return None
+    compact_article = _VANCOUVER_TERMINAL_INITIAL_COMPACT_ARTICLE_TAIL_RE.fullmatch(tail)
+    if compact_article:
+        title = _trim_title_tail(compact_article.group("title"))
+        return title if len(title.split()) >= 2 else None
     multi_sentence = re.match(
         r"(?P<title>.+)\.\s+[A-Z][A-Za-z .&'’()\-]{1,100}?\.\s+"
         r"(?:19|20)\d{2};\d{1,4}(?:\([^)]*\))?:[A-Za-z]?\d+(?:[-–—]\d+)?\.?\s*$",
@@ -1279,6 +1570,813 @@ def _extract_vancouver_terminal_initial_title(raw: str) -> str | None:
         return None
     title = sentence.group("title").strip()
     return _trim_title_tail(title) if len(title.split()) >= 2 else None
+
+
+_COMMA_INITIAL_UPPER = "A-ZÀ-ÞĀ-Ž"
+_COMMA_INITIAL_NAME_TOKEN = (
+    r"(?:(?:[a-zà-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’‐‑‒–—\-]*\s+){0,2}"
+    rf"[{_COMMA_INITIAL_UPPER}][A-Za-zÀ-ÖØ-öø-ÿĀ-ž'’‐‑‒–—\-]*)"
+)
+_COMMA_INITIAL_SURNAME = (
+    rf"{_COMMA_INITIAL_NAME_TOKEN}(?:\s+{_COMMA_INITIAL_NAME_TOKEN}){{0,2}}"
+)
+_COMMA_INITIAL_ATOM = (
+    rf"[{_COMMA_INITIAL_UPPER}]\."
+    rf"(?:\s*[{RANGE_DASHES}]\s*[{_COMMA_INITIAL_UPPER}]\.)?"
+    r"(?!\s+(?!(?i:et\s+al\.))[a-zà-ÿā-ž])"
+)
+_COMMA_INITIAL_SEQUENCE = (
+    rf"{_COMMA_INITIAL_ATOM}"
+    rf"(?:(?:\s+|(?=[{_COMMA_INITIAL_UPPER}]\.)){_COMMA_INITIAL_ATOM}){{0,3}}"
+    # A final bare accented initial occurs in some initialized-name citations
+    # immediately before a coauthor connector (for example ``P. O. Å &``).
+    rf"(?:\s+[{_COMMA_INITIAL_UPPER}](?=\s*(?:,|&|(?i:and)\b)))?"
+)
+_COMMA_INITIAL_SUFFIX = r"(?:\s+(?i:Jr|Sr|II|III|IV))?"
+_COMMA_INITIAL_AUTHOR = (
+    rf"{_COMMA_INITIAL_SURNAME},\s*{_COMMA_INITIAL_SEQUENCE}"
+    rf"{_COMMA_INITIAL_SUFFIX}"
+)
+_COMMA_INITIAL_GIVEN_AUTHOR = (
+    rf"{_COMMA_INITIAL_SEQUENCE}\s+{_COMMA_INITIAL_SURNAME}"
+    rf"{_COMMA_INITIAL_SUFFIX}"
+)
+_COMMA_INITIAL_AUTHOR_SEPARATOR = (
+    r"(?:\s*,\s*(?:&\s*|(?i:and)\s+)?|\s*&\s*|\s+(?i:and)\s+)"
+)
+_COMMA_INITIAL_AUTHOR_HEAD_RE = re.compile(
+    r"^\s*(?:" + _COMMA_INITIAL_AUTHOR + r"|" + _COMMA_INITIAL_GIVEN_AUTHOR + r")"
+    r"(?:" + _COMMA_INITIAL_AUTHOR_SEPARATOR + r"(?:"
+    + _COMMA_INITIAL_AUTHOR + r"|" + _COMMA_INITIAL_GIVEN_AUTHOR + r"))*"
+    r"(?:\s*,?\s*(?i:et\s+al\.))?",
+)
+_CLOSED_LABELED_ARTICLE_ENTRY_RE = re.compile(
+    _COMMA_INITIAL_AUTHOR_HEAD_RE.pattern
+    + r"\s*,\s*"
+    + r"(?:(?:\"(?P<ascii_inside>[^\"“”\r\n]+?),\"|“(?P<curly_inside>[^\"“”\r\n]+?),”)\s*|"
+    + r"\"(?P<ascii_outside>[^\"“”\r\n]+?)\"\s*,\s*|"
+    + r"“(?P<curly_outside>[^\"“”\r\n]+?)”\s*,\s*)?"
+    + rf"(?P<venue>[^\"“”\r\n\x00-\x1f]+?)(?:\s*,\s*|\s+)"
+    + rf"(?i:vol(?:ume)?\s*\.?\s*)\d{{1,4}}\s*,\s*"
+    + rf"(?i:p(?:p|age(?:s)?)?\s*\.?\s*)\d{{1,9}}"
+    + rf"(?:\s*[{RANGE_DASHES}]\s*\d{{1,9}})?\s*,\s*"
+    + rf"(?i:{_CLOSED_LABELED_ARTICLE_MONTH_RE})\.?\s+"
+    + r"(?P<year>(?:19|20)\d{2})\s*\.?\s*"
+)
+_COLLECTIVE_AUTHOR_LABEL_RE = re.compile(
+    r"^\s*(?P<label>(?:[A-ZÀ-Þ][A-Za-zÀ-ÖØ-öø-ÿ0-9'’&/\-]*\s+){0,5}"
+    r"(?i:collaboration|consortium|group|team|committee|panel|network))\s*,\s*"
+)
+_COLLECTIVE_PERSONAL_HEAD_RE = re.compile(
+    rf"^\s*(?:{_COMMA_INITIAL_SEQUENCE})\s+"
+    rf"(?P<family>{_COMMA_INITIAL_SURNAME}){_COMMA_INITIAL_SUFFIX}"
+    r"\s+(?i:et\s+al\.)"
+)
+_COMMA_INITIAL_UNCERTAIN_CONTINUATION_RE = re.compile(
+    rf"(?:\d{{4}}\b|(?i:et\s+al\b|and\b)|"
+    rf"[{_COMMA_INITIAL_UPPER}]\.\s*(?=[{_COMMA_INITIAL_UPPER}])|"
+    rf"[{_COMMA_INITIAL_UPPER}][A-Za-zÀ-ÖØ-öø-ÿ'’‐‑‒–—-]+"
+    rf"(?:\s+(?:&|(?i:and))\s+[{_COMMA_INITIAL_UPPER}]\.?)?"
+    rf"\s*,\s*[{_COMMA_INITIAL_UPPER}]\.|"
+    rf"(?:[^\W\d_][\w'’‐‑‒–—-]*\s+){{0,2}}"
+    rf"[^\W\d_][\w'’‐‑‒–—-]*,\s*[{_COMMA_INITIAL_UPPER}]\.)"
+)
+
+
+def _collective_personal_author_head(raw: str) -> tuple[int, str] | None:
+    """Return a closed collective-plus-personal-et-al head and its first family.
+
+    The group label is recognized by its role marker, while the personal
+    author and its initials must satisfy the existing initialized-name grammar.
+    A comma must close ``et al.`` before a following source field.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    label = _COLLECTIVE_AUTHOR_LABEL_RE.match(raw)
+    if label is None:
+        return None
+    personal_tail = raw[label.end():]
+    personal = _COLLECTIVE_PERSONAL_HEAD_RE.match(personal_tail)
+    if personal is None:
+        return None
+    if re.match(r"\s*,", personal_tail[personal.end():]) is None:
+        return None
+    author_head = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(personal_tail)
+    if author_head is None or not re.search(
+        r"(?i:et\s+al\.)\s*$", personal_tail[:author_head.end()],
+    ):
+        return None
+    family = personal.group("family").strip()
+    if not family:
+        return None
+    return label.end() + author_head.end(), family
+
+
+def _closed_source_author_head_end(raw: str) -> int | None:
+    """Return the end of a recognized initialized source author head."""
+    collective = _collective_personal_author_head(raw)
+    if collective is not None:
+        return collective[0]
+    author_head = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw or "")
+    return author_head.end() if author_head is not None else None
+
+
+def _compact_terminal_venue_prefix_start(
+    title_tail: str, container_text: str,
+) -> int | None:
+    """Find an ambiguous compact journal prefix immediately before its span.
+
+    Coordinate extraction can source-span only a final venue fragment. If the
+    preceding source tokens are a compact capitalized abbreviation sequence,
+    the title endpoint at that coordinate span is ambiguous. A closed token
+    check keeps prose subtitles (including Roman-number sections) available.
+    """
+    if not title_tail or not container_text:
+        return None
+    for separator in re.finditer(r"[.,:;]\s+", title_tail):
+        fragment = title_tail[separator.end():].strip()
+        if not fragment:
+            continue
+        candidate = f"{fragment} {container_text.strip()}".strip()
+        words = candidate.split()
+        if not 2 <= len(words) <= 10:
+            continue
+        valid_words = True
+        has_venue_punctuation = False
+        for word in words:
+            core = word.rstrip(".:")
+            if (
+                not core
+                or not core[0].isupper()
+                or re.fullmatch(r"[\w&'’/-]+", core, re.UNICODE) is None
+            ):
+                valid_words = False
+                break
+            if word.endswith((".", ":")):
+                has_venue_punctuation = True
+        if valid_words and has_venue_punctuation:
+            return separator.start()
+    return None
+
+
+def _closed_journal_title_extent(
+    raw: str,
+    year: object,
+    coordinates: list[dict] | None = None,
+) -> tuple[str | None, tuple[int, int]] | None:
+    """Return a literal title only when a closed journal tuple bounds it.
+
+    The author head and journal coordinates must both be source-aligned.  A
+    successful empty title is retained as ``(None, span)`` so a trailing
+    repository annotation cannot become the title of a titleless article.
+    """
+    if not isinstance(raw, str) or not raw or type(year) is not int:
+        return None
+    if coordinates is None:
+        coordinates = extract_cited_coordinates(raw, _extract_title(raw))
+    if not isinstance(coordinates, list):
+        return None
+
+    containers = [row for row in coordinates if row.get("kind") == "container"]
+    if len(containers) != 1:
+        return None
+    container_span = _coordinate_span_matches(raw, containers[0])
+    if container_span is None:
+        return None
+    container_text = containers[0].get("raw_value")
+    if not isinstance(container_text, str) or re.match(r"\s*in\b", container_text, re.I):
+        return None
+    # A source-aligned span may still contain title prose. It cannot certify
+    # title absence or extent unless its complete text is venue-shaped.
+    if re.search(r"[,;]", container_text) or not _container_suffix_is_closed(container_text):
+        return None
+
+    closed_parenthesized = _has_closed_parenthesized_journal_tuple(
+        raw, coordinates, year, allow_generic_scalar=True,
+    )
+    closed_pre_year_colon = _has_closed_pre_year_colon_journal_tuple(raw, coordinates, year)
+    closed_issue_scalar = _has_closed_issue_scalar_postyear_tuple(raw, coordinates, year)
+    if not (closed_parenthesized or closed_pre_year_colon or closed_issue_scalar):
+        page_range_years = list(re.finditer(
+            r"\(\s*(?P<year>(?:19|20)\d{2})[a-z]?\s*\)\s*[.]?\s*$",
+            raw,
+            re.I,
+        ))
+        if len(page_range_years) != 1:
+            return None
+        page_range_year = page_range_years[0]
+        if int(page_range_year.group("year")) != year:
+            return None
+        if re.search(r"\bin\s*:\s*$", raw[:container_span[0]], re.I):
+            return None
+
+        by_kind = {
+            kind: [row for row in coordinates if row.get("kind") == kind]
+            for kind in ("volume", "article_page_range")
+        }
+        if any(len(rows) != 1 for rows in by_kind.values()):
+            return None
+        if any(
+            row.get("kind") in {"article_locator", "article_number", "elocator"}
+            for row in coordinates
+        ):
+            return None
+        volume_span = _coordinate_span_matches(raw, by_kind["volume"][0])
+        page_span = _coordinate_span_matches(raw, by_kind["article_page_range"][0])
+        if volume_span is None or page_span is None:
+            return None
+        if (
+            by_kind["volume"][0].get("rule_id") != containers[0].get("rule_id")
+            or by_kind["article_page_range"][0].get("rule_id") != containers[0].get("rule_id")
+            or not re.fullmatch(r"\d{1,4}", by_kind["volume"][0].get("raw_value", ""))
+            or not re.fullmatch(
+                rf"\d+\s*[{RANGE_DASHES}]\s*\d+",
+                by_kind["article_page_range"][0].get("raw_value", ""),
+            )
+        ):
+            return None
+        if (
+            not container_span[1] <= volume_span[0] < volume_span[1] <= page_span[0]
+            or not re.fullmatch(r"\s*[.,;:]?\s*", raw[container_span[1]:volume_span[0]])
+            or not re.fullmatch(
+                r"\s*(?:\(\s*[A-Za-z0-9/]+\s*\))?\s*[,;:]\s*",
+                raw[volume_span[1]:page_span[0]],
+            )
+            or not re.fullmatch(r"\s*\(\s*", raw[page_span[1]:page_range_year.start("year")])
+            or not re.fullmatch(
+                r"\s*\)\s*[.]?\s*",
+                raw[page_range_year.end("year"):page_range_year.end()],
+            )
+        ):
+            return None
+    if re.search(r"\bin\s*:\s*$", raw[:container_span[0]], re.I):
+        return None
+
+    if closed_pre_year_colon:
+        author_end = _closed_source_author_head_end(raw)
+        if author_end is None:
+            return None
+        year_prefix = raw[author_end:container_span[0]]
+        if not re.fullmatch(r"\s*,?\s*(?:19|20)\d{2}\s*,?\s*", year_prefix):
+            return None
+        year_match = re.search(r"(?:19|20)\d{2}", year_prefix)
+        if year_match is None or int(year_match.group()) != year:
+            return None
+        return None, (author_end, container_span[0])
+
+    # Any other year-shaped token must agree with the selected publication
+    # year. Ignore typed numeric coordinates and arXiv identifiers; a year in
+    # a title, author-date prefix, or second citation unit makes the boundary
+    # ambiguous and therefore unusable.
+    typed_numeric_spans = []
+    for row in coordinates:
+        if row.get("kind") not in {
+            "volume", "article_page_range", "article_locator", "article_number", "elocator",
+        }:
+            continue
+        span = _coordinate_span_matches(raw, row)
+        if span is not None:
+            typed_numeric_spans.append(span)
+    # Mask only explicit repository identifiers, preserving their character
+    # offsets so later matches still align with the source-coordinate spans.
+    year_text = re.sub(
+        r"(?i)(\barxiv[:\s]*)(\d{4}\.\d{4,5}(?:v\d+)?)\b",
+        lambda match: match.group(1) + " " * len(match.group(2)),
+        raw,
+    )
+    year_text = re.sub(
+        r"(?i)(\b(?:corr,\s*)?abs/)(\d{4}\.\d{4,5})\b",
+        lambda match: match.group(1) + " " * len(match.group(2)),
+        year_text,
+    )
+    for match in re.finditer(r"\b((?:19|20)\d{2})[a-z]?\b", year_text, re.I):
+        if any(start <= match.start() and match.end() <= end for start, end in typed_numeric_spans):
+            continue
+        if int(match.group(1)) != year:
+            return None
+
+    collective_head = _collective_personal_author_head(raw)
+    author_match = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw)
+    if collective_head is None and author_match is None:
+        return None
+    author_end = collective_head[0] if collective_head is not None else author_match.end()
+    if (
+        author_end > 0
+        and author_end < len(raw)
+        and raw[author_end] == "."
+    ):
+        # The author-head grammar permits a final bare initial in some list
+        # shapes. Complete that initial only when a list connector precedes it
+        # and a full initialized surname follows; otherwise keep the boundary
+        # ambiguous and fail closed.
+        prefix = raw[:author_end - 1]
+        if re.search(r"(?:,\s*|&\s*|(?i:and)\s+)$", prefix):
+            continuation = re.match(
+                rf"{_COMMA_INITIAL_SEQUENCE}\s+{_COMMA_INITIAL_SURNAME}"
+                rf"{_COMMA_INITIAL_SUFFIX}(?=\s*(?:,|&|(?i:and)\b|\.|$))",
+                raw[author_end - 1:],
+            )
+            if continuation is None:
+                return None
+            author_end = author_end - 1 + continuation.end()
+    if author_end > container_span[0]:
+        return None
+    volume_rows = [row for row in coordinates if row.get("kind") == "volume"]
+    if len(volume_rows) != 1:
+        return None
+    volume_span = _coordinate_span_matches(raw, volume_rows[0])
+    if volume_span is None or re.search(
+        r"\bin\s*:\s*", raw[author_end:volume_span[0]], re.I,
+    ):
+        return None
+    title_tail = raw[author_end:container_span[0]]
+    venue_prefix_start = _compact_terminal_venue_prefix_start(
+        title_tail, raw[container_span[0]:container_span[1]],
+    )
+    if venue_prefix_start is not None:
+        # Capitalized subtitles and short titles can have the same syntax as
+        # venue prefixes. An ambiguous boundary cannot certify a shorter title
+        # or prove that the citation is titleless.
+        return None
+    if re.match(r"\s*,\s*(?:and|&)\s*(?:\.|$)", title_tail, re.I):
+        return None
+    delimiter = re.match(r"\s*,\s*", title_tail)
+    if delimiter is not None and _COMMA_INITIAL_UNCERTAIN_CONTINUATION_RE.match(
+        title_tail[delimiter.end():]
+    ):
+        return None
+
+    title = re.sub(r"\s+", " ", title_tail).strip()
+    title = re.sub(r"^[,;:]\s*", "", title)
+    title = re.sub(r"\s*[,;]\s*$", "", title)
+    quote_pairs = (("“", "”"), ("\"", "\""), ("‘", "’"))
+    if title and any(
+        title.startswith(opening) != title.endswith(closing)
+        for opening, closing in quote_pairs
+    ):
+        return None
+    for opening, closing in quote_pairs:
+        if title.startswith(opening) and title.endswith(closing):
+            title = title[1:-1].rstrip(" ,;")
+            break
+    if title.endswith("."):
+        title = title[:-1].rstrip()
+    if title and not _is_title_fragment(title):
+        return None
+    return title or None, (author_end, container_span[0])
+
+
+_ET_AL_AUTHOR_HEAD_RE = re.compile(
+    r"^\s*[A-Z][^\r\n.]{2,60}?\b"
+    r"(?:collaboration|consortium|group|team|committee|panel|network)"
+    r"\s+et\s+al\.(?=\s*[A-Z])",
+    re.I,
+)
+_ARTICLE_LOCATOR_TAIL_RE = re.compile(
+    r"\b(?P<volume>\d{1,4})(?:\s*\(\s*[A-Za-z0-9/]+\s*\))?\s*[,;:]\s*"
+    r"(?P<locator>(?:[A-Za-z][A-Za-z0-9]*\d[A-Za-z0-9]*|\d+(?:\s*[–—-]\s*\d+)?))"
+    r"(?:\s*\((?:19|20)\d{2}\))?\.?\s*$"
+)
+_INITIALIZED_AUTHOR_MIXED_ABBREVIATION_CONTAINER_RE = re.compile(
+    r"[A-Z][A-Za-z'’‐‑‒–—-]{2,}(?:\s+[A-Z][A-Za-z'’‐‑‒–—-]{2,})*\s+"
+    r"[A-Z][A-Za-z'’‐‑‒–—-]{1,4}\."
+    r"(?:\s+[A-Z][A-Za-z'’‐‑‒–—-]{2,})?"
+    r"(?:\s+[A-Z][A-Za-z'’‐‑‒–—-]{1,8}\.?){1,4}"
+)
+
+
+def _extract_comma_initial_author_title(raw: str) -> str | None:
+    """Extract a literal title after a closed comma-initial article author list.
+
+    This covers the ``Surname, I.`` bibliography shape, including its common
+    no-space ``et al.Title`` variant. Requiring actual article coordinates and
+    a sentence boundary before the journal keeps titleless numeric tails and
+    non-article book/report entries out of this fallback.
+    """
+    tail_match = _ARTICLE_LOCATOR_TAIL_RE.search(raw)
+    if tail_match is None:
+        return None
+    volume_start = tail_match.start("volume")
+
+    author_match = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw)
+    if author_match is None:
+        author_match = _ET_AL_AUTHOR_HEAD_RE.match(raw)
+    if author_match is None:
+        return None
+    if re.match(r"\s*,\s*(?:and|&)\s*\.", raw[author_match.end():], re.I):
+        # A connector with no following author is not a closed author head.
+        # Leave it to the established fallback parser rather than certifying
+        # the residual connector/title fragment here.
+        return None
+    title_tail = raw[author_match.end():]
+    # A closed surname-initial author list may be followed by an author-date
+    # year before the article title. Keep that structural date out of the
+    # literal title candidate, while leaving the source text and coordinate
+    # spans untouched.
+    dated_head = re.match(
+        r"\s*\(?(?:19|20)\d{2}[a-z]?\)?\s*\.?\s*",
+        title_tail,
+        re.I,
+    )
+    if dated_head is not None:
+        title_tail = title_tail[dated_head.end():]
+    # Some initialized author styles use a colon as the author/title
+    # separator. It is structural only in this already-closed author-head
+    # path; colons within the title remain literal.
+    title_tail = re.sub(r"^\s*:\s*", "", title_tail, count=1)
+    # The name grammar can also match only a prefix of an unsupported author
+    # list. Consume its delimiter only before prose, retaining uncertain author,
+    # date and quoted starts for the existing extraction paths.
+    delimiter = re.match(r"\s*,\s*", title_tail)
+    if delimiter is not None:
+        continuation = title_tail[delimiter.end():]
+        uncertain_head = _COMMA_INITIAL_UNCERTAIN_CONTINUATION_RE.match(continuation)
+        if re.match(r"[^\W_]", continuation):
+            if uncertain_head is not None:
+                # Keep the established fallback fragment for an unsupported
+                # author continuation, but do not let it consume the following
+                # prose as a source-certified title.
+                boundary = re.search(r"[.!?]\s+", continuation)
+                if boundary is None:
+                    return None
+                fallback = _trim_title_tail(continuation[:boundary.start()])
+                return fallback if len(fallback.split()) >= 2 else None
+            title_tail = continuation
+    leading = len(title_tail) - len(title_tail.lstrip())
+    boundaries = re.finditer(r"[.!?]\s+(?=[^\W\d_])", title_tail)
+    for sentence_boundary in boundaries:
+        if title_tail[sentence_boundary.start()] == "." and title_tail[
+            sentence_boundary.end():sentence_boundary.end() + 1
+        ].islower():
+            prior_tokens = title_tail[:sentence_boundary.start()].rsplit(None, 1)
+            prior = prior_tokens[-1] if prior_tokens else ""
+            if len(prior) == 1 and prior.isupper():
+                continue
+        candidate = title_tail[:sentence_boundary.start()].strip()
+        candidate_words = candidate.split()
+        if len(candidate_words) < 2:
+            if (
+                len(candidate_words) == 1
+                and len(candidate_words[0]) == 1
+                and candidate_words[0].isupper()
+            ):
+                continue
+            return None
+        if not _is_title_fragment(candidate):
+            continue
+        if re.match(
+            rf"^(?:-[{_COMMA_INITIAL_UPPER}]\.|(?:Jr|Sr|II|III|IV)|[{_COMMA_INITIAL_UPPER}])\s+"
+            r"(?:&|(?i:and))\s+",
+            candidate,
+        ):
+            continue
+        candidate_start = raw.find(candidate, author_match.end() + leading)
+        if candidate_start < 0:
+            continue
+        candidate_end = candidate_start + len(candidate)
+        if candidate_end >= volume_start:
+            continue
+        if not re.match(r"[.!?]\s+", raw[candidate_end:]):
+            continue
+        coordinates = extract_cited_coordinates(raw, candidate)
+        coordinate_map = {item["kind"]: item for item in coordinates}
+        if "volume" not in coordinate_map or not any(
+            kind in coordinate_map
+            for kind in ("article_page_range", "article_locator", "article_number", "elocator")
+        ):
+            return None
+        container = coordinate_map.get("container")
+        if container and _compact_terminal_venue_prefix_start(
+            candidate, container.get("raw_value", ""),
+        ) is not None:
+            return None
+        return _trim_title_tail(candidate)
+    return None
+
+
+def _is_closed_comma_initial_article_without_title(raw: str) -> bool:
+    """Keep a closed initialized-author article with no title titleless.
+
+    Once the complete author-list grammar and a terminal volume/locator are
+    both present, a sequence of only short period-delimited fragments before
+    that locator is not enough evidence to promote journal abbreviations to a
+    title. A real multiword title is handled by the title extractor above.
+    """
+    author_match = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw or "")
+    locator = _ARTICLE_LOCATOR_TAIL_RE.search(raw or "")
+    if author_match is None or locator is None or author_match.end() > locator.start():
+        return False
+
+    # Keep the complete author-to-volume segment in view. A short venue span
+    # selected from the end (for example the ``D`` in ``J. Phys. D``) does not
+    # establish title absence if prose precedes it. The terminal pattern above
+    # gives source-aligned volume and locator spans even when coordinate
+    # extraction cannot yet emit a venue for a titleless citation.
+    between = raw[author_match.end():locator.start("volume")].strip(" \t\r\n,;.")
+    year_prefix = re.match(r"\(?(?:19|20)\d{2}[a-z]?\)?\.?\s*", between, re.I)
+    if year_prefix is not None:
+        between = between[year_prefix.end():].strip(" \t\r\n,;.")
+        # A comma or semicolon may separate an author-date year from the venue.
+        between = between.lstrip(",; ")
+    return (
+        _container_suffix_is_closed(between)
+        or _INITIALIZED_AUTHOR_MIXED_ABBREVIATION_CONTAINER_RE.fullmatch(between) is not None
+    )
+
+
+def _extract_comma_initial_author_edited_chapter_title(raw: str) -> str | None:
+    """Extract a literal chapter title from a closed edited-book citation.
+
+    The terminal publisher/year wrapper, editor block, and numeric page range
+    distinguish this shape from a general book title. A title is returned only
+    when literal text precedes the explicit ``. In`` container boundary.
+    """
+    wrapper = re.search(
+        r"\((?P<label>[^()\r\n]*,\s*(?:19|20)\d{2})\)\s*\.?\s*$",
+        raw,
+    )
+    if wrapper is None or _PUBLISHER_RE.search(wrapper.group("label")) is None:
+        return None
+
+    author_match = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw)
+    if author_match is None:
+        return None
+    body = raw[author_match.end():wrapper.start()].strip()
+    chapter = re.fullmatch(
+        r"(?P<title>[\s\S]+)\.\s+In\s+"
+        r"(?P<container>[\s\S]+?)\s*,?\s*"
+        r"\(\s*(?i:eds?\.?)\s+[^()\r\n]+?\s*\)\s*"
+        r"\d+\s*[–—-]\s*\d+\s*",
+        body,
+    )
+    if chapter is None:
+        return None
+    title = re.sub(r"\s+", " ", chapter.group("title")).strip()
+    return title or None
+
+
+def _extract_comma_initial_author_book_title(raw: str) -> str | None:
+    """Extract a literal book title from an initialized personal-author entry.
+
+    The publisher and year must form the terminal parenthesized wrapper, and
+    the author prefix must use the existing surname-plus-initials grammar.
+    Article coordinate tails are left to the article parser above.
+    """
+    wrapper = re.search(
+        r"\((?P<label>[^()\r\n]*,\s*(?:19|20)\d{2})\)\s*\.?\s*$",
+        raw,
+    )
+    if wrapper is None or _PUBLISHER_RE.search(wrapper.group("label")) is None:
+        return None
+    article_region = raw[:wrapper.start()].rstrip(" .;,")
+    if _ARTICLE_LOCATOR_TAIL_RE.search(article_region):
+        return None
+
+    author_match = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw)
+    if author_match is None:
+        return None
+    remainder = raw[author_match.end():wrapper.start()]
+    title_start = re.match(r"\s*(?=[\"“‘]?[A-ZÀ-Þ])", remainder)
+    if title_start is None:
+        return None
+    title = remainder[title_start.end():].strip()
+    if len(title.split()) < 2:
+        return None
+    return _trim_title_tail(title)
+
+
+def _recognize_comma_initial_in_container_entry(
+    raw: str,
+) -> tuple[bool, tuple[str, int, str, tuple[int, int], bool] | None]:
+    """Recognize a closed initialized-author citation with an explicit ``in:`` tail.
+
+    The boolean distinguishes this citation family from unrelated entries. A
+    recognized but malformed or ambiguous family returns no candidate so title
+    extraction can fail closed instead of promoting a container fragment.
+    A candidate contains the literal title, publication year, year suffix,
+    source span of that year, and whether an author-position date was present.
+    """
+    if not isinstance(raw, str) or not raw:
+        return False, None
+    author_match = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw)
+    if author_match is None:
+        return False, None
+
+    quote_patterns = (
+        r'"[^"\r\n]*"',
+        r"“[^“”\r\n]*”",
+        r"‘[^‘’\r\n]*’",
+        r"(?<!\w)'[^'\r\n]+'(?!\w)",
+    )
+    quoted_spans = sorted(
+        match.span()
+        for pattern in quote_patterns
+        for match in re.finditer(pattern, raw)
+    )
+    quoted_mask = bytearray(len(raw))
+    for start, end in quoted_spans:
+        quoted_mask[start:end] = b"\x01" * (end - start)
+    markers = [
+        match for match in re.finditer(r"[,;]\s*in\s*:", raw, re.IGNORECASE)
+        if not any(start <= match.start() < end for start, end in quoted_spans)
+    ]
+    if not markers:
+        return False, None
+
+    # A DOI/URL is a separate terminal source field only when punctuation and
+    # whitespace separate it from the citation tail. Keep the raw string intact;
+    # this view is only for recognizing the preceding publication tuple.
+    suffix_pattern = re.compile(
+        r"[.;]\s+(?P<identifier>(?:doi\s*:\s*)?10\.\d{4,9}/[^\s]+|"
+        r"https?://[^\s]+)\s*$",
+        re.IGNORECASE,
+    )
+
+    def tail_view(marker: re.Match[str]) -> str:
+        tail = raw[marker.end():]
+        suffix = suffix_pattern.search(tail)
+        if suffix is None:
+            return tail
+        return tail[:suffix.start()]
+
+    cue_pattern = re.compile(
+        r"\b(?:proceedings?|conference|workshops?|symposia|symposium)\b",
+        re.IGNORECASE,
+    )
+
+    def has_container_cue(text: str) -> bool:
+        return bool(cue_pattern.search(text) or _PUBLISHER_RE.search(text))
+
+    tail_views = [(marker, tail_view(marker)) for marker in markers]
+    recognized = any(has_container_cue(view) for _, view in tail_views)
+    if not recognized:
+        return False, None
+    if len(markers) != 1:
+        return True, None
+
+    marker = markers[0]
+    for index, char in enumerate(raw[:marker.start()]):
+        if quoted_mask[index]:
+            continue
+        if char in {'"', "“", "”", "‘"}:
+            return True, None
+        if char in {"'", "’"} and (
+            index == 0 or not re.match(r"\w", raw[index - 1])
+        ):
+            return True, None
+    tail = tail_views[0][1]
+    terminal = re.search(
+        rf"(?<!\w)(?P<year>{_AY_YEAR})\s*,\s*"
+        rf"(?P<label>pp?\.)\s+"
+        rf"(?P<locator>\d{{1,9}}(?:\s*[{RANGE_DASHES}]\s*\d{{1,9}}|[A-Za-z])?)"
+        r"\s*[.]?\s*$",
+        tail,
+        re.IGNORECASE,
+    )
+    if terminal is None:
+        return True, None
+    locator = terminal.group("locator")
+    if terminal.group("label").casefold() == "pp." and not re.search(
+        rf"[{RANGE_DASHES}]", locator,
+    ):
+        return True, None
+    container_prefix = tail[:terminal.start("year")]
+    if not has_container_cue(container_prefix):
+        return True, None
+
+    year_start = marker.end() + terminal.start("year")
+    year_end = marker.end() + terminal.end("year")
+    identifier_spans = [
+        match.span()
+        for pattern in (
+            r"\b10\.\d{4,9}/[^\s,;]+",
+            r"https?://[^\s]+",
+            r"\b\d{4}\.\d{4,5}(?:v\d+)?\b",
+        )
+        for match in re.finditer(pattern, raw, re.IGNORECASE)
+    ]
+    if any(year_start < end and year_end > start for start, end in identifier_spans):
+        return True, None
+
+    year_token = terminal.group("year")
+    title_region = raw[author_match.end():marker.start()]
+    dated_head = re.match(
+        rf"\s*\(?(?P<year>{_AY_YEAR})\)?\s*\.?\s*",
+        title_region,
+    )
+    explicit_author_date = dated_head is not None
+    if dated_head is not None:
+        title_region = title_region[dated_head.end():]
+    title_region = re.sub(r"^\s*[,;:]\s*", "", title_region, count=1)
+    if re.match(r"\s*,\s*(?:and|&)\s*(?:\.|$)", title_region, re.IGNORECASE):
+        return True, None
+    if _COMMA_INITIAL_UNCERTAIN_CONTINUATION_RE.match(title_region.lstrip(" ,;")):
+        return True, None
+
+    title = re.sub(r"\s+", " ", title_region).strip(" \t\r\n,;")
+    for opening, closing in (("\"", "\""), ("“", "”"), ("‘", "’"), ("'", "'")):
+        if len(title) >= 2 and title.startswith(opening) and title.endswith(closing):
+            title = title[1:-1].strip()
+            break
+    title = _trim_title_tail(title)
+    if not _is_title_fragment(title):
+        return True, None
+
+    return True, (
+        title,
+        int(year_token[:4]),
+        year_token[4:].casefold(),
+        (year_start, year_end),
+        explicit_author_date,
+    )
+
+
+def _extract_author_date_place_imprint_title(raw: str) -> str | None:
+    """Recover a closed author-date title before a place/publisher imprint.
+
+    A two-letter uppercase location code can spell the same token as the
+    structural ``in:`` marker. Only use this path when the existing prose
+    splitter sees a complete title sentence followed by a separate place
+    field, and the remaining tail is a publisher imprint rather than a
+    container citation.
+    """
+    author = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw or "")
+    if author is None:
+        return None
+    dated_head = re.match(
+        rf"\s*\((?P<year>{_AY_YEAR})\)\s*\.\s*",
+        raw[author.end():],
+        re.IGNORECASE,
+    )
+    if dated_head is None:
+        return None
+    title_start_bound = author.end() + dated_head.end()
+
+    markers = [
+        match
+        for match in re.finditer(
+            r"[,;]\s*(?P<code>in)\s*:", raw[title_start_bound:], re.IGNORECASE,
+        )
+    ]
+    if len(markers) != 1:
+        return None
+    marker = markers[0]
+    marker_start = title_start_bound + marker.start()
+    marker_end = title_start_bound + marker.end()
+    if any(
+        char in {'"', "“", "”", "‘", "’", "'"}
+        for char in raw[title_start_bound:marker_start]
+    ):
+        return None
+
+    # The marker is also a place code only when it is the generic uppercase
+    # two-letter field after a comma. A valid pagination tuple or any
+    # proceedings/conference cue remains owned by the closed-family parser.
+    if re.fullmatch(r",\s*[A-Z]{2}\s*:", marker.group(0)) is None:
+        return None
+    prefix_parts = _split_prose_entry_parts(raw[title_start_bound:marker_start])
+    if len(prefix_parts) != 2:
+        return None
+    title = prefix_parts[0].strip()
+    if not _is_title_fragment(title):
+        return None
+    title_start = raw.find(title, title_start_bound, marker_start)
+    if title_start < 0 or raw[title_start_bound:title_start].strip():
+        return None
+    title_end = title_start + len(title)
+    sentence_stop = re.match(r"\.\s+", raw[title_end:marker_start])
+    if sentence_stop is None:
+        return None
+    place = raw[title_end + sentence_stop.end():marker_start].strip()
+    if prefix_parts[1].strip() != place or not place:
+        return None
+    place_words = place.split()
+    if any(not word[0].isalpha() or not word[0].isupper() for word in place_words):
+        return None
+    if re.search(r"[,;:!?\r\n]", place):
+        return None
+
+    tail = raw[marker_end:]
+    identifier_suffix = re.search(
+        r"[.;]\s+(?:(?:doi\s*:\s*)?10\.\d{4,9}/[^\s]+|https?://[^\s]+)\s*$",
+        tail,
+        re.IGNORECASE,
+    )
+    if identifier_suffix is not None:
+        tail = tail[:identifier_suffix.start()]
+    tail = tail.strip()
+    if re.search(
+        r"\b(?:proceedings?|conference|workshops?|symposia|symposium)\b",
+        tail,
+        re.IGNORECASE,
+    ):
+        return None
+    if re.search(rf"\b{_AY_YEAR}\b|\bpp?\.\s*\S+", tail, re.IGNORECASE):
+        return None
+    publisher = _PUBLISHER_RE.search(tail)
+    if publisher is None or tail[publisher.end():].strip(" .;"):
+        return None
+    return _trim_title_tail(title)
 
 
 _CUREUS_AUTHOR_TITLE_RE = re.compile(
@@ -1315,12 +2413,61 @@ def _extract_apa_question_journal_title(raw: str) -> str | None:
 
 
 def _extract_strict_aip_quoted_title(raw: str) -> str | None:
-    """Extract a quoted AIP title only from its complete citation shape."""
-    match = _STRICT_AIP_QUOTED_TITLE_RE.match(raw)
+    """Extract a quoted article title only from a complete citation shape."""
+    match = _STRICT_AIP_QUOTED_TITLE_RE.match(raw or "")
+    if match:
+        title = (match.group("curly_title") or match.group("ascii_title")).strip()
+        return title if len(title.split()) >= 2 else None
+
+    match = _CLOSED_INITIAL_QUOTED_ARTICLE_RE.match(raw or "")
     if not match:
         return None
-    title = (match.group("curly_title") or match.group("ascii_title")).strip()
+    title = _trim_title_tail(
+        match.group("curly_title") or match.group("ascii_title") or ""
+    )
     return title if len(title.split()) >= 2 else None
+
+
+def _recognize_closed_labeled_article(
+    raw: str,
+) -> tuple[bool, str | None]:
+    """Recognize a closed quoted title or titleless labeled article tail.
+
+    The Boolean distinguishes an unrecognized entry from a closed titleless
+    article. That lets the caller keep a labeled locator fragment from falling
+    through to the generic title-fragment heuristic.
+    """
+    if not raw or _CLOSED_LABELED_ARTICLE_TERMINAL_DATE_RE.search(raw) is None:
+        return False, None
+    match = _CLOSED_LABELED_ARTICLE_ENTRY_RE.fullmatch(raw)
+    if match is None:
+        return False, None
+    venue = match.group("venue").strip(" \t,;:")
+    if (
+        not venue
+        or not any(char.isalpha() for char in venue)
+        or not all(char.isprintable() for char in venue)
+        or re.search(r"\b(?:19|20)\d{2}\b", venue) is not None
+    ):
+        return False, None
+    title = next(
+        (
+            match.group(group)
+            for group in (
+                "ascii_inside",
+                "curly_inside",
+                "ascii_outside",
+                "curly_outside",
+            )
+            if match.group(group) is not None
+        ),
+        None,
+    )
+    if title is not None:
+        title = title.strip()
+        if len(title.split()) < 2:
+            return False, None
+    return True, title
 
 
 _EDITED_ORIGINAL_WORK_TITLE_RE = re.compile(
@@ -1398,10 +2545,50 @@ def _extract_chicago_hanging_title(raw: str) -> str | None:
     return None
 
 
-def _extract_title(raw: str, *, chicago_hanging: bool = False) -> str | None:
+def _extract_semicolon_initial_title(raw: str) -> str | None:
+    """Read a title only from a complete semicolon-author article shape.
+
+    Protecting initials in the generic prose splitter also protects the final
+    ``P. On ...`` author/title boundary. The closed year-volume-page tail and
+    repeated surname-comma-initial author blocks disambiguate that boundary.
+    """
+    initial = r"[A-ZÀ-Þ]\.(?:[-‐‑‒–—−][A-ZÀ-Þ]\.)?"
+    author = rf"[^.;,\r\n]+,\s*(?:{initial}\s*){{1,4}}"
+    match = re.fullmatch(
+        rf"\s*(?:{author};\s*)+{author}"
+        r"(?P<title>[A-ZÀ-Þ].+?)\.\s+[A-Z][A-Za-z .&'’()\-]{1,100}?\.\s+"
+        r"(?:19|20)\d{2},\s*\d{1,4},\s*\d+\s*[-–—−]\s*\d+\.\s*",
+        raw,
+        re.S,
+    )
+    if not match:
+        return None
+    title = match.group("title").strip()
+    return _trim_title_tail(title) if len(title.split()) >= 2 else None
+
+
+def _extract_comma_year_volume_title(raw: str) -> str | None:
+    """Read the title from the closed ``(year), title, journal, Volume N, locator`` shape."""
+    match = re.fullmatch(
+        r"\s*[^()]+,\s*\((?:19|20)\d{2}\)\s*,\s*"
+        r"(?P<title>[^,]+?)\s*,\s*[^,]+?\s*,\s*Volume\s+\d+\s*,\s*"
+        r"[A-Za-z]?\d+(?:\s*[-–—]\s*[A-Za-z]?\d+)?\.?\s*",
+        raw or "",
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    title = re.sub(r"\s+", " ", match.group("title")).strip()
+    return title if len(title.split()) >= 2 else None
+
+
+def _extract_title_heuristic(raw: str, *, chicago_hanging: bool = False) -> str | None:
     """Best-effort title extraction from a prose bibliography entry."""
     if not raw:
         return None
+    colon_family, colon_title = _closed_colon_author_title(raw)
+    if colon_family:
+        return colon_title
     raw = _strip_pdf_rights_notice_for_title(raw)
     raw = _join_soft_hyphen_breaks(raw)
     if chicago_hanging:
@@ -1411,6 +2598,9 @@ def _extract_title(raw: str, *, chicago_hanging: bool = False) -> str | None:
     aip_title = _extract_strict_aip_quoted_title(raw)
     if aip_title:
         return aip_title
+    labeled_family, labeled_title = _recognize_closed_labeled_article(raw)
+    if labeled_family:
+        return labeled_title
     edited_original_work_title = _extract_edited_original_work_title(raw)
     if edited_original_work_title:
         return edited_original_work_title
@@ -1426,6 +2616,36 @@ def _extract_title(raw: str, *, chicago_hanging: bool = False) -> str | None:
     apa_question_title = _extract_apa_question_journal_title(raw)
     if apa_question_title:
         return apa_question_title
+    semicolon_title = _extract_semicolon_initial_title(raw)
+    if semicolon_title:
+        return semicolon_title
+    comma_year_volume_title = _extract_comma_year_volume_title(raw)
+    if comma_year_volume_title:
+        return comma_year_volume_title
+    comma_initial_chapter_title = _extract_comma_initial_author_edited_chapter_title(raw)
+    if comma_initial_chapter_title:
+        return comma_initial_chapter_title
+    comma_initial_book_title = _extract_comma_initial_author_book_title(raw)
+    if comma_initial_book_title:
+        return comma_initial_book_title
+    in_container_family, in_container_candidate = (
+        _recognize_comma_initial_in_container_entry(raw)
+    )
+    if in_container_family:
+        if in_container_candidate is None:
+            place_imprint_title = _extract_author_date_place_imprint_title(raw)
+            if place_imprint_title:
+                return place_imprint_title
+        return in_container_candidate[0] if in_container_candidate else None
+    if _is_closed_comma_initial_article_without_title(raw):
+        return None
+    # A complete author/title/article-coordinate grammar is stronger than the
+    # sentence-first Vancouver fallback below. In compact references, journal
+    # abbreviations can themselves contain periods, so splitting the first
+    # prose-looking sentence may append venue words to a valid title.
+    comma_initial_article_title = _extract_comma_initial_author_title(raw)
+    if comma_initial_article_title:
+        return comma_initial_article_title
     # PLOS / numbered-Vancouver: "Authors (YYYY) Title. Venue Vol: pp."  Unlike
     # APA ("Authors (YYYY). Title.") there is NO period after the year, so the
     # author block and the title share one dotted segment and the generic path
@@ -1444,10 +2664,60 @@ def _extract_title(raw: str, *, chicago_hanging: bool = False) -> str | None:
                     candidate,
                 )
             ):
+                # Sentence punctuation alone cannot distinguish a compound
+                # title from a title followed by a journal. Extend through
+                # intervening title sentences only when one exact, ordered
+                # journal/volume/locator tuple closes the entry.
+                coordinates = extract_cited_coordinates(raw, candidate)
+                containers = [
+                    row for row in coordinates if row.get("kind") == "container"
+                ]
+                volumes = [
+                    row for row in coordinates if row.get("kind") == "volume"
+                ]
+                locators = [
+                    row for row in coordinates
+                    if row.get("kind") in {
+                        "article_page_range", "article_locator",
+                        "article_number", "elocator",
+                    }
+                ]
+                if (
+                    len(containers) == len(volumes) == len(locators) == 1
+                    and containers[0].get("rule_id")
+                    == volumes[0].get("rule_id")
+                    == locators[0].get("rule_id")
+                ):
+                    container_span = _coordinate_span_matches(raw, containers[0])
+                    volume_span = _coordinate_span_matches(raw, volumes[0])
+                    locator_span = _coordinate_span_matches(raw, locators[0])
+                    title_start = m.end()
+                    while title_start < len(raw) and raw[title_start].isspace():
+                        title_start += 1
+                    title_region = (
+                        raw[m.end():container_span[0]]
+                        if container_span is not None else ""
+                    )
+                    if (
+                        container_span is not None
+                        and volume_span is not None
+                        and locator_span is not None
+                        and raw.startswith(candidate, title_start)
+                        and container_span[1] <= volume_span[0]
+                        and volume_span[1] <= locator_span[0]
+                        and raw[locator_span[1]:].strip(" \t\r\n.,;") == ""
+                        and title_region.rstrip().endswith((".", "?", "!"))
+                    ):
+                        bounded_title = _trim_title_tail(title_region)
+                        if len(bounded_title.split()) >= 2:
+                            candidate = bounded_title
                 return _trim_title_tail(candidate)
     initial_title = _title_after_initials(raw)
     if initial_title:
         return initial_title
+    comma_initial_author_title = _extract_comma_initial_author_title(raw)
+    if comma_initial_author_title:
+        return comma_initial_author_title
     # Corporate entries can omit the author/title period entirely, e.g.
     # ``Clarivate, Journal Citation Reports ... (Philadelphia: ..., 2025)``.
     # Restrict this to a single-word corporate author to avoid mistaking a
@@ -1464,7 +2734,7 @@ def _extract_title(raw: str, *, chicago_hanging: bool = False) -> str | None:
     parts = _split_prose_entry_parts(raw)
     # The typical pattern is: Authors. Title. Venue, Year.
     # Skip the first segment (author block), check the next 1-2 segments.
-    for part in parts[1:5]:
+    for part_index, part in enumerate(parts[1:5], start=1):
         part = _strip_trailing_coauthor(part)
         # ``(in press)``/``(forthcoming)``/``(n.d.)`` can be the first
         # segment after the author block.  They are dates, never titles.
@@ -1479,12 +2749,35 @@ def _extract_title(raw: str, *, chicago_hanging: bool = False) -> str | None:
         if len(toks) >= 2 and not re.search(r"\b(?:19|20)\d{2}\b", part):
             return _trim_title_tail(part)
         # Part contains a year but may also contain the title before the year.
+        if (
+            len(toks) >= 4
+            and part_index + 1 == len(parts) - 1
+            and _CLOSED_TERMINAL_VENUE_YEAR_VOLUME_RE.fullmatch(parts[part_index + 1])
+        ):
+            return _trim_title_tail(part)
         # Try to extract the title portion before the first year occurrence.
         if len(toks) >= 4:
             title_part = _split_before_year(part)
             if title_part and len(title_part.split()) >= 2:
                 return _trim_title_tail(title_part)
     return None
+
+
+def _extract_title(raw: str, *, chicago_hanging: bool = False) -> str | None:
+    """Use a structural reader's title decision before generic heuristics."""
+    if not raw:
+        return None
+    record = reference_readers.parse_entry(
+        raw, chicago_hanging=chicago_hanging, include_generic=False,
+    )
+    if record.get("status") == "ambiguous":
+        return None
+    if record.get("status") == "parsed":
+        item = (record.get("fields") or {}).get("title")
+        return item.get("value") if item else None
+    if not reference_readers._generic_text_enabled():
+        return None
+    return _extract_title_heuristic(raw, chicago_hanging=chicago_hanging)
 
 
 # A journal's submission history — "Received June 13, 2005 … Accepted March 28,
@@ -1595,6 +2888,8 @@ def _complete_truncated_doi_url(url: str, doi: str | None, citation_context: str
 
 def _doi_continuation(head: str, cont: str) -> bool:
     """Whether ``cont`` is the rest of a DOI broken by a line wrap."""
+    if re.match(r"[a-z][a-z0-9+.-]*://", cont, re.IGNORECASE):
+        return False                       # a new URI is not a DOI continuation
     if cont.startswith("."):
         # The wrap split immediately before a DOI-internal period, so the head
         # ("…/j.clgc", "…/jmor", "…/rsbl") is unfinished and the period is its
@@ -1636,30 +2931,81 @@ def _rejoin_wrapped_doi(text: str) -> str:
     return out
 
 
+def _trim_citation_doi_wrappers(value: str) -> str:
+    """Remove citation punctuation without dropping balanced DOI parentheses."""
+    doi = value.rstrip(".,;>")
+    while doi.endswith(")") and doi.count(")") > doi.count("("):
+        doi = doi[:-1]
+    return doi
+
+
 def _rejoin_wrapped_doi_once(text: str) -> str:
     match = _DOI_HEAD_RE.search(text)
     while match:
         end = match.end()
         rest = text[end:]
-        space = len(rest) - len(rest.lstrip(" \t"))
+        head = match.group(0)
+        whitespace = " \t\r\n" if head.endswith("/") else " \t"
+        space = len(rest) - len(rest.lstrip(whitespace))
         if space:
-            cont = _DOI_CONT_RE.match(rest[space:])
-            head = match.group(0)
+            # An empty suffix is proven unfinished. DOI suffixes are case
+            # insensitive, but uppercase prose after a complete DOI stays out.
+            cont = (
+                re.match(_DOI_CONT_RE.pattern, rest[space:], re.IGNORECASE)
+                if head.endswith("/") else _DOI_CONT_RE.match(rest[space:])
+            )
             if cont and not head.endswith((",", ";")) and _doi_continuation(head, cont.group(0)):
                 return text[:end] + rest[space:]
         match = _DOI_HEAD_RE.search(text, match.start() + 1)
     return text
 
 
-def _make_reference(num: int, raw: str, *, chicago_hanging: bool = False) -> dict:
+def _make_reference(
+    num: int,
+    raw: str,
+    *,
+    chicago_hanging: bool = False,
+    _analysis_raw: str | None = None,
+) -> dict:
     # Run storage canonicalises text to NFC. Coordinate offsets must therefore
     # be derived from that same representation or a decomposed character before
     # the coordinate shifts every persisted raw span.
     raw = unicodedata.normalize("NFC", raw)
+    if _analysis_raw is not None and not isinstance(_analysis_raw, str):
+        raise ValueError("_analysis_raw must be a string when provided")
+    analysis_raw = unicodedata.normalize(
+        "NFC", _analysis_raw if _analysis_raw is not None else raw,
+    )
+    # Scoped chapter bibliographies retain their printed local entry label in
+    # raw_entry while metadata extraction sees the label-free entry body.  Keep
+    # the two views separate: cited-coordinate spans below are always certified
+    # against the complete persisted raw_entry.
+    # Scoped and opaque entries retain a literal label prefix in raw_entry,
+    # while _analysis_raw is the exact label-free suffix. Parse that suffix and
+    # translate its field spans only when the source relationship is proven.
+    if _analysis_raw is not None and not analysis_raw:
+        raise ValueError("_analysis_raw must be a non-empty body when provided")
+    if _analysis_raw is not None and not raw.endswith(analysis_raw):
+        raise ValueError("_analysis_raw must be an exact NFC suffix of raw_entry")
+    parse_source = analysis_raw
+    parse_offset = len(raw) - len(parse_source)
+    bibliographic_parse = reference_readers.parse_entry(
+        parse_source, chicago_hanging=chicago_hanging,
+    )
+    if parse_offset:
+        for item in (bibliographic_parse.get("fields") or {}).values():
+            for span in item.get("spans", []):
+                span["start"] += parse_offset
+                span["end"] += parse_offset
+        if not reference_readers.validate_parse(bibliographic_parse, raw):
+            raise ValueError(
+                "label-free bibliographic Parse spans do not validate against "
+                "the preserved raw entry"
+            )
     doi = None
     # PDF extraction often inserts spaces around hyphens within DOIs that
     # span lines: "10.1038/s41586 - 022 - 05543 - x" → "10.1038/s41586-022-05543-x"
-    _clean = re.sub(r"\s*[–—-]\s*", "-", raw)
+    _clean = re.sub(r"\s*[–—-]\s*", "-", analysis_raw)
     # Some editors insert invisible Unicode format controls into DOI URLs to
     # suppress automatic linking.  Remove those controls only in the extraction
     # view: ``raw_entry`` remains the exact citation supplied by the user.
@@ -1672,20 +3018,39 @@ def _make_reference(num: int, raw: str, *, chicago_hanging: bool = False) -> dic
     _clean = _clean.replace("≤", "<").replace("≥", ">")
     _clean = _rejoin_wrapped_doi_registrant(_clean)
     _clean = _rejoin_wrapped_doi(_clean)
+    # A DOI in a quoted HTML href ends at the attribute quote. Prefer that
+    # boundary before scanning the broader citation text, where a linked DOI
+    # may be immediately followed by its visible URL and closing tags.
+    doi_href = re.search(
+        r"href\s*=\s*(?P<quote>[\"'])(?P<url>https?://(?:dx\.)?doi\.org/.*?)(?P=quote)",
+        _clean,
+        re.IGNORECASE | re.DOTALL,
+    )
     m = re.search(r"10\.\d{4,9}/\S+", _clean)
+    href_doi = re.search(r"10\.\d{4,9}/\S+", doi_href.group("url")) if doi_href else None
+    if m and href_doi and doi_href.start("url") + href_doi.start() == m.start():
+        # Bound the match only when the first DOI in the citation is the one
+        # inside this href; an earlier literal DOI remains authoritative.
+        m = href_doi
     if m:
-        # ">" closes an OSCOLA "<https://doi.org/…>" wrap and is never DOI-final.
-        doi = m.group(0).rstrip(".,;>")
+        doi = _trim_citation_doi_wrappers(m.group(0))
+    literal_doi = doi is not None
     # Fallback: extract arXiv ID as DOI (e.g. "arXiv:1607.06450" → "10.48550/arXiv.1607.06450")
     if doi is None:
-        doi = _extract_arxiv_doi(raw)
-    title = _extract_title(raw, chicago_hanging=chicago_hanging)
+        doi = _extract_arxiv_doi(analysis_raw)
+    parsed_fields = bibliographic_parse.get("fields") or {}
+    if bibliographic_parse.get("status") == "ambiguous":
+        title = None
+    elif "title" in parsed_fields:
+        title = parsed_fields["title"]["value"]
+    else:
+        title = _extract_title(analysis_raw, chicago_hanging=chicago_hanging)
     pmid = None
-    m = re.search(r"PMID:?\s*(\d+)", raw, re.IGNORECASE)
+    m = re.search(r"PMID:?\s*(\d+)", analysis_raw, re.IGNORECASE)
     if m:
         pmid = m.group(1)
     isbn = None
-    m = re.search(r"ISBN[:\s]*([\d\-Xx]{10,17})", raw)
+    m = re.search(r"ISBN[:\s]*([\d\-Xx]{10,17})", analysis_raw)
     if m:
         isbn = m.group(1)
     url = None
@@ -1702,7 +3067,9 @@ def _make_reference(num: int, raw: str, *, chicago_hanging: bool = False) -> dic
     # "…/northern-ontario- 1101895" is one identifier and must keep its hyphen.
     # Read from *raw*, not from _clean: _clean has already collapsed "- " to "-",
     # which is exactly the evidence that the break was there.
-    _url_src = re.sub(r"(https?://[^\s)/]*)-\s+([a-z0-9][^\s)]*)", r"\1\2", raw)
+    _url_src = re.sub(
+        r"(https?://[^\s)/]*)-\s+([a-z0-9][^\s)]*)", r"\1\2", analysis_raw,
+    )
     # Join only a scheme-to-host wrap when the next token is a dotted DNS host
     # with an alphabetic TLD; this excludes prose, localhost, and IPv4.
     _url_src = re.sub(
@@ -1747,44 +3114,165 @@ def _make_reference(num: int, raw: str, *, chicago_hanging: bool = False) -> dic
     _url_clean = re.sub(
         r"(https?://[^\s)]*)\s+([^\s)]*\.(?:pdf|html?|aspx?|php|docx?))\b",
         r"\1\2", _url_clean)
-    m = re.search(r"https?://[^\s)]+", _url_clean)
-    if m:
+    m = re.search(r"https?://[^\s]+", _url_clean)
+    url_href = re.search(
+        r"href\s*=\s*(?P<quote>[\"'])(?P<url>https?://(?:dx\.)?doi\.org/.*?)(?P=quote)",
+        _url_clean,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m and url_href and url_href.start("url") == m.start():
+        # Bound a first-position DOI href at its quote, without allowing a later
+        # linked URL to replace a URL that appeared earlier in the citation.
+        url = url_href.group("url").rstrip(".,;>")
+        url = _complete_truncated_doi_url(url, doi, analysis_raw)
+    elif m:
         # Bluebook wraps an archival mirror in brackets ("[https://perma.cc/AB12-CD34]");
-        # the closing one is not part of the link.  ")" cannot appear here — the
-        # pattern above already stops before it.
-        url = m.group(0).rstrip(".,;]>»")
-        url = _complete_truncated_doi_url(url, doi, raw)
+        # the closing one is not part of the link. Keep balanced path/query
+        # parentheses, stopping only at an unmatched closing parenthesis that
+        # belongs to surrounding citation punctuation.
+        token = m.group(0)
+        depth = 0
+        end = len(token)
+        for index, char in enumerate(token):
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                if depth == 0:
+                    end = index
+                    break
+                depth -= 1
+        url = token[:end].rstrip(".,;]>»")
+        url = _complete_truncated_doi_url(url, doi, analysis_raw)
     year = None
     # An arXiv identifier ("arXiv:1903.10520") leads with a YYYY-shaped group that
     # is NOT a year; drop such id tokens before scanning so we don't read 1903 as
     # the year of a 2019 paper.  The YYYY.NNNNN shape is unique to arXiv ids —
     # real page ranges use "-"/":" separators, never a dot between 4 and 5 digits.
-    _year_src = re.sub(r"\b\d{4}\.\d{4,5}(?:v\d+)?\b", " ", raw)
-    # A project/initiative number is not a publication date.  Keep this narrow:
-    # it handles the known ``Project, 2050`` corporate contributor without
-    # changing ordinary author-year citations.
-    _year_src = re.sub(r"\bProject,?\s+(?:19|20)\d{2}\b", "Project", _year_src, flags=re.I)
-    for pat in (
-        r"\b((?:19|20)\d{2})[a-z]?\s*;",
-        r"\b((?:19|20)\d{2})[a-z]?\s*,\s*(?:vol\.|volume)\b",
-    ):
-        m = re.search(pat, _year_src, re.IGNORECASE)
-        if m:
-            year = int(m.group(1))
-            break
+    _year_src = re.sub(r"\b\d{4}\.\d{4,5}(?:v\d+)?\b", " ", analysis_raw)
+    structured_year_precedence = False
+    compact_vancouver_article = _match_vancouver_terminal_initial_compact_article(
+        analysis_raw,
+    )
+    if compact_vancouver_article:
+        year = int(compact_vancouver_article.group("year"))
+        structured_year_precedence = True
+    else:
+        for pat in (
+            r"\b((?:19|20)\d{2})[a-z]?\s*;",
+            r"\b((?:19|20)\d{2})[a-z]?\s*,\s*(?:vol\.|volume)\b",
+        ):
+            m = re.search(pat, _year_src, re.IGNORECASE)
+            if m:
+                year = int(m.group(1))
+                structured_year_precedence = True
+                break
     if year is None:
         # The optional author-year disambiguator is metadata, not part of the
         # numeric publication year.  Do not require a word boundary immediately
         # after the digits: it would discard ``2020a`` altogether.
-        years = [int(y) for y in re.findall(r"\b((?:19|20)\d{2})[a-z]?\b", _year_src)]
-        if years:
+        years = [
+            int(y) for y in re.findall(r"\b((?:19|20)\d{2})[a-z]?\b", _year_src)
+        ]
+        if years and reference_readers._generic_text_enabled():
             year = years[0]  # first year in the entry, before PDF bleed appends unrelated years
 
     terminal_issue_year = _terminal_issue_page_range_year(_year_src)
     if terminal_issue_year is not None:
         year = terminal_issue_year[0]
 
-    classification = _classify_reference(raw, doi=doi, pmid=pmid, isbn=isbn, url=url)
+    publisher_year = (
+        None if structured_year_precedence else _terminal_publisher_year(_year_src)
+    )
+    if publisher_year is not None:
+        year = publisher_year
+    literal_title_publication_year = _literal_title_terminal_journal_year(
+        analysis_raw, title,
+    )
+    if literal_title_publication_year is not None:
+        year = literal_title_publication_year[0]
+    paginated_publication_year = _terminal_paginated_publication_year(analysis_raw)
+    # A proven old publication role outranks a free numeric scan (for example, a
+    # year in a DOI, URL, or title), while the existing closed modern-year paths
+    # retain their established precedence.
+    if not (
+        structured_year_precedence
+        or terminal_issue_year is not None
+        or publisher_year is not None
+        or literal_title_publication_year is not None
+    ):
+        if paginated_publication_year is not None:
+            year = paginated_publication_year[0]
+        else:
+            historical_year = _historical_publication_year(analysis_raw, title)
+            if historical_year is not None:
+                year = historical_year
+    if bibliographic_parse.get("status") == "ambiguous":
+        year = None
+    elif (bibliographic_parse.get("status") == "parsed"
+          and bibliographic_parse.get("reader") != "generic-text"):
+        year_record = parsed_fields.get("year")
+        year = year_record["value"] if year_record is not None else None
+    elif bibliographic_parse.get("status") == "parsed" and "year" in parsed_fields:
+        year = parsed_fields["year"]["value"]
+    recognized_structural = (
+        bibliographic_parse.get("status") == "parsed"
+        and bibliographic_parse.get("reader") != "generic-text"
+    )
+    structural_title = parsed_fields.get("title") if recognized_structural else None
+    structured_title = structural_title is not None
+    source_title_extent = _closed_journal_title_extent(
+        analysis_raw, year, extract_cited_coordinates(analysis_raw, title),
+    )
+    extracted_title = title
+    if (source_title_extent is not None and not recognized_structural
+            and bibliographic_parse.get("status") != "ambiguous"):
+        bounded_title = source_title_extent[0]
+        if bool(title) != bool(bounded_title):
+            title = bounded_title
+        elif title and bounded_title:
+            existing_content = (
+                title[:-1] if title.endswith((".", "!", "?")) else title
+            )
+            bounded_content = (
+                bounded_title[:-1]
+                if bounded_title.endswith((".", "!", "?"))
+                else bounded_title
+            )
+            if existing_content != bounded_content:
+                title = bounded_title
+    if title != extracted_title and not structured_title:
+        parsed_fields.pop("title", None)
+    if bibliographic_parse.get("status") == "ambiguous":
+        title = None
+    elif recognized_structural:
+        title = structural_title["value"] if structural_title else None
+    elif structured_title:
+        title = parsed_fields["title"]["value"]
+
+    # Keep identifier proof aligned with the established line-wrap and URL
+    # cleanup above. A literal span is exposed only when it agrees exactly with
+    # the identifier the resolver will receive.
+    for field_name, normalized in (("doi", doi), ("url", url), ("year", year)):
+        item = parsed_fields.get(field_name)
+        if item is not None and item.get("value") != normalized:
+            parsed_fields.pop(field_name, None)
+            item = None
+        if item is None and normalized is not None and bibliographic_parse.get("status") == "parsed":
+            token = str(normalized)
+            positions = [match.start() for match in re.finditer(re.escape(token), raw)]
+            if len(positions) == 1:
+                start = positions[0]
+                parsed_fields[field_name] = {
+                    "value": normalized,
+                    "spans": [{"start": start, "end": start + len(token),
+                               "raw_value": raw[start:start + len(token)]}],
+                    "rule": "common-extractor:unique-literal-value",
+                }
+
+    classification = _classify_reference(
+        analysis_raw, doi=doi, pmid=pmid, isbn=isbn, url=url,
+        bibliographic_parse=bibliographic_parse,
+    )
 
     reference = {
         "id": f"ref-{uuid.uuid4().hex[:10]}",
@@ -1802,11 +3290,32 @@ def _make_reference(num: int, raw: str, *, chicago_hanging: bool = False) -> dic
         "url": url,
         "title": title,
         "year": year,
+        "bibliographic_parse": bibliographic_parse,
         "fulltext_status": "pending",
         "provided_source": None,
         "accessed_at": None,
     }
+    for field_name in ("authors", "editors", "first_author", "journal", "volume", "issue", "pages", "place", "publisher"):
+        field_record = parsed_fields.get(field_name)
+        if field_record is not None and bibliographic_parse.get("status") == "parsed":
+            reference[field_name] = field_record["value"]
     cited_coordinates = extract_cited_coordinates(raw, title)
+    if any(conflict.get("field") == "journal"
+           for conflict in bibliographic_parse.get("conflicts", [])):
+        # A raw-text coordinate guess cannot override an explicitly withheld
+        # journal boundary. Independent numeric coordinates remain usable.
+        cited_coordinates = [coordinate for coordinate in cited_coordinates
+                             if coordinate.get("kind") != "container"]
+    inferred_arxiv_doi = _extract_arxiv_doi(raw)
+    if (
+        not literal_doi
+        and doi is not None
+        and doi == inferred_arxiv_doi
+        and _has_closed_parenthesized_journal_tuple(raw, cited_coordinates, year)
+    ):
+        doi = None
+        reference["doi"] = None
+    _align_bibliographic_parse(reference)
     if cited_coordinates:
         reference["cited_coordinates"] = cited_coordinates
     return reference
@@ -1891,6 +3400,14 @@ def _is_biblio_tail_line(line: str) -> bool:
 _INITIAL_CLUSTER = r"[A-Z]{1,4}(?:-[A-Z]{1,4})*"
 
 
+# Shared by line starts and the full-text author boundary scan. Lowercase
+# particles require a capitalized surname; this is name shape, not a paper list.
+_AY_NAME_PARTICLES = (
+    r"(?:(?:van der|van den|van de|de la|de|del|della|van|von|der|den|"
+    r"du|da|di|dos|ter|ten|bin|ibn)\s+){1,2}"
+)
+
+
 def _looks_authoryear_ref_start(line: str, next_line: str = "") -> bool:
     """APA-ish reference start for non-numbered bibliographies.
 
@@ -1920,6 +3437,19 @@ def _looks_authoryear_ref_start(line: str, next_line: str = "") -> bool:
         if re.match(r"^[A-Z][a-zà-ÿ]+ [A-Z][a-zà-ÿ'\-]+, [A-Z]", line):
             return True
         return False
+    # The year gate above also applies to a lowercase particle. Require the
+    # existing punctuated-initial human-author shape before reusing the ordinary
+    # start check; stripping "de" from prose must not enable the Chicago shortcut.
+    particle = re.match(rf"^{_AY_NAME_PARTICLES}(?=[A-Z][^\W\d_])", line)
+    if particle:
+        author = line[particle.end():]
+        if not re.match(
+            r"^[A-Z](?:'[A-Z])?[^\W\d_][\w'’.-]*"
+            r"(?:\s+[A-Z][^\W\d_][\w'’.-]*){0,3},\s*[A-Z]\.",
+            author,
+        ):
+            return False
+        return _looks_authoryear_ref_start(author, next_line)
     if re.match(r"^[A-Z](?:'[A-Z])?[^\W\d_][\w'’.-]*(?:\s+[A-Z]\.)?,", line):
         return True
     if re.match(r"^[A-Z][^\W\d_][\w'’.-]*(?:\s+[A-Z][^\W\d_][\w'’.-]*){1,3},\s*[A-Z]\.", line):
@@ -1966,7 +3496,7 @@ def _merge_hyphen_wraps(text: str) -> str:
 # extraction can put a terminal page number ("454.", "2024.") on a line of
 # its own just before the next marker; accepting every ``\s+`` there consumes
 # that next marker and silently loses the reference.
-_NUM_SEPARATOR = r"(?:[^\S\r\n]+|[^\S\r\n]*\r?\n(?=[^\S\r\n]*[^\W\d_]))"
+_NUM_SEPARATOR = r"(?:[^\S\r\n]+|[^\S\r\n]*\r?\n(?=[^\S\r\n]*[\"“‘']?[^\W\d_]))"
 _NUM_MARKER = (
     rf"(?:\[(\d+)\](?:\.)?{_NUM_SEPARATOR}"
     rf"|\((\d+)\){_NUM_SEPARATOR}"
@@ -2007,10 +3537,530 @@ def _entry_start_num(line: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _opaque_numeric_entry_has_substantive_body(
+    lines: list[str], index: int,
+) -> bool:
+    """Whether a numbered marker in a keyed bibliography has entry text.
+
+    PDF extraction can leave trailing whitespace after a year-only continuation
+    line, which makes the generic marker regex look as if it has a separator and
+    an entry body. A real inline marker has non-whitespace text after its match;
+    a detached short marker can take its body from the next nonblank line.
+    """
+    line = lines[index]
+    if _entry_start_num(line) is None:
+        return False
+    match = _REF_ENTRY_NUM_RE.match(line)
+    if match and line[match.end():].strip():
+        return True
+    if not _LONE_NUM_RE.fullmatch(line):
+        return False
+    body_index = index + 1
+    while body_index < len(lines) and not lines[body_index].strip():
+        body_index += 1
+    if body_index >= len(lines):
+        return False
+    body_line = lines[body_index].strip()
+    lowered = body_line.lower()
+    return bool(
+        body_line
+        and _entry_start_num(body_line) is None
+        and not parser_text._APPENDIX_PREFIX_RE.match(lowered)
+        and not _OPAQUE_PAGE_FOOTER_RE.fullmatch(lowered)
+        and not _OPAQUE_PAGE_NUMBER_RE.fullmatch(lowered)
+    )
+
+
+_OPAQUE_KEY_ENTRY_RE = re.compile(
+    r"(?m)^[ \t]*(?P<prefix>(?P<label>\[[^\]\r\n]+\])"
+    r"(?:[ \t]+(?=\S)|[ \t]*(?:\r?\n[ \t]*)+(?!\[)(?=\S)))"
+)
+_OPAQUE_KEY_LABEL_ONLY_RE = re.compile(
+    r"^[ \t]*(?P<label>\[[^\]\r\n]+\])[ \t]*$"
+)
+_OPAQUE_PAGE_FOOTER_RE = re.compile(
+    r"^appendix\s+[a-z0-9][a-z0-9._-]*\s+page\s+\d+\s*$",
+    re.IGNORECASE,
+)
+_OPAQUE_APPENDIX_LABEL_RE = re.compile(
+    r"^appendix\s+[a-z0-9][a-z0-9._-]*\s*$",
+    re.IGNORECASE,
+)
+_OPAQUE_PAGE_NUMBER_RE = re.compile(r"^page\s+\d+\s*$", re.IGNORECASE)
+
+
+def _opaque_key_entry_match_at(lines: list[str], index: int):
+    """Match an inline or detached keyed entry start at one line index."""
+    match = _OPAQUE_KEY_ENTRY_RE.match(lines[index])
+    if match or not _OPAQUE_KEY_LABEL_ONLY_RE.fullmatch(lines[index]):
+        return match
+    body_index = index + 1
+    while body_index < len(lines) and not lines[body_index].strip():
+        body_index += 1
+    if body_index >= len(lines):
+        return None
+    probe = "\n".join(lines[index:body_index + 1])
+    return _OPAQUE_KEY_ENTRY_RE.match(probe)
+
+
+def _opaque_keyed_spine_status(text: str) -> str | None:
+    """Classify a repeated bracketed, nonnumeric bibliography-key spine.
+
+    A valid spine can be parsed without inventing printed numbers.  A repeated
+    spine that mixes numeric labels, duplicates keys, or contains a malformed
+    bracket-start line is still recognized, but must fail closed rather than
+    fall through to the ordinary line-numbered reference parser.
+    """
+    lines = (text or "").splitlines()
+    page_furniture = set()
+    for index in range(len(lines)):
+        end = _opaque_page_furniture_end(lines, index)
+        if end is not None:
+            page_furniture.update(range(index, end))
+    labels = []
+    malformed_key_start = False
+    numeric_entry_start = False
+    orphan_key_start = False
+    for index, line in enumerate(lines):
+        if index in page_furniture:
+            continue
+        stripped = line.strip().lower()
+        if (
+            parser_text._APPENDIX_PREFIX_RE.match(stripped)
+            and not _OPAQUE_PAGE_FOOTER_RE.fullmatch(stripped)
+        ):
+            break
+        if _OPAQUE_PAGE_FOOTER_RE.fullmatch(stripped):
+            continue
+        match = _opaque_key_entry_match_at(lines, index)
+        if match:
+            label = match.group("label")[1:-1].strip()
+            if label and not re.fullmatch(r"\d+", label):
+                labels.append(" ".join(label.casefold().split()))
+            else:
+                numeric_entry_start = True
+            if "\n" in match.group("prefix"):
+                body_index = index + match.group("prefix").count("\n")
+                if body_index < len(lines):
+                    body_line = lines[body_index].strip().lower()
+                    if (
+                        parser_text._APPENDIX_PREFIX_RE.match(body_line)
+                        or _OPAQUE_PAGE_FOOTER_RE.fullmatch(body_line)
+                        or _OPAQUE_PAGE_NUMBER_RE.fullmatch(body_line)
+                    ):
+                        orphan_key_start = True
+            continue
+        label_only = _OPAQUE_KEY_LABEL_ONLY_RE.fullmatch(line)
+        if label_only:
+            label = label_only.group("label")[1:-1].strip()
+            if label and not re.fullmatch(r"\d+", label):
+                labels.append(" ".join(label.casefold().split()))
+            else:
+                numeric_entry_start = True
+            orphan_key_start = True
+            continue
+        if _opaque_numeric_entry_has_substantive_body(lines, index):
+            numeric_entry_start = True
+        elif line.lstrip().startswith("["):
+            malformed_key_start = True
+
+    if len(labels) < 2:
+        return None
+    if (
+        len(set(labels)) != len(labels)
+        or numeric_entry_start
+        or malformed_key_start
+        or orphan_key_start
+    ):
+        return "ambiguous"
+    return "valid"
+
+
+def _opaque_key_entry_resumes(lines: list[str], start: int) -> bool:
+    for index, line in enumerate(lines[start:], start):
+        stripped = line.strip().lower()
+        if (
+            parser_text._APPENDIX_PREFIX_RE.match(stripped)
+            and not _OPAQUE_PAGE_FOOTER_RE.fullmatch(stripped)
+        ):
+            return False
+        if _opaque_key_entry_match_at(lines, index):
+            return True
+    return False
+
+
+def _opaque_page_furniture_end(lines: list[str], index: int) -> int | None:
+    """Return the line after appendix page furniture interposed in a keyed list."""
+    stripped = lines[index].strip().lower()
+    if _OPAQUE_PAGE_FOOTER_RE.fullmatch(stripped):
+        end = index + 1
+    elif (
+        _OPAQUE_APPENDIX_LABEL_RE.fullmatch(stripped)
+        and index + 1 < len(lines)
+        and _OPAQUE_PAGE_NUMBER_RE.fullmatch(lines[index + 1].strip())
+    ):
+        end = index + 2
+    else:
+        return None
+    return end if _opaque_key_entry_resumes(lines, end) else None
+
+
+def _parse_opaque_keyed_references(text: str, meta=None) -> list[dict]:
+    """Parse a proven opaque-key list while keeping raw and analysis views apart."""
+    lines = text.splitlines()
+    page_furniture = set()
+    for line_index in range(len(lines)):
+        footer_end = _opaque_page_furniture_end(lines, line_index)
+        if footer_end is not None:
+            page_furniture.update(range(line_index, footer_end))
+    text = "\n".join(
+        "" if line_index in page_furniture else line
+        for line_index, line in enumerate(lines)
+    )
+    matches = list(_OPAQUE_KEY_ENTRY_RE.finditer(text))
+    refs = []
+    entry_sources = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        lines = text[match.end():end].splitlines()
+        analysis = "\n".join(lines)
+        analysis = " ".join(analysis.split())
+        if not analysis:
+            continue
+        prefix = match.group("prefix")
+        raw_entry = prefix + analysis
+        reference = _make_reference(
+            len(refs) + 1,
+            raw_entry,
+            _analysis_raw=analysis,
+        )
+        refs.append(reference)
+        entry_sources[reference["id"]] = analysis
+    if isinstance(meta, dict):
+        meta["_opaque_entry_sources"] = entry_sources
+    return _merge_standalone_doi_url(refs)
+
+
 _PUBLISHER_RE = re.compile(
     r"\b(?:Press|Wiley|Springer|Elsevier|Routledge|MIT\s+Press|SAGE|University\s+Press)\b",
     re.IGNORECASE,
 )
+
+
+def _terminal_publisher_year(text: str) -> int | None:
+    """Read a terminal publisher year after a bare leading contributor number."""
+    text = text or ""
+    wrapper = re.search(
+        r"\((?P<label>[^()\r\n]*,\s*(?P<year>(?:19|20)\d{2})[a-z]?)\)\s*[.]?\s*$",
+        text,
+        re.IGNORECASE,
+    )
+    if wrapper is None or _PUBLISHER_RE.search(wrapper.group("label")) is None:
+        return None
+    first_year = re.search(r"\b" + _AY_YEAR + r"\b", text)
+    if first_year is None or first_year.start() >= wrapper.start("year"):
+        return None
+    prefix = text[:first_year.start()]
+    if re.search(r"(?:^|(?:&|\band\b)\s*)[^(),;\r\n]+,\s*$", prefix, re.IGNORECASE) is None:
+        return None
+    return int(wrapper.group("year"))
+
+
+_TERMINAL_PAGINATED_PUBLICATION_YEAR_RE = re.compile(
+    rf"(?<!\w)(?P<year>(?:19|20)\d{{2}})(?P<suffix>[a-z])?\s*,\s*"
+    rf"(?:pp?\.|pages?\.?)\s+(?P<locator>\d{{1,9}}"
+    rf"(?:\s*[{RANGE_DASHES}]\s*\d{{1,9}})?)\s*[.]?\s*$",
+    re.IGNORECASE,
+)
+_CLOSED_YEAR_RANGE_RE = re.compile(
+    rf"(?<!\d)(?P<first>(?:1[5-9]|20)\d{{2}}[a-z]?)\s*"
+    rf"[{RANGE_DASHES}]\s*(?P<last>(?:1[5-9]|20)\d{{2}}[a-z]?)(?!\d)",
+    re.IGNORECASE,
+)
+
+
+def _terminal_paginated_publication_year(text: str):
+    """Return a literal publication year before a closed terminal page locator.
+
+    Supports the recognized initialized-author ``in:`` container form and the
+    existing closed-range rule. The span preserves exact publication-year
+    evidence for downstream citation keys.
+    """
+    text = text or ""
+    in_container_family, in_container_candidate = (
+        _recognize_comma_initial_in_container_entry(text)
+    )
+    if in_container_family:
+        if in_container_candidate is None or in_container_candidate[4]:
+            return None
+        _, year, suffix, year_span, _ = in_container_candidate
+        return year, suffix, year_span
+
+    publication = _TERMINAL_PAGINATED_PUBLICATION_YEAR_RE.search(text)
+    if publication is None:
+        return None
+    publication_span = (
+        publication.start("year"),
+        publication.end("suffix") if publication.group("suffix") else publication.end("year"),
+    )
+
+    identifier_spans = [
+        match.span()
+        for pattern in (
+            r"\b10\.\d{4,9}/\S+",
+            r"https?://\S+",
+            r"\b\d{4}\.\d{4,5}(?:v\d+)?\b",
+        )
+        for match in re.finditer(pattern, text, re.IGNORECASE)
+    ]
+
+    def overlaps_identifier(span: tuple[int, int]) -> bool:
+        return any(span[0] < end and span[1] > start for start, end in identifier_spans)
+
+    if overlaps_identifier(publication_span):
+        return None
+
+    # The existing free scans both omit arXiv-style YYYY.NNNNN identifiers.
+    # Preserve that behavior while refusing DOI/URL-contained year evidence.
+    arxiv_numeric_spans = [
+        match.span()
+        for match in re.finditer(r"\b\d{4}\.\d{4,5}(?:v\d+)?\b", text, re.IGNORECASE)
+    ]
+
+    def first_outside_arxiv(pattern: str) -> re.Match | None:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            span = match.span()
+            if any(span[0] < end and span[1] > start for start, end in arxiv_numeric_spans):
+                continue
+            return match
+        return None
+
+    first_supported_year = first_outside_arxiv(rf"\b{_AY_YEAR}\b")
+    first_modern_year = first_outside_arxiv(r"\b(?:19|20)\d{2}[a-z]?\b")
+    if first_supported_year is None or first_modern_year is None:
+        return None
+    if overlaps_identifier(first_supported_year.span()) or overlaps_identifier(first_modern_year.span()):
+        return None
+
+    selected_range = None
+    for year_range in _CLOSED_YEAR_RANGE_RE.finditer(text):
+        range_span = (year_range.start("first"), year_range.end("last"))
+        if overlaps_identifier(range_span):
+            continue
+        if not (
+            range_span[0] <= first_supported_year.start()
+            and first_supported_year.end() <= range_span[1]
+            and range_span[0] <= first_modern_year.start()
+            and first_modern_year.end() <= range_span[1]
+            and range_span[1] < publication.start("year")
+        ):
+            continue
+        selected_range = year_range
+        break
+    if selected_range is None:
+        return None
+
+    # Keep a date interval immediately after a recognized author head in the
+    # author position; it is not a title-topic range eligible for replacement.
+    author_head = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(text)
+    if author_head is None:
+        author_head = re.match(
+            r"^\s*" + _VANCOUVER_TERMINAL_INITIAL_AUTHOR_RE + r"\.", text,
+        )
+    if author_head is not None:
+        before_range = text[author_head.end():selected_range.start("first")]
+        after_range = text[selected_range.end("last"):]
+        if (
+            re.fullmatch(r"\s*[.,]?\s*\(?\s*", before_range)
+            and re.match(r"\s*\)?\s*[.,;:]\s+\S", after_range)
+        ):
+            return None
+
+    # A terminal range endpoint followed directly by pagination is still a
+    # range endpoint, not a second publication-year candidate.
+    if any(
+        year_range.start("first") <= publication_span[0]
+        and publication_span[1] <= year_range.end("last")
+        for year_range in _CLOSED_YEAR_RANGE_RE.finditer(text)
+    ):
+        return None
+
+    return (
+        int(publication.group("year")),
+        (publication.group("suffix") or "").lower(),
+        publication_span,
+    )
+
+
+_HISTORICAL_YEAR_RE = re.compile(
+    r"(?<!\d)(?P<year>1[5-8]\d{2})[a-z]?(?!\d)", re.IGNORECASE,
+)
+
+
+def _historical_publication_year(raw: str, title: str | None) -> int | None:
+    """Read an old year only from a closed, source-bound publication position.
+
+    The generic year scan intentionally remains modern-only: four digits elsewhere
+    in a citation can be a page, volume, issue, identifier, or title text. Historical
+    years are admitted only as an author-date immediately before a unique parsed
+    title, a terminal publisher date, a closed venue/year/volume tuple, or a
+    source-bound textual place:imprint tail.
+    """
+    raw = raw or ""
+    title_spans = []
+    title_span = _literal_title_span(raw, title)
+    if title_span is not None:
+        title_spans.append(title_span)
+    if isinstance(title, str):
+        # One supported old author-date shape can be included at the front of the
+        # best-effort parsed title (``1700; Title``). Re-find the title after that
+        # explicit date delimiter, still requiring one exact source occurrence.
+        title_without_date = re.sub(
+            r"^\s*\(?\s*1[5-8]\d{2}[a-z]?\s*\)?\s*[;,:.]\s*",
+            "", title, count=1, flags=re.IGNORECASE,
+        )
+        if title_without_date and title_without_date != title:
+            stripped_span = _literal_title_span(raw, title_without_date)
+            if stripped_span is not None:
+                title_spans.append(stripped_span)
+
+    # Some initialized-author references swallow the real title with the venue
+    # tail. Recover only the first unique sentence after a closed contributor head;
+    # it can support a tuple decision below, but does not broaden generic title parsing.
+    author_head = _COMMA_INITIAL_AUTHOR_HEAD_RE.match(raw)
+    if author_head is None:
+        author_head = re.match(
+            r"^\s*" + _VANCOUVER_TERMINAL_INITIAL_AUTHOR_RE + r"\.\s+", raw,
+        )
+    if author_head is not None:
+        after_author = _split_prose_entry_parts(raw[author_head.end():])
+        if len(after_author) >= 2 and len(after_author[0].split()) >= 2:
+            inferred_title_span = _literal_title_span(raw, after_author[0])
+            if inferred_title_span is not None and inferred_title_span not in title_spans:
+                title_spans.append(inferred_title_span)
+
+    identifier_spans = [
+        match.span()
+        for pattern in (
+            r"\b10\.\d{4,9}/\S+",
+            r"https?://\S+",
+            r"\barxiv[:\s]*\d{4}\.\d{4,5}(?:v\d+)?\b",
+            r"\babs/\d{4}\.\d{4,5}\b",
+        )
+        for match in re.finditer(pattern, raw, re.IGNORECASE)
+    ]
+
+    # Author/date forms are accepted only when the date is isolated after the
+    # contributor block and punctuation leads directly to the unique title.
+    for match in _HISTORICAL_YEAR_RE.finditer(raw):
+        if any(start <= match.start() < end for start, end in identifier_spans):
+            continue
+        date_start, date_end = match.span()
+        if date_start and raw[date_start - 1] == "(":
+            date_start -= 1
+        if date_end < len(raw) and raw[date_end] == ")":
+            date_end += 1
+        prefix = raw[:date_start]
+        if not re.search(r"\.\s*$", prefix):
+            continue
+        if not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", prefix):
+            continue
+        if re.search(
+            r"\b(?:pp?|pages?|vol(?:ume)?|issue|no\.?|number)\.?\s*$",
+            prefix,
+            re.IGNORECASE,
+        ):
+            continue
+        for candidate_span in title_spans:
+            if date_end >= candidate_span[0]:
+                continue
+            gap = raw[date_end:candidate_span[0]]
+            if re.fullmatch(r"\s*[.;,:]\s*", gap):
+                return int(match.group("year"))
+
+    # A closed venue/year/volume/page tuple is accepted only when it follows one
+    # unique prior title. The same title boundary protects attached and dotted
+    # venue/year forms from a numeric title being mistaken for a journal tuple.
+    for candidate_span in title_spans:
+        leading = re.match(r"\s*[.;,]\s*", raw[candidate_span[1]:])
+        if leading is None:
+            continue
+        venue_tail = raw[candidate_span[1] + leading.end():]
+        if _CLOSED_TERMINAL_VENUE_YEAR_VOLUME_RE.fullmatch(venue_tail):
+            match = re.search(r"\b(1[5-8]\d{2})[a-z]?\s*;", venue_tail, re.IGNORECASE)
+            if match is not None:
+                return int(match.group(1))
+        comma_volume = re.fullmatch(
+            r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ&.\-]*"
+            r"(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ&.\-]+)*"
+            r"\s+(?P<year>1[5-8]\d{2})[a-z]?\s*,\s*"
+            r"(?:vol\.|volume)\s+\d{1,4}"
+            r"(?:\s*\(\s*\d+\s*\))?"
+            r"(?:\s*[:,.]\s*\d{1,9}(?:\s*[–—−‐‑-]\s*\d{1,9})?)?"
+            r"\s*[.,;:]?\s*",
+            venue_tail,
+            re.IGNORECASE,
+        )
+        if comma_volume is not None:
+            return int(comma_volume.group("year"))
+
+    # A publisher marker followed by a terminal old year is also explicit. Refuse
+    # URL/DOI-like tails so a path component cannot impersonate a publisher date.
+    for match in _HISTORICAL_YEAR_RE.finditer(raw):
+        if not re.fullmatch(r"\s*[.)\],;:]*\s*", raw[match.end():]):
+            continue
+        before_year = raw[:match.start()]
+        publishers = list(_PUBLISHER_RE.finditer(before_year))
+        if not publishers:
+            continue
+        publisher = publishers[-1]
+        if not re.fullmatch(r"[\s,]*", before_year[publisher.end():]):
+            continue
+        publisher_context = before_year[:publisher.start()]
+        if re.search(r"[/?#\\]", publisher_context[publisher_context.rfind(":") + 1:]):
+            continue
+        return int(match.group("year"))
+
+    # A terminal ``Place: Imprint, 15xx–18xx`` date has a source marker even
+    # when the imprint name is absent from the publisher allowlist. Require the
+    # one native parsed-title occurrence, one year-shaped token in the entry,
+    # and a plain textual tail so dates, ranges, identifiers, and locators do
+    # not become publication evidence.
+    if title_span is not None:
+        historical_matches = list(_HISTORICAL_YEAR_RE.finditer(raw))
+        year_tokens = list(re.finditer(
+            r"(?<!\d)(?:1\d{3}|20\d{2})[a-z]?(?!\d)",
+            raw,
+            re.IGNORECASE,
+        ))
+        if (
+            len(historical_matches) == 1
+            and len(year_tokens) == 1
+            and historical_matches[0].span() == year_tokens[0].span()
+        ):
+            match = historical_matches[0]
+            if re.fullmatch(r"\s*[.)\],;:]*\s*", raw[match.end():]):
+                imprint_tail = raw[title_span[1]:match.start()]
+                imprint_shape = re.fullmatch(
+                    r"\s*[.;,]\s*"
+                    r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]*"
+                    r"(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]*){0,3}"
+                    r"\s*:\s*"
+                    r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’&.\-]*"
+                    r"(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ'’&.\-]+)*,\s*",
+                    imprint_tail,
+                )
+                has_identifier_or_locator = re.search(
+                    r"(?:10\.\d{4,9}/|https?://|\bISBN\b|\barXiv\b|"
+                    r"\babs/|\b(?:pp?|pages?|vol(?:ume)?|issue|no|number)\b)",
+                    imprint_tail,
+                    re.IGNORECASE,
+                )
+                if imprint_shape is not None and has_identifier_or_locator is None:
+                    return int(match.group("year"))
+    return None
+
+
 _REF_MARKER_RE = re.compile(r"^\s*(?:\[?\d+\]?|[\d]+[.)])\s")
 
 
@@ -2154,6 +4204,57 @@ def _authoryear_refs_resume(lines: list[str], start_i: int) -> bool:
     return False
 
 
+def _is_structured_peer_review_end(
+    lines: list[str], heading_i: int, max_ref_seen: int
+) -> bool:
+    """Recognize an Open Peer Review appendix from its surrounding structure."""
+    heading = _clean_biblio_line(lines[heading_i]).strip().casefold().rstrip(":.")
+    if heading != "open peer review":
+        return False
+
+    # Require a nearby completed journal tuple so a matching phrase in a title
+    # does not become an end marker by itself.
+    publication_tuple = re.compile(
+        rf"\b{_AY_YEAR}\s*;\s*\d{{1,4}}\s*:\s*"
+        r"[A-Za-z]?\d+(?:\s*[–—−-]\s*[A-Za-z]?\d+)?\b"
+    )
+    before = [
+        _clean_biblio_line(line)
+        for line in lines[max(0, heading_i - 4):heading_i]
+        if line.strip()
+    ]
+    if not publication_tuple.search(" ".join(before)):
+        return False
+
+    following = [
+        (index, _clean_biblio_line(line).strip())
+        for index, line in enumerate(lines[heading_i + 1:heading_i + 12], heading_i + 1)
+        if line.strip()
+    ]
+    patterns = (
+        re.compile(r"current peer review status\s*:?\s*", re.IGNORECASE),
+        re.compile(r"version\s+\d+", re.IGNORECASE),
+        re.compile(r"reviewer report\s+\d{1,2}\s+[A-Za-z]+\s+\d{4}", re.IGNORECASE),
+    )
+    last_index = heading_i
+    for pattern in patterns:
+        match = next(
+            ((index, line) for index, line in following
+             if index > last_index and pattern.fullmatch(line)),
+            None,
+        )
+        if match is None:
+            return False
+        last_index = match[0]
+
+    # A review block interposed in the bibliography is not its end.
+    if _numbered_refs_resume(lines, heading_i + 1, max_ref_seen):
+        return False
+    if _authoryear_refs_resume(lines, heading_i + 1):
+        return False
+    return True
+
+
 def _appendix_table_boundary(lines: list[str], heading_i: int) -> int | None:
     """Return the first table line adjacent to an Appendix heading, if proven.
 
@@ -2196,14 +4297,17 @@ def _appendix_table_boundary(lines: list[str], heading_i: int) -> int | None:
     return heading_i
 
 
-def _find_biblio_end_index(lines: list[str]) -> int | None:
+def _find_biblio_end_index(
+    lines: list[str], *, opaque_keyed_spine: bool = False,
+) -> int | None:
     """Detect where the reference list ends and trailing prose/appendices begin.
 
-    Two detection methods, returns the earliest (lowest index) match:
+    Detection returns the earliest (lowest index) match:
       A. Section heading: exact _POST_BIBLIO_HEADINGS match (short line, < 10 words)
          plus appendix-variant prefix match (\"Appendix A\", \"Appendix B\", etc.).
       B. Prose run: ≥4 consecutive prose-like lines, reference-boundary-aware,
          anchored to the last 30% of the biblio.
+      The Open Peer Review marker additionally requires its ordered metadata tail.
 
     Both methods are suppressed when numbered reference entries resume after the
     candidate boundary (a two-column PDF interposing Acknowledgments / Author
@@ -2243,10 +4347,18 @@ def _find_biblio_end_index(lines: list[str]) -> int | None:
                 and _strong_authoryear_spine(lines, i)
                 and not _authoryear_refs_resume(lines, i + 1)):
             return i
+        if stripped == "open peer review" and _is_structured_peer_review_end(lines, i, max_ref_seen):
+            return i
         word_count = len(stripped.split())
         if word_count >= 10:
             continue
         is_appendix = bool(parser_text._APPENDIX_PREFIX_RE.match(stripped))
+        if (
+            opaque_keyed_spine
+            and is_appendix
+            and _opaque_page_furniture_end(lines, i) is not None
+        ):
+            continue
         if stripped in parser_text._POST_BIBLIO_HEADINGS:
             if _numbered_refs_resume(lines, i + 1, max_ref_seen):
                 continue  # interposed block; references resume below
@@ -2266,6 +4378,13 @@ def _find_biblio_end_index(lines: list[str]) -> int | None:
                 if _authoryear_list_resumes(lines, i + 1):
                     continue
                 return i
+            return i
+        if stripped in parser_text.BIBLIOGRAPHY_HEADINGS:
+            # A repeated bibliography heading can be page furniture inside a
+            # continued numbered list.  Without printed numeric progression,
+            # keep the later heading as a distinct candidate.
+            if _numbered_bibliography_continues(lines, i + 1, max_ref_seen):
+                continue
             return i
         # Watch-item 1: prefix-match appendix variants ("Appendix A", etc.)
         if is_appendix:
@@ -2426,6 +4545,46 @@ def _interposed_body_spans(lines: list[str]) -> list[tuple[int, int]]:
     return spans
 
 
+def _headerless_interposed_body_spans(
+    lines: list[str],
+) -> list[tuple[int, int]]:
+    """Include a standalone layout heading with a detected interposed body run.
+
+    The existing interposed-run detector intentionally ignores short fragments.
+    On a headerless start, a standalone section label immediately before one of
+    those runs is part of the body block too. Keep this extension local to
+    headerless inference so explicit-heading splits retain their existing shape.
+    """
+    spans = _interposed_body_spans(lines)
+    if not spans:
+        return []
+
+    spine = _entry_spine(lines)
+    expanded = []
+    for first, last in spans:
+        previous_entry = max(
+            (index for index, _number in spine if index < first),
+            default=-1,
+        )
+        labels = [
+            index
+            for index in range(previous_entry + 1, first)
+            if (index < len(lines)
+                and _looks_like_layout_label(lines[index])
+                and not _entry_start_num(lines[index].strip())
+                and not _has_biblio_signal(lines[index]))
+        ]
+        expanded.append((labels[-1] if labels else first, last))
+
+    merged: list[tuple[int, int]] = []
+    for first, last in sorted(expanded):
+        if merged and first <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], last))
+        else:
+            merged.append((first, last))
+    return merged
+
+
 def _foreign_run(
     lines: list[str], lo: int, hi: int, floor: int, open_from: int
 ) -> list[tuple[int, int]]:
@@ -2474,6 +4633,316 @@ def _foreign_run(
     return runs
 
 
+def _numbered_entry_content(lines: list[str], index: int, end: int) -> list[str]:
+    """Return the printed content of one raw numbered reference entry.
+
+    A trailing separator is not enough to make a line such as ``2014. `` an
+    entry marker.  Detached numbers are accepted only when the raw line is an
+    exact marker and a non-marker body line follows it.
+    """
+    line = lines[index]
+    match = _REF_ENTRY_NUM_RE.match(line)
+    if match and line[match.end():].strip():
+        content = [line[match.end():].strip()]
+        scan_from = index + 1
+    elif _LONE_NUM_RE.fullmatch(line):
+        body_index = index + 1
+        while body_index < end and not lines[body_index].strip():
+            body_index += 1
+        if (body_index >= end
+                or _entry_start_num(lines[body_index].strip()) is not None):
+            return []
+        content = [lines[body_index].strip()]
+        scan_from = body_index + 1
+    else:
+        return []
+
+    for next_index in range(scan_from, end):
+        candidate = lines[next_index]
+        candidate_match = _REF_ENTRY_NUM_RE.match(candidate)
+        if ((candidate_match and candidate[candidate_match.end():].strip())
+                or _LONE_NUM_RE.fullmatch(candidate)):
+            break
+        content.append(candidate.strip())
+    return content
+
+
+def _numbered_entry_has_bibliographic_shape(
+    lines: list[str], index: int, end: int,
+) -> bool:
+    content = _numbered_entry_content(lines, index, end)
+    if not content:
+        return False
+    first = _clean_biblio_line(content[0])
+    next_line = next(
+        (_clean_biblio_line(line) for line in content[1:] if line.strip()),
+        "",
+    )
+    if (_looks_authoryear_ref_start(first, next_line)
+            and re.search(rf"\b{_AY_YEAR}\b", " ".join(content))):
+        return True
+    # A year by itself is common in dated prose.  Mask it before consulting the
+    # shared signal grammar so only non-year citation structure can certify the
+    # numbered region (DOI, venue tuple, publisher, pages, or URL).
+    without_year = re.sub(rf"\b{_AY_YEAR}\b", " ", " ".join(content))
+    return _has_biblio_signal(without_year)
+
+
+_HEADERLESS_BIBLIOGRAPHY_ENTRY_COUNT = 5
+_HEADERLESS_LOCATOR_COORDINATE_KINDS = frozenset({
+    "article_page_range", "article_locator", "article_number",
+})
+
+
+def _headerless_entry_has_bibliographic_shape(
+    lines: list[str], index: int, end: int,
+) -> bool:
+    """Require author/year form plus a parsed source-coordinate tuple."""
+    content = _numbered_entry_content(lines, index, end)
+    if not content:
+        return False
+    clean = [_clean_biblio_line(line) for line in content if line.strip()]
+    if not clean:
+        return False
+    raw = " ".join(content).strip()
+    if (
+        not _looks_authoryear_ref_start(clean[0], clean[1] if len(clean) > 1 else "")
+        or not re.search(rf"\b{_AY_YEAR}\b", raw)
+    ):
+        return False
+
+    # A year, URL, or DOI can occur in ordinary numbered prose. Require the
+    # existing coordinate parser to independently locate a container, volume,
+    # and page/article locator under one rule in this entry.
+    title = _extract_title(raw)
+    coordinates = extract_cited_coordinates(raw, title)
+    kinds_by_rule: dict[str, set[str]] = {}
+    for coordinate in coordinates:
+        rule = coordinate.get("rule_id")
+        kind = coordinate.get("kind")
+        if isinstance(rule, str) and isinstance(kind, str):
+            kinds_by_rule.setdefault(rule, set()).add(kind)
+    return any(
+        {"container", "volume"}.issubset(kinds)
+        and bool(kinds & _HEADERLESS_LOCATOR_COORDINATE_KINDS)
+        for kinds in kinds_by_rule.values()
+    )
+
+
+def _headerless_bibliography_evidence_lines(lines: list[str]) -> list[str]:
+    """Hide known body bleed before checking entry-local coordinate evidence."""
+    evidence = list(lines)
+    end = _find_biblio_end_index(evidence)
+    if end is not None:
+        evidence[end:] = [""] * (len(evidence) - end)
+    for first, last in _headerless_interposed_body_spans(evidence):
+        evidence[first:last + 1] = [""] * (last - first + 1)
+    return evidence
+
+
+def _headerless_entry_has_closed_identifier_citation(
+    lines: list[str], index: int, end: int,
+) -> bool:
+    """Certify a titled authored identifier citation inside a mixed prefix.
+
+    This is entry-local syntax evidence, not validation of the identifier or
+    source identity. An arbitrary URL or dated instruction cannot certify it.
+    """
+    raw = " ".join(_numbered_entry_content(lines, index, end)).strip()
+    terminal = re.search(
+        rf"(?P<identifier>(?:https?://(?:dx\.)?doi\.org/|doi:\s*)"
+        rf"10\.\d{{4,9}}/[^\s]+|Preprint\s+at\s+https?://arxiv\.org/abs/"
+        rf"\d{{4}}\.\d{{4,5}}(?:v\d+)?)\s+\({_AY_YEAR}\)\.?$",
+        raw, re.IGNORECASE,
+    )
+    if terminal is None:
+        return False
+    author_end = _closed_source_author_head_end(raw)
+    if author_end is None:
+        # A closed organization name can include function words, a printed
+        # acronym and et al.; it must end before the separate title sentence.
+        organization = re.match(
+            r"^[A-Z][\w'’&/-]*(?:\s+(?:of|and|the|for|in|on|"
+            r"[A-Z][\w'’&/-]*))*(?:\s+\([A-Z][A-Z0-9-]*\))?"
+            r"(?:\s+et\s+al)?\.\s+",
+            raw,
+        )
+        if organization is None:
+            return False
+        author_end = organization.end()
+    title_region = raw[author_end:terminal.start()].strip()
+    parts = _split_prose_entry_parts(title_region)
+    return bool(
+        parts and _is_title_fragment(parts[0])
+        and re.search(r"[^\W\d_]", parts[0], re.UNICODE)
+        and not re.search(r"https?://|\bdoi:", parts[0], re.IGNORECASE)
+        and re.search(r"[.!?]\s*$", title_region)
+    )
+
+
+def _headerless_bibliography_start_index(lines: list[str]) -> int | None:
+    """Find one strong numbered bibliography start when no heading exists.
+
+    This deliberately has a higher evidence bar than a headed-region check:
+    exactly one line must begin a consecutive ``1`` through ``5`` prefix, and
+    every entry must have journal coordinates or a closed authored identifier
+    citation. At least one journal tuple independently anchors the mixed list;
+    identifier-only lists remain ambiguous and unsplit.
+    """
+    candidates: list[int] = []
+    for start, line in enumerate(lines):
+        if _entry_start_num(line.strip()) != 1:
+            continue
+        suffix = lines[start:]
+        evidence = _headerless_bibliography_evidence_lines(suffix)
+        numbered: list[tuple[int, int]] = []
+        for index, candidate_line in enumerate(suffix):
+            number = _entry_start_num(candidate_line.strip())
+            if number is None:
+                continue
+            numbered.append((index, number))
+            if len(numbered) == _HEADERLESS_BIBLIOGRAPHY_ENTRY_COUNT:
+                break
+        if [number for _index, number in numbered] != [1, 2, 3, 4, 5]:
+            continue
+        journal_entries = [
+            _headerless_entry_has_bibliographic_shape(
+                evidence, index, len(evidence),
+            )
+            for index, _number in numbered
+        ]
+        if not any(journal_entries) or not all(
+            journal_shape or _headerless_entry_has_closed_identifier_citation(
+                evidence, index, len(evidence),
+            )
+            for journal_shape, (index, _number) in zip(journal_entries, numbered)
+        ):
+            continue
+        candidates.append(start)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _numbered_bibliography_entries(lines: list[str]) -> list[tuple[int, int]]:
+    spine = _entry_spine(lines)
+    return [
+        (index, number)
+        for index, number in spine
+        if _numbered_entry_has_bibliographic_shape(lines, index, len(lines))
+    ]
+
+
+def _authoryear_entry_count(lines: list[str]) -> int:
+    starts = 0
+    for index, line in enumerate(lines):
+        clean = _clean_biblio_line(line)
+        next_line = (
+            _clean_biblio_line(lines[index + 1])
+            if index + 1 < len(lines) else ""
+        )
+        if (_looks_authoryear_ref_start(clean, next_line)
+                and re.search(rf"\b{_AY_YEAR}\b", f"{clean} {next_line}")):
+            starts += 1
+    return starts
+
+
+def _opaque_bibliography_entry_count(lines: list[str]) -> int:
+    count = 0
+    for index in range(len(lines)):
+        if (_opaque_key_entry_match_at(lines, index)
+                or _OPAQUE_KEY_LABEL_ONLY_RE.fullmatch(lines[index])):
+            # Keep malformed/orphaned printed keys in the candidate region so
+            # the opaque parser can fail closed on the complete raw label run.
+            count += 1
+    return count
+
+
+def _numbered_bibliography_continues(
+    lines: list[str], start: int, max_ref_seen: int,
+) -> bool:
+    if max_ref_seen <= 0:
+        return False
+    tail = lines[start:]
+    for index, line in enumerate(tail):
+        number = _entry_start_num(line.strip())
+        if (
+            number is not None
+            and max_ref_seen < number <= max_ref_seen + 3
+            and _numbered_entry_has_bibliographic_shape(tail, index, len(tail))
+        ):
+            return True
+    return False
+
+
+def _region_has_sustained_bibliography_spine(lines: list[str]) -> bool:
+    opaque_state = _opaque_keyed_spine_status("\n".join(lines))
+    if opaque_state == "ambiguous":
+        return False
+    if opaque_state == "valid":
+        return True
+    if len(_numbered_bibliography_entries(lines)) >= 2:
+        return True
+    return _strong_authoryear_spine(lines, len(lines))
+
+
+def _region_has_bibliography_entry(lines: list[str]) -> bool:
+    opaque_state = _opaque_keyed_spine_status("\n".join(lines))
+    if opaque_state is not None:
+        return True  # Preserve malformed/mixed keyed regions for fail-closed parsing.
+    if _numbered_bibliography_entries(lines):
+        return True
+    if _opaque_bibliography_entry_count(lines):
+        return True
+    return _authoryear_entry_count(lines) > 0
+
+
+def _select_biblio_heading_index(lines: list[str]) -> int | None:
+    """Select a bibliography heading using raw entry evidence between candidates.
+
+    The legacy last-heading choice remains the fallback.  A supported earlier
+    heading wins only when a later heading has no entry evidence of its own; a
+    later real list, including a one-entry list, remains selected.
+    """
+    candidates = []
+    for index, line in enumerate(lines):
+        stripped = re.sub(
+            r"^[\s■▪●•◆□▶*·]+", "", line
+        ).strip().lower().rstrip(":.")
+        if stripped in parser_text.BIBLIOGRAPHY_HEADINGS:
+            candidates.append(index)
+    if not candidates:
+        return None
+
+    effective = [candidates[0]]
+    for offset, candidate in enumerate(candidates[1:], start=1):
+        prior_start = effective[-1] + 1
+        prior_region = lines[prior_start:candidate]
+        next_candidate = (
+            candidates[offset + 1]
+            if offset + 1 < len(candidates) else len(lines)
+        )
+        following_region = lines[candidate + 1:next_candidate]
+        continuing = False
+        if _region_has_sustained_bibliography_spine(prior_region):
+            numbered = _numbered_bibliography_entries(prior_region)
+            if numbered:
+                max_ref = numbered[-1][1]
+                continuing = _numbered_bibliography_continues(
+                    following_region, 0, max_ref
+                )
+        if not continuing:
+            effective.append(candidate)
+
+    last = effective[-1]
+    if _region_has_bibliography_entry(lines[last + 1:]):
+        return last
+    for candidate_index in range(len(effective) - 2, -1, -1):
+        candidate = effective[candidate_index]
+        end = effective[candidate_index + 1]
+        if _region_has_sustained_bibliography_spine(lines[candidate + 1:end]):
+            return candidate
+    return last
+
+
 def _cut_at_last_biblio_heading(text: str) -> tuple[str, str, dict, int | None]:
     """Scan *text* for the last bibliography heading and split into (body, biblio).
 
@@ -2487,13 +4956,7 @@ def _cut_at_last_biblio_heading(text: str) -> tuple[str, str, dict, int | None]:
       bibliographies are structurally clean and never have post-biblio bleed.
     """
     lines = text.split("\n")
-    cut_idx = None
-    for i, line in enumerate(lines):
-        # Strip a leading section-marker glyph ("■References", ACS) before match.
-        stripped = re.sub(r"^[\s■▪●•◆□▶*·]+", "",
-                          line).strip().lower().rstrip(":.")
-        if stripped in parser_text.BIBLIOGRAPHY_HEADINGS:
-            cut_idx = i  # keep the LAST occurrence (fix for bug §11)
+    cut_idx = _select_biblio_heading_index(lines)
     debug = {"cut_line_index": cut_idx, "total_lines": len(lines)}
     if cut_idx is None:
         debug["context"] = "(no bibliography heading found at start of line)"
@@ -2506,15 +4969,261 @@ def _cut_at_last_biblio_heading(text: str) -> tuple[str, str, dict, int | None]:
     return body, biblio, debug, cut_idx
 
 
+_SCOPED_BIBLIOGRAPHY_HEADING_RE = re.compile(
+    r"^(?:(?P<section>(?:\d+|[A-Z])(?:\.\d+)+)[.)]?\s+)?"
+    r"(?:references|bibliography|works\s+cited)\s+for\s+"
+    r"(?P<kind>chapter|appendix)\s+"
+    r"(?P<label>[A-Z]+|\d+|[IVXLCDM]+)\s*[:.]?$",
+    re.IGNORECASE,
+)
+_SCOPED_SECTION_HEADING_RE = re.compile(
+    r"^\s*(?P<section>(?:\d+|[A-Z])(?:\.\d+)+)[.)]?\s+"
+    r"(?P<title>\S(?:.*\S)?)\s*$",
+)
+_EXPLICIT_SCOPE_HEADING_RE = re.compile(
+    r"^\s*(?P<kind>chapter|chap\.?|appendix)\s+"
+    r"(?P<label>[A-Z]+|\d+|[IVXLCDM]+)\b",
+    re.IGNORECASE,
+)
+_SCOPED_DATE_CONTINUATION_RE = re.compile(
+    r"^(?:january|february|march|april|may|june|july|august|september|"
+    r"october|november|december)\s*(?:19|20)\d{2}[a-z]?[.,;:]?$",
+    re.IGNORECASE,
+)
+
+
+def _scope_key(kind: str, label: str) -> str:
+    normalized = label.strip().upper()
+    if kind.casefold() == "chapter" and normalized.isdigit():
+        normalized = str(int(normalized))
+    return f"{kind.casefold()}:{normalized}"
+
+
+def _scoped_bibliography_heading(lines: list[str], index: int) -> dict | None:
+    line = lines[index].strip()
+    match = _SCOPED_BIBLIOGRAPHY_HEADING_RE.fullmatch(line)
+    consumed = 1
+    section = match.group("section") if match else None
+    if match is None and index + 1 < len(lines):
+        prefix = re.fullmatch(r"(?P<section>(?:\d+|[A-Z])(?:\.\d+)+)[.)]?\s*", line)
+        continuation = _SCOPED_BIBLIOGRAPHY_HEADING_RE.fullmatch(
+            lines[index + 1].strip(),
+        )
+        if prefix and continuation:
+            match = continuation
+            section = prefix.group("section")
+            consumed = 2
+    if match is None:
+        return None
+    kind = match.group("kind").casefold()
+    label = match.group("label")
+    key = _scope_key(kind, label)
+    if section:
+        first = section.split(".", 1)[0].upper()
+        if kind == "chapter" and label.isdigit() and first != str(int(label)):
+            return None
+        if kind == "appendix" and label.isalpha() and first != label.upper():
+            return None
+    return {
+        "scope": key,
+        "kind": kind,
+        "label": label,
+        "section": section,
+        "start_line": index,
+        "content_line": index + consumed,
+        "heading_lines": consumed,
+    }
+
+
+def _explicit_scope_heading(line: str) -> str | None:
+    if (
+        STRUCTURAL_TABLE_SENTINEL in line
+        or STRUCTURAL_AMBIGUOUS_TABLE_SENTINEL in line
+    ):
+        return None
+    match = _EXPLICIT_SCOPE_HEADING_RE.match(line)
+    if not match:
+        return None
+    title = line[match.end():].strip()
+    if (
+        title.endswith((".", "!", "?", ";"))
+        or re.search(r"\[[^\]]+\]|\b(?:19|20)\d{2}[a-z]?\b", title, re.I)
+    ):
+        return None
+    kind = "appendix" if match.group("kind").casefold() == "appendix" else "chapter"
+    return _scope_key(kind, match.group("label"))
+
+
+def _numbered_section_heading(line: str) -> tuple[str, str] | None:
+    match = _SCOPED_SECTION_HEADING_RE.fullmatch(line)
+    if not match or not _looks_like_layout_label(line):
+        return None
+    return match.group("section"), match.group("title")
+
+
+def _root_numbered_scope_heading(line: str) -> str | None:
+    """Return a chapter scope from a bare-numbered, title-like first-level heading."""
+    if (
+        STRUCTURAL_TABLE_SENTINEL in line
+        or STRUCTURAL_AMBIGUOUS_TABLE_SENTINEL in line
+    ):
+        return None
+    match = re.fullmatch(
+        r"\s*(?P<label>\d{1,3})\s+(?P<title>\S(?:.*\S)?)\s*",
+        line,
+    )
+    if not match:
+        return None
+    label = match.group("label")
+    title = match.group("title").strip()
+    if title.endswith((".", "!", "?", ":", ";")):
+        return None
+    if re.search(r"\[[^\]]+\]|\b(?:19|20)\d{2}[a-z]?\b", title, re.I):
+        return None
+    words = re.findall(r"[A-Za-zÀ-ÿ]+", title)
+    if not words or not all(
+        word.lower() in _LAYOUT_CONNECTORS
+        or word[:1].isupper()
+        or word.isupper()
+        for word in words
+    ):
+        return None
+    return _scope_key("chapter", label)
+
+
+def _scoped_list_boundary(
+    lines: list[str], heading: dict, start: int,
+) -> int:
+    section = heading.get("section")
+    scope_major = heading["label"].upper()
+    scope_depth = len(section.split(".")) if section else None
+    for index in range(start, len(lines)):
+        if _scoped_bibliography_heading(lines, index) is not None:
+            return index
+        explicit = _explicit_scope_heading(lines[index])
+        if explicit is not None:
+            return index
+        root_scope = _root_numbered_scope_heading(lines[index])
+        if root_scope is not None and root_scope != heading["scope"]:
+            return index
+        numbered = _numbered_section_heading(lines[index])
+        if numbered is not None:
+            candidate_section, _title = numbered
+            major = candidate_section.split(".", 1)[0].upper()
+            candidate_depth = len(candidate_section.split("."))
+            if major != scope_major or scope_depth is None or candidate_depth <= scope_depth:
+                return index
+        stripped = lines[index].strip().casefold().rstrip(":.")
+        if stripped in parser_text._POST_BIBLIO_HEADINGS:
+            return index
+    return len(lines)
+
+
+def _split_scoped_bibliographies(text: str) -> tuple[str, str, dict, list[dict]] | None:
+    """Extract multiple explicitly chapter-scoped, locally numbered lists.
+
+    This deliberately requires several distinct, explicit scope identifiers and
+    a numbered entry spine in each list.  Ordinary single end bibliographies
+    continue through the established split path.
+    """
+    lines = text.split("\n")
+    headings = []
+    index = 0
+    while index < len(lines):
+        heading = _scoped_bibliography_heading(lines, index)
+        if heading is None:
+            index += 1
+            continue
+        headings.append(heading)
+        index += heading["heading_lines"]
+    if len({heading["scope"] for heading in headings}) < 2:
+        return None
+    blocks: list[dict] = []
+    removed: list[tuple[int, int]] = []
+    for heading in headings:
+        start = heading["content_line"]
+        end = _scoped_list_boundary(lines, heading, start)
+        content_lines = lines[start:end]
+        block_text = "\n".join(content_lines).strip("\n")
+        entry_matches = list(re.finditer(r"(?m)^\s*" + _NUM_MARKER, block_text))
+        if not entry_matches:
+            return None
+        first = _entry_num(entry_matches[0])
+        if first > 20:
+            return None
+        blocks.append({
+            "scope": heading["scope"],
+            "kind": heading["kind"],
+            "label": heading["label"],
+            "section": heading["section"],
+            "text": block_text,
+        })
+        removed.append((heading["start_line"], end))
+    if len({block["scope"] for block in blocks}) < 2:
+        return None
+    body_lines = list(lines)
+    for start, end in removed:
+        for index in range(start, end):
+            body_lines[index] = ""
+    body = "\n".join(body_lines)
+    biblio = "\n\n".join(block["text"] for block in blocks)
+    first_line = min(start for start, _ in removed)
+    debug = {
+        "cut_line_index": first_line,
+        "total_lines": len(lines),
+        "context": "Multiple explicitly scoped chapter/appendix reference lists.",
+    }
+    return body, biblio, debug, blocks
+
+
 def default_split_body_bibliography(text: str, meta=None) -> tuple[str, str, dict, int | None]:
     """Splits body from bibliography at the LAST occurrence of a heading and
     trims trailing post-biblio content (appendix, acknowledgments, prose runs).
     """
+    if (
+        isinstance(meta, dict)
+        and meta.get("_allow_scoped_bibliographies") is True
+        and not meta.get("footnote_references")
+    ):
+        scoped = _split_scoped_bibliographies(text)
+        if scoped is not None:
+            body, biblio, debug, blocks = scoped
+            meta["_scoped_bibliography_blocks"] = blocks
+            return body, biblio, debug, None
     body, biblio, debug, cut_idx = _cut_at_last_biblio_heading(text)
+    headerless_start = None
     if cut_idx is None:
-        return body, biblio, debug, None
+        if not (isinstance(meta, dict) and meta.get("footnote_references")):
+            lines = text.split("\n")
+            start_idx = _headerless_bibliography_start_index(lines)
+            if start_idx is not None:
+                headerless_start = start_idx
+                body = "\n".join(lines[:start_idx])
+                biblio = "\n".join(lines[start_idx:])
+                debug["context"] = (
+                    f"(headerless numbered bibliography inferred at line {start_idx})"
+                )
+        if not biblio:
+            return body, biblio, debug, None
     biblio_lines = biblio.split("\n")
-    end_idx = _find_biblio_end_index(biblio_lines)
+    opaque_keyed_state = (
+        None
+        if isinstance(meta, dict) and meta.get("footnote_references")
+        else _opaque_keyed_spine_status(biblio)
+    )
+    if opaque_keyed_state is not None and isinstance(meta, dict):
+        meta["_opaque_keyed_bibliography"] = opaque_keyed_state
+    end_idx = _find_biblio_end_index(
+        biblio_lines,
+        opaque_keyed_spine=opaque_keyed_state is not None,
+    )
+    if opaque_keyed_state is not None:
+        footer_scan_end = end_idx if end_idx is not None else len(biblio_lines)
+        for index in range(footer_scan_end):
+            footer_end = _opaque_page_furniture_end(biblio_lines, index)
+            if footer_end is not None:
+                for footer_line in range(index, min(footer_end, footer_scan_end)):
+                    biblio_lines[footer_line] = ""
     if end_idx is not None:
         biblio = "\n".join(biblio_lines[:end_idx])
         # Re-include post-biblio content (appendices, acknowledgments, etc.)
@@ -2522,6 +5231,22 @@ def default_split_body_bibliography(text: str, meta=None) -> tuple[str, str, dic
         if end_idx < len(biblio_lines):
             post_biblio = "\n".join(biblio_lines[end_idx:])
             body = body + "\n" + post_biblio
+    else:
+        biblio = "\n".join(biblio_lines)
+    if headerless_start is not None:
+        reference_lines = biblio.split("\n")
+        spans = _headerless_interposed_body_spans(reference_lines)
+        if spans:
+            foreign = {i for first, last in spans for i in range(first, last + 1)}
+            interposed = "\n".join(
+                reference_lines[index]
+                for index in sorted(foreign)
+            )
+            biblio = "\n".join(
+                line for index, line in enumerate(reference_lines)
+                if index not in foreign
+            )
+            body = body + "\n" + interposed
     return body, biblio, debug, end_idx
 
 
@@ -3016,10 +5741,122 @@ _SPLIT_SURNAME_LINE_RE = re.compile(
 _SPLIT_INITIAL_LINE_RE = re.compile(rf"^{_INITIAL_CLUSTER}\.$")
 _SPLIT_YEAR_LINE_RE = re.compile(rf"^{_AY_YEAR}\.(?:\s|$)")
 
+# Some PDF columns wrap a long author list onto several lines before the date.
+# Keep this recognizer deliberately syntactic: every carried line must begin with
+# one or more ``Surname, Initials`` items (or the initials line immediately after
+# a wrapped bare surname), and the run must close with a date before any title or
+# venue text.  This is not a wider date lookahead; unrelated prose is never scanned
+# as a possible author run.
+_AUTHOR_RUN_NAME = (
+    rf"(?:{_AY_NAME_PARTICLES})?"
+    r"[A-Z][^\W\d_][\w'’.-]*(?:[- ][A-Z][^\W\d_][\w'’.-]*)?"
+)
+_AUTHOR_RUN_INITIALS = r"(?:[A-Z]\.(?:-[A-Z]\.)*\s*){1,4}"
+_AUTHOR_RUN_ITEM = rf"{_AUTHOR_RUN_NAME},\s*{_AUTHOR_RUN_INITIALS}"
+_AUTHOR_RUN_SEPARATOR = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*)"
+_AUTHOR_RUN_LIST_RE = re.compile(
+    rf"^(?:{_AUTHOR_RUN_ITEM})(?:{_AUTHOR_RUN_SEPARATOR}{_AUTHOR_RUN_ITEM})*"
+)
+_AUTHOR_RUN_INITIALS_RE = re.compile(rf"^{_AUTHOR_RUN_INITIALS}(?=,|\s|$)")
+_AUTHOR_RUN_DATE_RE = re.compile(
+    rf"^\s*,?\s*(?:\({_AY_ENTRY_DATE}\)|{_AY_YEAR}\b)",
+    re.IGNORECASE,
+)
+_AUTHOR_RUN_MAX_LINES = 12
+_AUTHOR_RUN_MAX_CHARS = 1200
+
+
+def _author_run_date_follows(line: str) -> bool:
+    author_list = _AUTHOR_RUN_LIST_RE.match(line)
+    return bool(author_list and _AUTHOR_RUN_DATE_RE.match(line[author_list.end():]))
+
+
+def _author_run_open_list(line: str) -> bool:
+    author_list = _AUTHOR_RUN_LIST_RE.match(line)
+    return bool(author_list and line[author_list.end():].strip() == ",")
+
+
+def _author_run_continuation_span(
+        raw_lines: list[str], start: int) -> int | None:
+    """Return the date-line index for a bounded, syntactic wrapped author run.
+
+    The start is either a comma-open ``Surname, Initials`` list or a bare surname
+    followed by its initials on the next line.  Every intermediate line must keep
+    the same author-list shape; otherwise the run is refused and normal start tests
+    remain in control.
+    """
+    if start < 0 or start >= len(raw_lines):
+        return None
+    head = _clean_biblio_line(raw_lines[start]).strip()
+    if _author_run_open_list(head):
+        index = start + 1
+        chars = len(head)
+        wrapped_surname = False
+    elif _SPLIT_SURNAME_LINE_RE.fullmatch(head):
+        index = start + 1
+        chars = len(head)
+        wrapped_surname = True
+    else:
+        return None
+
+    scanned = 0
+    while index < len(raw_lines) and scanned < _AUTHOR_RUN_MAX_LINES:
+        scanned += 1
+        line = _clean_biblio_line(raw_lines[index]).strip()
+        if not line:
+            index += 1
+            continue
+        chars += len(line)
+        if chars > _AUTHOR_RUN_MAX_CHARS:
+            return None
+
+        if wrapped_surname:
+            initials = _AUTHOR_RUN_INITIALS_RE.match(line)
+            tail = line[initials.end():].lstrip() if initials else ""
+            if initials and tail.startswith(",") and _author_run_open_list(tail[1:].lstrip()):
+                wrapped_surname = False
+                index += 1
+                continue
+            # A capitalized word alone is not enough to establish an author.
+            # The pre-existing three-line surname/initial/year rule remains
+            # responsible for a bare surname followed directly by its year.
+            return None
+
+        if _author_run_date_follows(line):
+            return index
+
+        if _author_run_open_list(line):
+            index += 1
+            continue
+
+        # A standalone date line is permitted only immediately after an open,
+        # syntactically recognized author list.  It is the same three-line shape
+        # used by the existing surname/initial/year recognizer, extended to a
+        # longer but still author-only run.
+        if _SPLIT_YEAR_LINE_RE.match(line):
+            return index
+        return None
+    return None
+
 
 def _continues_author_list(line: str, prev_line: str) -> bool:
-    return bool(_CONTINUES_AUTHORS_RE.match(line)
-                and _LINE_LEFT_OPEN_RE.search(prev_line.strip()))
+    if (_CONTINUES_AUTHORS_RE.match(line)
+            and _LINE_LEFT_OPEN_RE.search(prev_line.strip())):
+        return True
+
+    previous = prev_line.strip()
+    current = line.strip()
+    if (_author_run_open_list(previous)
+            and (_author_run_open_list(current) or _author_run_date_follows(current))):
+        return True
+    initials = _AUTHOR_RUN_INITIALS_RE.match(current)
+    tail = current[initials.end():].lstrip() if initials else ""
+    return bool(
+        _SPLIT_SURNAME_LINE_RE.fullmatch(previous)
+        and initials
+        and tail.startswith(",")
+        and _author_run_open_list(tail[1:].lstrip())
+    )
 
 
 def _split_surname_initial_year_start(
@@ -3036,6 +5873,212 @@ def _split_surname_initial_year_start(
         return False
     return _looks_authoryear_ref_start(
         f"{surname_line} {initial_line} {year_line}")
+
+
+_COLON_INITIAL_AUTHOR_HEAD_RE = re.compile(
+    r"^\s*" + _VANCOUVER_TERMINAL_INITIAL_AUTHOR_RE
+    + r"(?:,\s*(?:et\s+al\.|" + _VANCOUVER_TERMINAL_INITIAL_AUTHOR_RE + r"))*\s*:"
+)
+_COLON_AUTHOR_PUBLICATION_TUPLE_RE = re.compile(
+    rf"(?<!\w)(?P<year>{_AY_YEAR})\s*;\s*\d{{1,4}}"
+    rf"(?:\s*\(\s*\d+\s*\))?\s*:\s*"
+    rf"[A-Z]{{0,3}}\d{{1,9}}(?:\s*[{RANGE_DASHES}]\s*[A-Z]{{0,3}}\d{{1,9}})?",
+    re.IGNORECASE,
+)
+_COLON_SOFTWARE_TYPE_RE = re.compile(r"\[\s*software\s*\]", re.IGNORECASE)
+
+
+def _colon_spine_tail_is_closed(tail: str) -> bool:
+    """Allow only punctuation or the standard linked-abstract tail after a tuple."""
+    tail = re.sub(r"^\s*[.,;:]\s*", "", tail or "").strip()
+    return not tail or bool(re.fullmatch(
+        r"(?:PubMed Abstract\s*\|\s*)?Publisher Full Text",
+        tail,
+        re.IGNORECASE,
+    ))
+
+
+def _closed_colon_author_entry(raw: str) -> bool:
+    """Whether one colon-headed span has independent, closed citation evidence."""
+    head = _COLON_INITIAL_AUTHOR_HEAD_RE.match(raw)
+    if head is None:
+        return False
+    identifiers = [
+        match.span()
+        for pattern in (
+            r"\b10\.\d{4,9}/\S+",
+            r"https?://\S+",
+            r"\barxiv[:\s]*\d{4}\.\d{4,5}(?:v\d+)?\b",
+        )
+        for match in re.finditer(pattern, raw, re.IGNORECASE)
+    ]
+
+    def inside_identifier(span: tuple[int, int]) -> bool:
+        return any(span[0] < end and span[1] > start for start, end in identifiers)
+
+    def has_source_letter(start: int, end: int) -> bool:
+        return any(
+            not inside_identifier((start + match.start(), start + match.end()))
+            for match in re.finditer(r"[^\W\d_]", raw[start:end])
+        )
+
+    tuples = [
+        match for match in _COLON_AUTHOR_PUBLICATION_TUPLE_RE.finditer(raw)
+        if not inside_identifier(match.span())
+    ]
+    if (
+        len(tuples) == 1
+        and has_source_letter(head.end(), tuples[0].start())
+        and _colon_spine_tail_is_closed(raw[tuples[0].end():])
+    ):
+        return True
+    if tuples:
+        return False
+
+    # Some citable software records have a type tag and a terminal year instead of
+    # a journal locator. Require a nonempty repository/publisher token between the
+    # type tag and that separate year; an identifier or title year cannot close it.
+    types = list(_COLON_SOFTWARE_TYPE_RE.finditer(raw))
+    if len(types) != 1 or inside_identifier(types[0].span()):
+        return False
+    after_type = raw[types[0].end():]
+    repository = re.match(r"\s*(?P<name>[^.\r\n]{2,100})\.", after_type)
+    if repository is None or not re.search(r"[^\W\d_]", repository.group("name")):
+        return False
+    repository_span = (
+        types[0].end() + repository.start("name"),
+        types[0].end() + repository.end("name"),
+    )
+    if inside_identifier(repository_span):
+        return False
+    after_repository = after_type[repository.end():]
+    year = re.match(rf"\s*(?P<year>{_AY_YEAR})\s*\.", after_repository)
+    if year is None:
+        return False
+    year_start = types[0].end() + repository.end() + year.start("year")
+    year_end = types[0].end() + repository.end() + year.end("year")
+    if (
+        inside_identifier((year_start, year_end))
+        or not has_source_letter(head.end(), year_start)
+    ):
+        return False
+    return _colon_spine_tail_is_closed(after_repository[year.end():])
+
+
+def _closed_colon_author_title(raw: str) -> tuple[bool, str | None]:
+    """Return a literal title only for a closed, source-bounded colon entry.
+
+    The boolean distinguishes an entry outside this family from a closed entry
+    whose title boundary is not safe. The latter must not fall through to the
+    sentence-based title heuristics.
+    """
+    head = _COLON_INITIAL_AUTHOR_HEAD_RE.match(raw)
+    if head is None or not _closed_colon_author_entry(raw):
+        return False, None
+
+    identifiers = [
+        match.span()
+        for pattern in (
+            r"\b10\.\d{4,9}/\S+",
+            r"https?://\S+",
+            r"\barxiv[:\s]*\d{4}\.\d{4,5}(?:v\d+)?\b",
+        )
+        for match in re.finditer(pattern, raw, re.IGNORECASE)
+    ]
+
+    def overlaps_identifier(span: tuple[int, int]) -> bool:
+        return any(span[0] < end and span[1] > start for start, end in identifiers)
+
+    def title_before(boundary: int) -> str | None:
+        left = head.end()
+        while left < boundary and raw[left].isspace():
+            left += 1
+        right = boundary
+        while right > left and raw[right - 1].isspace():
+            right -= 1
+        if right <= left or raw[right - 1] != ".":
+            return None
+        right -= 1
+        while right > left and raw[right - 1].isspace():
+            right -= 1
+        if right <= left or overlaps_identifier((left, right)):
+            return None
+        title = re.sub(r"\s+", " ", raw[left:right]).strip()
+        quote_pairs = (("“", "”"), ('"', '"'), ("‘", "’"), ("«", "»"))
+        if title and any(
+            title.startswith(opening) != title.endswith(closing)
+            for opening, closing in quote_pairs
+        ):
+            return None
+        if not title or re.search(r"[.!?][\"”’)]?\s+[\"“‘(]*[A-Z]", title):
+            return None
+        return title
+
+    tuples = [
+        match for match in _COLON_AUTHOR_PUBLICATION_TUPLE_RE.finditer(raw)
+        if not overlaps_identifier(match.span())
+    ]
+    if tuples:
+        if len(tuples) != 1:
+            return True, None
+        coordinates = extract_cited_coordinates(raw, None)
+        containers = [row for row in coordinates if row.get("kind") == "container"]
+        volumes = [row for row in coordinates if row.get("kind") == "volume"]
+        locators = [
+            row for row in coordinates
+            if row.get("kind") in {"article_page_range", "elocator"}
+        ]
+        if len(containers) != 1 or len(volumes) != 1 or len(locators) != 1:
+            return True, None
+        container_span = _coordinate_span_matches(raw, containers[0])
+        volume_span = _coordinate_span_matches(raw, volumes[0])
+        locator_span = _coordinate_span_matches(raw, locators[0])
+        publication = tuples[0]
+        if not container_span or not volume_span or not locator_span:
+            return True, None
+        if any(
+            overlaps_identifier(span)
+            for span in (container_span, volume_span, locator_span)
+        ):
+            return True, None
+        if not (
+            head.end() < container_span[0] < container_span[1]
+            <= publication.start() <= volume_span[0] < volume_span[1]
+            <= locator_span[0] < locator_span[1] <= publication.end()
+        ):
+            return True, None
+        return True, title_before(container_span[0])
+
+    types = list(_COLON_SOFTWARE_TYPE_RE.finditer(raw))
+    if len(types) != 1 or overlaps_identifier(types[0].span()):
+        return True, None
+    return True, title_before(types[0].start())
+
+
+def _closed_colon_author_spine_refs(
+        raw_lines: list[str], furniture: set[str]) -> list[str] | None:
+    """Return line spans only for a repeated, independently closed colon-author list."""
+    lines: list[str] = []
+    for raw_line in raw_lines:
+        line = _clean_biblio_line(raw_line)
+        if _is_biblio_tail_line(line):
+            break
+        if _is_biblio_noise_line(line) or raw_line.strip() in furniture:
+            continue
+        lines.append(line)
+
+    starts = [i for i, line in enumerate(lines) if _COLON_INITIAL_AUTHOR_HEAD_RE.match(line)]
+    if len(starts) < 3 or not starts or starts[0] != 0:
+        return None
+
+    refs: list[str] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(lines)
+        raw = "\n".join(lines[start:end]).strip()
+        if not _closed_colon_author_entry(raw):
+            return None
+        refs.append(_merge_hyphen_wraps(" ".join(lines[start:end])))
+    return refs
 
 
 def _authoryear_entry_starts(raw_lines: list[str]) -> set[int]:
@@ -3055,13 +6098,41 @@ def _authoryear_entry_starts(raw_lines: list[str]) -> set[int]:
     "Smith, John. 2020. …") never does, and keeps the old behaviour untouched."""
     cand: list[tuple[int, bool]] = []
     prev_line = ""
+
+    def _next_content_line(start: int) -> tuple[int, str]:
+        # PDF extraction can insert empty physical lines inside an entry. Skip only
+        # those blanks; non-empty furniture or headings remain lookahead barriers.
+        while start < len(raw_lines) and not raw_lines[start].strip():
+            start += 1
+        line = _clean_biblio_line(raw_lines[start]) if start < len(raw_lines) else ""
+        return start, line
+
+    author_run_ends: dict[int, int] = {}
+    author_run_continuations: set[int] = set()
+    for start in range(len(raw_lines)):
+        if start in author_run_continuations:
+            continue
+        end = _author_run_continuation_span(raw_lines, start)
+        if end is None:
+            continue
+        author_run_ends[start] = end
+        author_run_continuations.update(range(start + 1, end + 1))
+
     for i, raw in enumerate(raw_lines):
         line = _clean_biblio_line(raw)
         if _is_biblio_noise_line(line):
             continue
-        nxt = _clean_biblio_line(raw_lines[i + 1]) if i + 1 < len(raw_lines) else ""
-        third = (_clean_biblio_line(raw_lines[i + 2])
-                 if i + 2 < len(raw_lines) else "")
+        if i in author_run_continuations:
+            # The date-bearing coauthor line closes the original author list; it
+            # does not open a second reference under that coauthor's surname.
+            prev_line = line
+            continue
+        if i in author_run_ends:
+            cand.append((i, True))
+            prev_line = line
+            continue
+        next_index, nxt = _next_content_line(i + 1)
+        _, third = _next_content_line(next_index + 1)
         if _split_surname_initial_year_start(line, nxt, third):
             # A three-line author/year shape may still be the final co-author
             # of an author list that the column wrapped after a trailing comma.
@@ -3078,8 +6149,8 @@ def _authoryear_entry_starts(raw_lines: list[str]) -> set[int]:
         # line ends on a surname, the next carries that surname's initials, and only the
         # third says 1875 or 2023.  The line that continues the list is where the list
         # goes on, so that is where the year is still being looked for.
-        if _continues_author_list(nxt, line) and i + 2 < len(raw_lines):
-            nxt = f"{nxt} {_clean_biblio_line(raw_lines[i + 2])}"
+        if _continues_author_list(nxt, line) and third:
+            nxt = f"{nxt} {third}"
         if _looks_authoryear_ref_start(line, nxt) and not _HANGING_AUTHORS_RE.search(prev_line):
             cand.append((i, _dated_entry_start(line, nxt)))
         prev_line = line
@@ -3202,7 +6273,8 @@ def _split_authoryear_references(biblio: str) -> list[str]:
     _LETTER = r"[^\W\d_]"                                    # a letter, any script
     _INIT_DOT = rf"(?<!{_LETTER}{_LETTER})\."                # the period of an initial, not of a sentence
     # The run crosses a line break: an author list is where a bibliography wraps.
-    _RUN_CHAR = r"[^\W\d_]|[\s,&'\-¨´`^~]"
+    # Author runs accept the same Unicode dash forms used by citation coordinates.
+    _RUN_CHAR = rf"[^\W\d_]|[\s,&'{re.escape(RANGE_DASHES)}¨´`^~]"
     _AUTHOR_RUN = _TOK + rf"(?:{_RUN_CHAR}|{_INIT_DOT})*"
     _NAME_DELIM = r"\s*(?:,| and | & )"
     # An author list may open on a lower-case name particle — "de Decker, A. (2001)",
@@ -3214,8 +6286,7 @@ def _split_authoryear_references(biblio: str) -> list[str]:
     # particles, only in lower case, and only when a capitalised name follows — ". de
     # facto results" cannot match it, because the word after the particle is not a
     # _TOK.  Longer particles first so the alternation prefers "van der" over "van".
-    _LEAD = (r"(?:(?:van der|van den|van de|de la|de|del|della|van|von|der|den|"
-             r"du|da|di|dos|ter|ten|bin|ibn)\s+){1,2}")
+    _LEAD = _AY_NAME_PARTICLES
     _BOUNDARY_RE = re.compile(
         r"(?<!\b[A-Z])\.\s+"
         + _NOT_NAME_START
@@ -3279,6 +6350,10 @@ def _split_authoryear_references(biblio: str) -> list[str]:
     if buf:
         refs.append(_merge_hyphen_wraps(" ".join(buf)))
     line_refs = _coalesce_yearless_splits(refs)
+
+    colon_spine_refs = _closed_colon_author_spine_refs(raw_lines, furniture)
+    if colon_spine_refs is not None:
+        return colon_spine_refs
 
     # The two passes read the same bibliography through different windows, and each is
     # blind where the other sees.  Pass 1 only ever cuts at a PERIOD, so a reference
@@ -3397,6 +6472,9 @@ def _merge_standalone_doi_url(refs: list[dict]) -> list[dict]:
     return merged
 
 
+_COPYRIGHT_TAIL_RE = re.compile(r"copyright\s+©\s+\d{4}\s+[^\W\d_].*", re.I)
+
+
 def _trim_interposed_block(chunk: str) -> str:
     """Drop a post-biblio block (Acknowledgments, Author Contributions, ...) that a
     two-column PDF interposes inside a reference entry.
@@ -3416,9 +6494,56 @@ def _trim_interposed_block(chunk: str) -> str:
         if (
             stripped in parser_text._POST_BIBLIO_HEADINGS
             or _is_biblio_tail_line(normalized)
+            or (
+                _COPYRIGHT_TAIL_RE.fullmatch(normalized)
+                and any(previous.strip() for previous in lines[:k])
+            )
         ):
             return "\n".join(lines[:k])
     return chunk
+
+
+def _structurally_complete_entry(text: str) -> bool:
+    """Require source-complete fields before using a line as a boundary."""
+    record = reference_readers.parse_entry(text.strip(), include_generic=False)
+    if record.get("status") != "parsed":
+        return False
+    fields = record.get("fields") or {}
+    if not {"authors", "title", "year"} <= set(fields):
+        return False
+    return ({"journal", "pages"} <= set(fields)
+            or {"publisher", "place"} <= set(fields))
+
+
+def _split_structural_line_entries(text: str) -> list[str] | None:
+    """Cut an unnumbered fallback only at enabled readers' physical starts.
+
+    Every resulting chunk must independently have a complete structural read;
+    otherwise the established fallback remains authoritative.
+    """
+    lines = text.splitlines(keepends=True)
+    proposals = []
+    offset = 0
+    for line in lines:
+        if line.strip() and reference_readers.entry_start_readers(line):
+            proposals.append(offset)
+        offset += len(line)
+    if not proposals:
+        return None
+    if text[:proposals[0]].strip():
+        return None
+    proposals = sorted(set(proposals))
+    if len(proposals) >= 2:
+        chunks = [text[start:end].strip()
+                  for start, end in zip(proposals, proposals[1:] + [len(text)])]
+        if len(chunks) >= 2 and all(_structurally_complete_entry(chunk) for chunk in chunks):
+            return chunks
+        return None
+    # A single complete wrapped entry is safer than treating each physical line
+    # as a separate citation. Incomplete and ambiguous entries do not qualify.
+    if len(proposals) == 1 and _structurally_complete_entry(text):
+        return [text.strip()]
+    return None
 
 
 def default_parse_references(biblio: str, meta=None) -> list[dict]:
@@ -3449,6 +6574,27 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
     text = biblio.strip()
     if not text:
         return []
+    opaque_keyed_state = (
+        meta.get("_opaque_keyed_bibliography")
+        if isinstance(meta, dict) else None
+    )
+    if (
+        opaque_keyed_state not in {"valid", "ambiguous"}
+        and not (isinstance(meta, dict) and meta.get("footnote_references"))
+    ):
+        opaque_keyed_state = _opaque_keyed_spine_status(text)
+    if opaque_keyed_state is not None:
+        if isinstance(meta, dict):
+            meta["_opaque_keyed_bibliography"] = opaque_keyed_state
+        if opaque_keyed_state == "ambiguous":
+            if isinstance(meta, dict):
+                meta["_opaque_entry_sources"] = {}
+            return []
+        return _parse_opaque_keyed_references(text, meta=meta)
+    preserve_entry_labels = (
+        isinstance(meta, dict)
+        and meta.get("_preserve_numbered_entry_labels") is True
+    )
     # Entry marker: [n] | n. | n) | (n) | nX. at the start of a line (see
     # _NUM_MARKER for the per-style variants).
     entry_re = re.compile(r"(?m)^\s*" + _NUM_MARKER)
@@ -3461,7 +6607,25 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
     if matches:
         first_num = _entry_num(matches[0])
         if first_num <= 20:
-            _numbered_ref_ok = True
+            first_line = text.count("\n", 0, matches[0].start())
+            prefix_lines = text[:matches[0].start()].splitlines()
+            strong_authoryear_prefix = _strong_authoryear_spine(
+                prefix_lines, len(prefix_lines),
+            )
+            # A wrapped locator can look like an isolated ``1.`` after a real
+            # author-year list.  Keep the established short-numbered-list path
+            # unless a strong author-year prefix competes with it and no later
+            # bibliographic entry corroborates an ordered numeric run.
+            if not strong_authoryear_prefix:
+                _numbered_ref_ok = True
+            else:
+                _numbered_ref_ok = any(
+                    line_index > first_line
+                    and first_num < number <= first_num + 3
+                    for line_index, number in _numbered_bibliography_entries(
+                        text.splitlines()
+                    )
+                )
         elif len(matches) >= 5:
             # Check for a consecutive-ish sequence
             nums = [_entry_num(m) for m in matches[:10]]
@@ -3480,6 +6644,11 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
             for i, raw in enumerate(ay_refs, 1):
                 refs.append(_make_reference(i, raw, chicago_hanging=chicago_hanging))
             return _merge_standalone_doi_url(refs)
+        structural_entries = _split_structural_line_entries(text)
+        if structural_entries:
+            for i, raw in enumerate(structural_entries, 1):
+                refs.append(_make_reference(i, raw))
+            return _merge_standalone_doi_url(refs)
         # Last-resort fallback: one entry per non-empty line, numbered in order.
         lines = [l for l in text.split("\n") if l.strip()]
         lines = _truncate_bleed(lines)
@@ -3494,11 +6663,45 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
     # reference in two.  Dropping it keeps the fragment merged into its entry.
     kept = [matches[0]]
     _last_num = _entry_num(matches[0])
+    seen_numbers = {_last_num}
+    duplicate_numbers: set[int] = set()
     for m in matches[1:]:
         n = _entry_num(m)
+        following = text[m.end():]
+        following_lines = [line.strip() for line in following.splitlines() if line.strip()]
+        date_only_continuation = bool(
+            preserve_entry_labels
+            and following_lines
+            and _SCOPED_DATE_CONTINUATION_RE.fullmatch(following_lines[0])
+        )
+        if preserve_entry_labels and n in seen_numbers:
+            next_match = next(
+                (candidate for candidate in matches if candidate.start() > m.start()),
+                None,
+            )
+            end = next_match.start() if next_match is not None else len(text)
+            evidence = text[m.end():end]
+            evidence_lines = [line.strip() for line in evidence.splitlines() if line.strip()]
+            if (
+                evidence_lines
+                and not _SCOPED_DATE_CONTINUATION_RE.fullmatch(evidence_lines[0])
+                and (
+                    _looks_authoryear_ref_start(
+                        evidence_lines[0],
+                        evidence_lines[1] if len(evidence_lines) > 1 else "",
+                    )
+                    or re.search(r"\b(?:10\.\d{4,9}/\S+|https?://\S+|ISBN[:\s])", evidence_lines[0], re.I)
+                )
+            ):
+                duplicate_numbers.add(n)
+                kept.append(m)
+            continue
+        if date_only_continuation:
+            continue
         if _last_num < n <= _last_num + 3:
             kept.append(m)
             _last_num = n
+            seen_numbers.add(n)
     matches = kept
     # Numbered path: extract raw entries, truncate outlier entries, then build refs.
     raw_entries = []
@@ -3507,10 +6710,26 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         chunk = _trim_interposed_block(text[start:end])
-        raw_entries.append((num, " ".join(chunk.split())))
-    cleaned = _truncate_bleed([r[1] for r in raw_entries])
-    for (num, _), raw in zip(raw_entries, cleaned):
+        raw_entries.append((
+            num,
+            " ".join(chunk.split()),
+            text[m.start():m.end()] if preserve_entry_labels else "",
+        ))
+    cleaned = _truncate_bleed([entry[1] for entry in raw_entries])
+    entry_sources = {}
+    for (num, _, label_prefix), raw in zip(raw_entries, cleaned):
         if _is_submission_footer(raw):
             continue
-        refs.append(_make_reference(num, raw))
+        persisted_raw = label_prefix + raw
+        reference = _make_reference(
+            num,
+            persisted_raw,
+            _analysis_raw=raw if preserve_entry_labels else None,
+        )
+        refs.append(reference)
+        if preserve_entry_labels:
+            entry_sources[reference["id"]] = raw
+    if preserve_entry_labels and isinstance(meta, dict):
+        meta["_scoped_duplicate_local_numbers"] = sorted(duplicate_numbers)
+        meta["_scoped_entry_sources"] = entry_sources
     return _merge_standalone_doi_url(refs)

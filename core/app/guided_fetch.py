@@ -22,6 +22,7 @@ from core.fetch.admission import provided_fulltext
 from core.fetch.extraction import ocr as fetch_ocr
 from core.fetch.extraction import pdf as fetch_pdf
 from core.infra.db.repository import RunRepository
+from core.shared.filesystem_paths import io_path, logical_path
 from core.resolve.resolver_coverage import (
     bibliographic_concern,
     bibliographic_review_labels,
@@ -286,17 +287,19 @@ class GuidedFetchController:
             if staged is None or not isinstance(staged.get("file_path"), str):
                 raise ValueError("the confirmed staged PDF is unavailable")
             source_path = Path(staged["file_path"])
-            if source_path.suffix.lower() != ".pdf" or not source_path.is_file():
+            source_path_io = Path(io_path(source_path))
+            if source_path.suffix.lower() != ".pdf" or not source_path_io.is_file():
                 raise ValueError("the confirmed source is not an available PDF")
             try:
-                provided_fulltext.parse_extract.probe_file(str(source_path))
+                provided_fulltext.parse_extract.probe_file(str(source_path_io))
             except Exception as exc:
                 raise ValueError("the confirmed source is not a valid PDF") from exc
             digest = _sha256_path(source_path)
-            token = f"staged:{source_path.resolve()}"
+            resolved_source = logical_path(source_path)
+            token = f"staged:{resolved_source}"
             artifact_id = provided_fulltext.ocr_scan_id(ref_id, token, digest)
             artifact = self._restored_ocr_artifacts.get(artifact_id)
-            source_ref = str(staged.get("url") or source_path.resolve())
+            source_ref = str(staged.get("url") or resolved_source)
             display_name = source_path.name
             if artifact is None:
                 from core.app.commands.tasks import store_guided_ocr_artifact
@@ -383,7 +386,7 @@ class GuidedFetchController:
             self._restored_ocr_artifacts[artifact["scan_id"]] = artifact
             can_stage_answer = True
         try:
-            text, method = fetch_ocr.ocr_pdf(scan_path, lang=DEFAULT_OCR_LANG)
+            text, method = fetch_ocr.ocr_pdf(io_path(scan_path), lang=DEFAULT_OCR_LANG)
             if not fetch_pdf._quality(text):
                 raise ValueError("OCR output failed the deterministic text quality gate")
             from core.app.commands.tasks import store_guided_ocr_artifact
@@ -450,14 +453,14 @@ class GuidedFetchController:
         if not isinstance(scan_path, str):
             return
         try:
-            target = Path(scan_path).resolve(strict=True)
+            target = logical_path(scan_path, strict=True)
         except OSError:
             return
         for artifact in self._restored_ocr_artifacts.values():
             if (
                 artifact.get("ref_id") == ref_id
                 and artifact.get("status") == "done"
-                and Path(artifact["scan_path"]).resolve() == target
+                and logical_path(artifact["scan_path"]) == target
                 and not artifact.get("discarded")
             ):
                 self._persist_discarded_state(artifact, discarded=True)
@@ -480,7 +483,7 @@ class GuidedFetchController:
             source_ref=artifact["source_ref"],
             display_name=artifact["display_name"],
             status="done",
-            text=Path(text_path).read_text(encoding="utf-8"),
+            text=Path(io_path(text_path)).read_text(encoding="utf-8"),
             method=artifact["ocr_method"],
             discarded=discarded,
             identity_attested=artifact["identity_attested"],
@@ -781,8 +784,8 @@ def _proceed_payload(ref_id: str, payload: dict) -> tuple[dict, bool]:
         and "ocr_scan_file_path" not in payload
         and isinstance(payload.get("file_path"), str)
         and Path(payload["file_path"]).suffix.lower() == ".pdf"
-        and Path(payload["file_path"]).is_file()
-        and provided_fulltext.pdf_requires_ocr(payload["file_path"])
+        and Path(io_path(payload["file_path"])).is_file()
+        and provided_fulltext.pdf_requires_ocr(io_path(payload["file_path"]))
     ):
         return ({
             **waived_payload(),
@@ -809,7 +812,7 @@ def _admit_identity_review(*args, **kwargs) -> dict:
 
 def _sha256_path(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with Path(io_path(path)).open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -840,22 +843,24 @@ def _ocr_artifact_payload(artifact: dict[str, Any]) -> dict:
 
 def _load_guided_ocr_artifacts(run_dir: str) -> dict[str, dict[str, Any]]:
     """Load only hash-validated, run-contained Guided Fetch OCR sidecars."""
-    root = Path(run_dir).resolve()
+    root = logical_path(run_dir)
     sources_dir = root / "sources"
     artifact_dir = sources_dir / "guided_ocr"
+    sources_dir_io = Path(io_path(sources_dir))
+    artifact_dir_io = Path(io_path(artifact_dir))
     if (
-        not artifact_dir.exists()
-        or sources_dir.is_symlink()
-        or artifact_dir.is_symlink()
-        or not artifact_dir.is_dir()
+        not artifact_dir_io.exists()
+        or sources_dir_io.is_symlink()
+        or artifact_dir_io.is_symlink()
+        or not artifact_dir_io.is_dir()
     ):
         return {}
     output: dict[str, dict[str, Any]] = {}
-    for metadata_path in artifact_dir.glob("*.json"):
-        if metadata_path.is_symlink():
+    for metadata_path_io in artifact_dir_io.glob("*.json"):
+        if metadata_path_io.is_symlink():
             continue
         try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata = json.loads(metadata_path_io.read_text(encoding="utf-8"))
             if not isinstance(metadata, dict):
                 continue
             scan_id = metadata.get("scan_id")
@@ -873,13 +878,14 @@ def _load_guided_ocr_artifacts(run_dir: str) -> dict[str, dict[str, Any]]:
                 or not re.fullmatch(r"[0-9a-f]{64}", scan_sha256)
                 or provided_fulltext.ocr_scan_id(ref_id, scan_token, scan_sha256) != scan_id
                 or status not in {"pending", "failed", "done"}
-                or metadata_path.stem != scan_id
+                or metadata_path_io.stem != scan_id
             ):
                 continue
             scan_path = artifact_dir / f"{scan_id}.pdf"
-            if scan_path.is_symlink() or not scan_path.is_file():
+            scan_path_io = Path(io_path(scan_path))
+            if scan_path_io.is_symlink() or not scan_path_io.is_file():
                 continue
-            resolved_scan = scan_path.resolve(strict=True)
+            resolved_scan = logical_path(scan_path, strict=True)
             resolved_scan.relative_to(root)
             if _sha256_path(resolved_scan) != scan_sha256:
                 continue
@@ -915,12 +921,14 @@ def _load_guided_ocr_artifacts(run_dir: str) -> dict[str, dict[str, Any]]:
                 ):
                     continue
                 text_path = root / Path(*PurePosixPath(relative).parts)
-                if text_path.is_symlink() or not text_path.is_file():
+                text_path_io = Path(io_path(text_path))
+                if text_path_io.is_symlink() or not text_path_io.is_file():
                     continue
-                text_path.resolve(strict=True).relative_to(root)
+                resolved_text = logical_path(text_path, strict=True)
+                resolved_text.relative_to(root)
                 if _sha256_path(text_path) != text_sha256:
                     continue
-                metadata["text_file_path"] = str(text_path.resolve())
+                metadata["text_file_path"] = str(resolved_text)
             elif (
                 metadata.get("text_path") is not None
                 or metadata.get("text_sha256") is not None
@@ -1082,6 +1090,12 @@ def build_source_inventory(
             )
             parsed = asdict(reference)
             parsed["cited_coordinates"] = list(reference.cited_coordinates)
+            field_parse = parsed.get("bibliographic_parse") or {}
+            if field_parse.get("status") == "parsed":
+                for name in ("authors", "journal", "volume", "issue", "pages"):
+                    field = field_parse["fields"].get(name)
+                    if field is not None:
+                        parsed[name] = deepcopy(field["value"])
             profile = evidence if isinstance(evidence, dict) else {}
             entries.append({
                 "ref_id": reference.ref_id,
@@ -1328,8 +1342,8 @@ def _preview_path(run_dir: str, stored_path: str) -> str | None:
         or relative.as_posix() != stored_path
     ):
         return None
-    root = Path(run_dir).resolve()
-    candidate = (root / relative).resolve()
+    root = logical_path(run_dir)
+    candidate = logical_path(root / relative)
     try:
         if os.path.commonpath((str(root), str(candidate))) != str(root):
             return None

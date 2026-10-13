@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 import os
 import re
 import unicodedata
@@ -605,8 +606,10 @@ def _convert_detached_superscripts(body: str, oracle) -> str:
     return "\n".join(out)
 
 
-def _split_body_bibliography(text: str) -> tuple[str, int | None, list[str]]:
-    """Body text, the index of the bibliography heading, and the bibliography lines.
+def _split_body_bibliography(
+    text: str, *, allow_headerless: bool = True,
+) -> tuple[str, int | None, list[str]]:
+    """Body text, the bibliography boundary index, and bibliography lines.
 
     Text the PDF leaves inside the reference region but that is not a reference —
     ViLT's appendix past the last entry, the column of Nature's Methods dropped in
@@ -620,43 +623,502 @@ def _split_body_bibliography(text: str) -> tuple[str, int | None, list[str]]:
     reading order, and the extractor guesses at it.  Plain text has no columns.
     """
     lines = text.split("\n")
-    cut_idx = None
-    for i, line in enumerate(lines):
-        stripped = line.strip().lower().rstrip(":.")
-        if stripped in parser_text.BIBLIOGRAPHY_HEADINGS:
-            cut_idx = i
+    cut_idx = parsing_common._select_biblio_heading_index(lines)
+    headerless = cut_idx is None
     if cut_idx is None:
-        return text, None, lines
-
-    biblio = lines[cut_idx + 1:]
-    end = parsing_common._find_biblio_end_index(biblio)
+        if not allow_headerless:
+            return text, None, lines
+        start_idx = parsing_common._headerless_bibliography_start_index(lines)
+        if start_idx is None:
+            return text, None, lines
+        boundary_idx = start_idx
+        body_prefix = lines[:start_idx]
+        biblio_heading = []
+        biblio = lines[start_idx:]
+    else:
+        boundary_idx = cut_idx
+        body_prefix = lines[:cut_idx]
+        biblio_heading = [lines[cut_idx]]
+        biblio = lines[cut_idx + 1:]
+    opaque_keyed_state = parsing_common._opaque_keyed_spine_status("\n".join(biblio))
+    end = parsing_common._find_biblio_end_index(
+        biblio,
+        opaque_keyed_spine=opaque_keyed_state is not None,
+    )
     tail = []
     if end is not None:
         biblio, tail = biblio[:end], biblio[end:]
 
     interposed: list[str] = []
-    spans = parsing_common._interposed_body_spans(biblio)
+    spans = (
+        parsing_common._headerless_interposed_body_spans(biblio)
+        if headerless
+        else parsing_common._interposed_body_spans(biblio)
+    )
     if spans:
         foreign = {i for first, last in spans for i in range(first, last + 1)}
         interposed = [biblio[i] for i in sorted(foreign)]
         biblio = [ln for i, ln in enumerate(biblio) if i not in foreign]
 
-    body_lines = lines[:cut_idx] + interposed + tail
-    return "\n".join(body_lines), cut_idx, [lines[cut_idx]] + biblio
+    body_lines = body_prefix + interposed + tail
+    return "\n".join(body_lines), boundary_idx, biblio_heading + biblio
 
 
-def columnaware_bibliography_text(path: str) -> str | None:
-    """Re-extract the reference pages in column reading order (left column fully,
-    then right), for publisher PDFs whose two-column *back matter* the default
-    extraction interleaves (the "References" heading ends up followed by a table
-    or an author-contributions block instead of the entries).
+def _columnaware_page_bands(
+    blocks, page_width: float, *, minimum_bottom_y: float | None = None,
+):
+    """Infer text-column x bands from aligned paragraph blocks and positive gutters.
 
-    Scoped to the pages from the "References" heading onward — the reference pages
-    are cleanly two-column, so left-then-right is correct there, whereas body
-    pages carry full-width titles/figures that this simple ordering would break.
-    Returns the text of those pages, or ``None`` when there is no such heading or
-    no PDF backend.  The caller decides whether the result beats the default
-    parse (see parse()), so a bad re-extraction is simply ignored.
+    Wide spanning blocks and short figure labels are not column evidence.  Returning
+    ``None`` means the remaining paragraph bands overlap, so their reading order is
+    ambiguous; an empty list means the page has no detectable multi-column text.
+    """
+    min_width = page_width * 0.17
+    max_width = page_width * 0.49
+    start_tolerance = max(8.0, page_width * 0.035)
+    candidates = []
+    for block in blocks:
+        try:
+            x0, _y0, x1, y1 = map(float, block[:4])
+            text = " ".join(str(block[4] or "").split())
+        except (IndexError, TypeError, ValueError):
+            continue
+        if minimum_bottom_y is not None and y1 < minimum_bottom_y:
+            continue
+        width = x1 - x0
+        if min_width <= width <= max_width and len(text) >= 32:
+            candidates.append((x0, x1))
+    if not candidates:
+        return []
+
+    candidates.sort()
+    clusters: list[list[tuple[float, float]]] = []
+    for interval in candidates:
+        if (clusters
+                and interval[0] - clusters[-1][0][0] <= start_tolerance):
+            clusters[-1].append(interval)
+        else:
+            clusters.append([interval])
+    bands = [
+        (min(x0 for x0, _x1 in cluster), max(x1 for _x0, x1 in cluster))
+        for cluster in clusters
+    ]
+    bands.sort()
+    min_gutter = max(1.0, page_width * 0.003)
+    for previous, following in zip(bands, bands[1:]):
+        if following[0] - previous[1] < min_gutter:
+            return None
+    return bands
+
+
+def _columnaware_block_band(block, bands, page_width: float) -> int | None:
+    """Return the unique text band containing a non-spanning block."""
+    try:
+        x0, _y0, x1, _y1 = map(float, block[:4])
+    except (IndexError, TypeError, ValueError):
+        return None
+    tolerance = max(8.0, page_width * 0.035)
+    if x1 <= x0 or x1 - x0 > page_width * 0.49:
+        return None
+    matches = [
+        index for index, (left, right) in enumerate(bands)
+        if left - tolerance <= x0 <= left + tolerance and x1 <= right + tolerance
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _columnaware_start_band(block, bands, page_width: float) -> int | None:
+    """Locate a block's aligned start even when it crosses a column gutter."""
+    try:
+        x0 = float(block[0])
+    except (IndexError, TypeError, ValueError):
+        return None
+    tolerance = max(8.0, page_width * 0.035)
+    matches = [
+        index for index, (left, _right) in enumerate(bands)
+        if left - tolerance <= x0 <= left + tolerance
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _columnaware_has_bibliography_end(parts: list[str]) -> bool:
+    """Use the normal bibliography end detector to stop before unrelated pages."""
+    lines = "\n".join(parts).splitlines()
+    heading = parsing_common._select_biblio_heading_index(lines)
+    if heading is None:
+        return False
+    region = lines[heading + 1:]
+    opaque = parsing_common._opaque_keyed_spine_status("\n".join(region))
+    return parsing_common._find_biblio_end_index(
+        region, opaque_keyed_spine=opaque is not None,
+    ) is not None
+
+
+def _columnaware_prefix_source_anchor(
+    blocks, declared_document_doi: str | None,
+) -> bool:
+    """Return whether a pre-heading column prefix contains source evidence.
+
+    A DOI or URL is source evidence unless every DOI token is the unique
+    front-matter DOI and each URL carrying it repeats that same identifier.
+    This exception is only considered after a separate end-matter proof exists.
+    """
+    text = "\n".join(str(block[4] or "") for block in blocks)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if parsing_common._region_has_bibliography_entry(lines):
+        return True
+    if re.search(r"\bISBN\b", text, re.I):
+        return True
+    evidence_text = re.sub(
+        r"((?:https?://|www\.)[^\r\n]*[./])\s*[\r\n]+\s*"
+        r"([A-Z0-9][A-Z0-9./#?=&%+_-]*)",
+        r"\1\2",
+        text,
+        flags=re.I,
+    )
+
+    expected = (
+        declared_document_doi.strip().rstrip(".,;:)]}").casefold()
+        if isinstance(declared_document_doi, str) else ""
+    )
+    doi_re = r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+"
+    doi_tokens = [
+        match.group(0).rstrip(".,;:)]}").casefold()
+        for match in re.finditer(doi_re, evidence_text, re.I)
+    ]
+    url_re = r"(?:https?://|www\.)\S+"
+    urls = re.findall(url_re, evidence_text, re.I)
+    if urls:
+        if not expected:
+            return True
+        outside_urls = re.sub(url_re, " ", evidence_text, flags=re.I)
+        outside_dois = [
+            match.group(0).rstrip(".,;:)]}").casefold()
+            for match in re.finditer(doi_re, outside_urls, re.I)
+        ]
+        if any(token != expected for token in outside_dois):
+            return True
+        for url in urls:
+            if (
+                not re.search(re.escape(expected) + r"(?=$|[/?#])", url, re.I)
+                or len(re.findall(r"\b10\.\d{4,9}/", url, re.I)) != 1
+            ):
+                return True
+    elif doi_tokens and (
+        not expected
+        or any(token != expected for token in doi_tokens)
+    ):
+        return True
+    if re.search(r"\bdoi\s*:", evidence_text, re.I) and not doi_tokens:
+        return True
+    text_without_doi = re.sub(
+        doi_re, " ", evidence_text, flags=re.I,
+    )
+    signal_text = re.sub(url_re, " ", text_without_doi, flags=re.I)
+    if parsing_common._has_biblio_signal(signal_text):
+        return True
+    return False
+
+
+def _columnaware_endmatter_heading_proof(blocks) -> bool:
+    """Require multiple exact post-bibliography headings followed by prose."""
+    headings = parser_text._POST_BIBLIO_HEADINGS
+
+    def normalize(line: str) -> str:
+        value = unicodedata.normalize("NFKC", line)
+        value = re.sub(r"\s+", " ", value).strip().casefold()
+        return value.rstrip(" .:;")
+
+    lines = [
+        line.strip()
+        for block in sorted(blocks, key=lambda item: (float(item[1]), float(item[0])))
+        for line in str(block[4] or "").splitlines()
+        if line.strip()
+    ]
+    normalized = [normalize(line) for line in lines]
+    proved = set()
+    for index, heading in enumerate(normalized):
+        if heading not in headings:
+            continue
+        for following in normalized[index + 1:]:
+            if following in headings:
+                break
+            if parsing_common._entry_start_num(following) is not None:
+                break
+            words = re.findall(r"[^\W_]+", following, re.UNICODE)
+            if len(words) >= 3:
+                proved.add(heading)
+            break
+    return len(proved) >= 2
+
+
+def _columnaware_later_band_prefix_decision(
+    prefix_blocks,
+    suffix_blocks,
+    prior_parts: list[str],
+    heading_y: float,
+    bands,
+    band_index: int,
+    page_width: float,
+    declared_document_doi: str | None = None,
+) -> str:
+    """Classify a later-column heading-page prefix without deleting ambiguity.
+
+    The returned reason is intentionally private but stable enough for focused
+    regression tests to distinguish an unsupported layout from a source-anchor
+    veto.
+    """
+    if not prefix_blocks:
+        return "no_prefix"
+
+    has_source_anchor = _columnaware_prefix_source_anchor(
+        prefix_blocks, declared_document_doi,
+    )
+    has_endmatter = _columnaware_endmatter_heading_proof(prefix_blocks)
+    if has_source_anchor and has_endmatter:
+        return "source_anchor_veto"
+    if has_source_anchor:
+        return "preserve_source_prefix"
+    if not has_endmatter:
+        return "ambiguous_prefix"
+
+    # A block crossing the heading plane cannot be split without losing text.
+    if any(
+        float(block[1]) < heading_y <= float(block[3])
+        for block in prefix_blocks
+    ):
+        return "ambiguous_crossing_block"
+    if not suffix_blocks:
+        return "unsupported_resume"
+
+    ordered_suffix = sorted(
+        suffix_blocks, key=lambda block: (float(block[1]), float(block[0])),
+    )
+    if _columnaware_block_band(
+        ordered_suffix[0], bands, page_width,
+    ) != band_index:
+        return "unaligned_resume"
+
+    suffix_lines = [
+        line.strip()
+        for block in ordered_suffix
+        for line in str(block[4] or "").splitlines()
+        if line.strip()
+    ]
+    first_block_lines = [
+        line.strip()
+        for line in str(ordered_suffix[0][4] or "").splitlines()
+        if line.strip()
+    ]
+    first_block_text = "\n".join(first_block_lines)
+    first_block_supported = (
+        parsing_common._region_has_bibliography_entry(first_block_lines)
+        or parsing_common._has_biblio_signal(first_block_text)
+    )
+    suffix_supported = (
+        parsing_common._region_has_bibliography_entry(suffix_lines)
+        or parsing_common._has_biblio_signal("\n".join(suffix_lines))
+    )
+    if not first_block_supported or not suffix_supported:
+        return "unsupported_resume"
+
+    if parsing_common._region_has_sustained_bibliography_spine(suffix_lines):
+        return "trim_endmatter_prefix"
+
+    prior_numbers = [
+        number
+        for part in prior_parts
+        for line in part.splitlines()
+        if (number := parsing_common._entry_start_num(line.strip())) is not None
+    ]
+    suffix_numbers = [
+        number for line in suffix_lines
+        if (number := parsing_common._entry_start_num(line)) is not None
+    ]
+    if (
+        prior_numbers
+        and len(suffix_numbers) >= 2
+        and suffix_numbers[0] == prior_numbers[-1] + 1
+        and all(
+            following == previous + 1
+            for previous, following in zip(suffix_numbers, suffix_numbers[1:])
+        )
+    ):
+        return "trim_endmatter_prefix"
+    return "unsupported_resume"
+
+
+def _columnaware_block_is_at_page_margin(block, page) -> bool:
+    """Return whether a block touches a page edge where furniture is expected."""
+    try:
+        x0, y0, x1, y1 = map(float, block[:4])
+        width, height = float(page.rect.width), float(page.rect.height)
+    except (IndexError, TypeError, ValueError, AttributeError):
+        return False
+    return (
+        x1 <= width * 0.06 or x0 >= width * 0.94
+        or y1 <= height * 0.05 or y0 >= height * 0.92
+    )
+
+
+def _columnaware_margin_block_is_recognized_furniture(
+    block, page, furniture_lines,
+) -> bool:
+    """Drop only a margin block whose every nonempty line is known furniture."""
+    if not _columnaware_block_is_at_page_margin(block, page):
+        return False
+    lines = [line.strip() for line in str(block[4] or "").splitlines() if line.strip()]
+    if not lines:
+        return True
+    return all(line in furniture_lines for line in lines)
+
+
+def _columnaware_has_declared_document_doi_seed(
+    text: str, declared_document_doi: str | None,
+) -> bool:
+    """Recognize a repeated header seed only from one declared manuscript DOI.
+
+    A DOI is source evidence by default.  It can seed page-furniture proof only
+    when every DOI token is the same front-matter identifier and the block has
+    no independent bibliography-entry, ISBN, or URL evidence.
+    """
+    if not isinstance(declared_document_doi, str):
+        return False
+    expected = declared_document_doi.strip().rstrip(".,;:)]}").casefold()
+    if not re.fullmatch(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", expected, re.I):
+        return False
+
+    doi_tokens = [
+        match.group(0).rstrip(".,;:)]}").casefold()
+        for match in re.finditer(
+            r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", text, re.I,
+        )
+    ]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if (
+        not doi_tokens
+        or any(token != expected for token in doi_tokens)
+        or re.search(r"\bISBN\b|https?://|\bwww\.", text, re.I)
+        or parsing_common._region_has_bibliography_entry(lines)
+    ):
+        return False
+    return True
+
+
+def _columnaware_repeated_margin_furniture_blocks(
+    page_blocks, pages, furniture_lines, declared_document_doi: str | None = None,
+) -> list[set[int]]:
+    """Prove repeated page-edge blocks from stable layout and a furniture seed.
+
+    A complete non-counter text shape must recur at the same normalized page
+    bounds on at least three pages.  A varying counter, an existing furniture
+    line, or a source-free wide top-margin block seeds the proof.
+    A DOI-bearing block additionally needs a unique,
+    exact match to the manuscript's bounded front-matter DOI and must contain
+    no source-entry or other identifier evidence.
+    """
+    try:
+        from core.parse import boilerplate as _boilerplate
+    except ImportError:  # pragma: no cover - direct-execution import path
+        import boilerplate as _boilerplate
+
+    def normalize_line(line: str) -> str:
+        value = unicodedata.normalize("NFKC", line)
+        value = re.sub(r"\s+", " ", value).strip()
+        if "|" in value:
+            # Running heads may reverse field order on alternating pages.
+            fields = sorted(part.strip() for part in value.split("|") if part.strip())
+            return " | ".join(fields)
+        return value
+
+    normalized_furniture = {normalize_line(line) for line in furniture_lines}
+    groups: dict[tuple[tuple[float, ...], tuple[str, ...]], dict[int, list[int]]] = {}
+    for page_index, (blocks, page) in enumerate(zip(page_blocks, pages)):
+        width, height = float(page.rect.width), float(page.rect.height)
+        for block_index, block in enumerate(blocks):
+            if not _columnaware_block_is_at_page_margin(block, page):
+                continue
+            try:
+                x0, y0, x1, y1 = map(float, block[:4])
+                text = str(block[4] or "")
+            except (IndexError, TypeError, ValueError):
+                continue
+            lines = [normalize_line(line) for line in text.splitlines() if line.strip()]
+            if not lines:
+                continue
+
+            counter_lines = [
+                line for line in lines
+                if (_boilerplate._PAGE_FURNITURE_RE.match(line)
+                    or _boilerplate._BARE_PAGE_FURNITURE_RE.match(line)
+                    or _boilerplate._PAGE_NUMBER_RE.match(line))
+            ]
+            known_furniture_seed = any(line in normalized_furniture for line in lines)
+            document_doi_seed = _columnaware_has_declared_document_doi_seed(
+                text, declared_document_doi,
+            )
+            # A full-width repeated running title can lack a page counter and
+            # use mixed case.  Its complete block must sit above the body, span
+            # both page edges, and contain no independent source evidence.
+            wide_top_header_seed = (
+                y1 <= height * 0.05
+                and x0 <= width * 0.10 and x1 >= width * 0.90
+                and not re.search(
+                    r"\b10\.\d{4,9}/\S+|\bdoi\s*:|\bISBN\b|https?://|\bwww\.",
+                    text, re.I,
+                )
+                and not parsing_common._has_biblio_signal(text)
+            )
+            if not (
+                counter_lines or known_furniture_seed
+                or document_doi_seed or wide_top_header_seed
+            ):
+                continue
+
+            # Counter values vary by page; every other nonempty line must match in
+            # its original order as part of the same complete block shape.
+            shape = tuple(line for line in lines if line not in counter_lines)
+            if not shape:
+                continue
+
+            residual = _boilerplate.strip_boilerplate(text, furniture_lines)
+            residual_lines = [line.strip() for line in residual.splitlines() if line.strip()]
+            if parsing_common._region_has_bibliography_entry(residual_lines):
+                continue
+            if document_doi_seed:
+                # The dedicated seed validator above has already required every
+                # DOI to match the declared manuscript DOI and rejected source,
+                # ISBN, and URL evidence in the whole block.
+                pass
+            elif re.search(
+                r"\b10\.\d{4,9}/\S+|\bdoi\s*:|\bISBN\b|https?://",
+                residual, re.I,
+            ):
+                continue
+
+            bounds = (
+                round(x0 / width, 3), round(y0 / height, 3),
+                round(x1 / width, 3), round(y1 / height, 3),
+            )
+            key = (bounds, shape)
+            groups.setdefault(key, {}).setdefault(page_index, []).append(block_index)
+
+    proven = [set() for _page in page_blocks]
+    for occurrences in groups.values():
+        if len(occurrences) < 3:
+            continue
+        for page_index, block_indexes in occurrences.items():
+            proven[page_index].update(block_indexes)
+    return proven
+
+
+def _columnaware_bibliography_candidate(
+    path: str, *, declared_document_doi: str | None = None,
+) -> tuple[str, bool] | None:
+    """Return column-ordered bibliography-page text and a three-column proof.
+
+    The proof is deliberately geometric; the caller still requires at least five
+    parsed entries before it can bypass the legacy count-improvement guard.
     """
     try:
         import pymupdf as fitz
@@ -681,29 +1143,241 @@ def columnaware_bibliography_text(path: str) -> str | None:
         read_blocks = (page_blocks_reader(doc) if page_blocks_reader is not None
                        else (lambda page: page.get_text("blocks")))
 
+        pages = [doc[pno] for pno in range(doc.page_count)]
+        page_blocks = [
+            [b for b in read_blocks(page) if (b[4] or "").strip()]
+            for page in pages
+        ]
+        try:
+            from core.parse import boilerplate as _boilerplate
+        except ImportError:  # pragma: no cover - direct-execution import path
+            import boilerplate as _boilerplate
         # Shared multilingual heading detection (tolerates a leading glyph like
         # "■References", ACS).
         header_re = parser_text.bibliography_heading_re()
         start = None
+        start_blocks = None
+        heading_block_index = None
+        heading_match = None
         for pno in range(doc.page_count):
-            if header_re.search(doc[pno].get_text("text")):
-                start = pno
+            page = pages[pno]
+            if not header_re.search(page.get_text("text")):
+                continue
+            blocks = page_blocks[pno]
+            for block_index, block in enumerate(blocks):
+                match = header_re.search(str(block[4] or ""))
+                if match:
+                    start = pno
+                    start_blocks = blocks
+                    heading_block_index = block_index
+                    heading_match = match
+                    break
+            if start is not None:
                 break
         if start is None:
             return None
+        # The broad all-caps running-head detector is only decisive within the
+        # pages containing the bibliography.  Whole-document use could promote
+        # a repeated body label and erase a one-off source block at the margin.
+        bibliography_page_text = "\n".join(
+            str(block[4])
+            for blocks in page_blocks[start:]
+            for block in blocks
+        )
+        all_page_text = "\n".join(
+            str(block[4]) for blocks in page_blocks for block in blocks
+        )
+        furniture_lines = (
+            _boilerplate.running_head_lines(bibliography_page_text)
+            | _boilerplate.boilerplate_lines(all_page_text)
+        )
+        repeated_margin_furniture = _columnaware_repeated_margin_furniture_blocks(
+            page_blocks, pages, furniture_lines, declared_document_doi,
+        )
         parts = []
+        has_three_column_bibliography = False
         for pno in range(start, doc.page_count):
             page = doc[pno]
-            blocks = [b for b in read_blocks(page) if (b[4] or "").strip()]
+            blocks = start_blocks if pno == start else page_blocks[pno]
             if not blocks:
                 continue
-            mid = page.rect.width / 2.0
-            left = sorted((b for b in blocks if b[0] < mid), key=lambda b: b[1])
-            right = sorted((b for b in blocks if b[0] >= mid), key=lambda b: b[1])
-            parts.append("\n".join(b[4] for b in left + right))
+            heading_y = (
+                float(blocks[heading_block_index][1])
+                if pno == start and heading_block_index is not None else None
+            )
+            bands = _columnaware_page_bands(
+                blocks, float(page.rect.width),
+                minimum_bottom_y=heading_y,
+            )
+            if bands is None:
+                return None
+
+            if pno == start:
+                # This route is useful only when the heading sits in a detected
+                # multi-column page.  Locate its exact block, then start there in
+                # physical column order.  Later-column prefixes are classified
+                # separately because they may contain references or back matter.
+                if len(bands) < 2 or heading_block_index is None or heading_match is None:
+                    return None
+                heading_block = blocks[heading_block_index]
+                if heading_y is None:
+                    return None
+                heading_band = _columnaware_block_band(
+                    heading_block, bands, float(page.rect.width),
+                )
+                if heading_band is None:
+                    return None
+                used_bands = set()
+                assigned_blocks = {
+                    block_index
+                    for block_index, block in enumerate(blocks)
+                    if _columnaware_block_band(
+                        block, bands, float(page.rect.width),
+                    ) is not None
+                }
+                for band_index in range(heading_band, len(bands)):
+                    current = []
+                    for block_index, block in enumerate(blocks):
+                        block_band = _columnaware_block_band(
+                            block, bands, float(page.rect.width),
+                        )
+                        if block_band != band_index:
+                            continue
+                        if band_index == heading_band:
+                            if block_index == heading_block_index:
+                                block_text = str(block[4] or "")[heading_match.start():]
+                            elif float(block[1]) < float(heading_block[1]):
+                                continue
+                            else:
+                                block_text = str(block[4] or "")
+                        else:
+                            block_text = str(block[4] or "")
+                        if block_text.strip():
+                            current.append((float(block[1]), float(block[0]), block_text))
+                    if band_index > heading_band:
+                        band_blocks = [
+                            block for block in blocks
+                            if _columnaware_block_band(
+                                block, bands, float(page.rect.width),
+                            ) == band_index
+                        ]
+                        prefix_blocks = [
+                            block for block in band_blocks
+                            if float(block[1]) < heading_y
+                        ]
+                        if prefix_blocks:
+                            suffix_blocks = [
+                                block for block in band_blocks
+                                if float(block[1]) >= heading_y
+                            ]
+                            decision = _columnaware_later_band_prefix_decision(
+                                prefix_blocks,
+                                suffix_blocks,
+                                parts,
+                                heading_y,
+                                bands,
+                                band_index,
+                                float(page.rect.width),
+                                declared_document_doi,
+                            )
+                            if decision == "trim_endmatter_prefix":
+                                current = [
+                                    (float(block[1]), float(block[0]), str(block[4] or ""))
+                                    for block in suffix_blocks
+                                ]
+                            elif decision not in (
+                                "preserve_source_prefix", "no_prefix",
+                            ):
+                                return None
+                    current.sort(key=lambda item: (item[0], item[1]))
+                    if current:
+                        used_bands.add(band_index)
+                        parts.extend(text for _y0, _x0, text in current)
+                has_three_column_bibliography = len(used_bands) >= 3
+                for block_index, block in enumerate(blocks):
+                    if block_index in assigned_blocks:
+                        continue
+                    start_band = _columnaware_start_band(
+                        block, bands, float(page.rect.width),
+                    )
+                    if (
+                        float(block[3]) < float(heading_block[1])
+                        and (start_band is None or start_band <= heading_band)
+                    ):
+                        continue
+                    if (_columnaware_margin_block_is_recognized_furniture(
+                            block, page, furniture_lines,
+                        ) or block_index in repeated_margin_furniture[pno]):
+                        continue
+                    if _columnaware_has_bibliography_end(parts):
+                        parts.append(str(block[4]))
+                        continue
+                    if _columnaware_block_is_at_page_margin(block, page):
+                        # Location alone cannot prove that an unrecognized line is
+                        # disposable furniture or safely assign it to a column.
+                        return None
+                    return None
+            elif bands:
+                # Each page can change its column count or begin with only a
+                # partial final column.  Use all qualified bands on this page;
+                # blocks crossing a gutter must not disappear from an active
+                # bibliography region.
+                used_bands = set()
+                assigned_blocks = set()
+                for band_index in range(len(bands)):
+                    current = []
+                    for block_index, block in enumerate(blocks):
+                        block_band = _columnaware_block_band(
+                            block, bands, float(page.rect.width),
+                        )
+                        if block_band is not None:
+                            assigned_blocks.add(block_index)
+                        if block_band == band_index:
+                            current.append((float(block[1]), float(block[0]), str(block[4])))
+                    current.sort(key=lambda item: (item[0], item[1]))
+                    if current:
+                        used_bands.add(band_index)
+                        parts.extend(text for _y0, _x0, text in current)
+                if len(used_bands) >= 3:
+                    has_three_column_bibliography = True
+                for block_index, block in enumerate(blocks):
+                    if block_index in assigned_blocks:
+                        continue
+                    if (_columnaware_margin_block_is_recognized_furniture(
+                            block, page, furniture_lines,
+                        ) or block_index in repeated_margin_furniture[pno]):
+                        continue
+                    if _columnaware_has_bibliography_end(parts):
+                        parts.append(str(block[4]))
+                        continue
+                    if _columnaware_block_is_at_page_margin(block, page):
+                        # Location alone cannot prove that an unrecognized line is
+                        # disposable furniture or safely assign it to a column.
+                        return None
+                    return None
+            else:
+                # A later single-column page needs no reordering.  Keep its
+                # extracted blocks in source order for the existing bibliography
+                # end-boundary logic in the parser.
+                parts.extend(str(block[4]) for block in blocks)
+            if _columnaware_has_bibliography_end(parts):
+                break
     finally:
         doc.close()
-    return "\n".join(parts) or None
+    if not parts:
+        return None
+    return "\n".join(parts), has_three_column_bibliography
+
+
+def columnaware_bibliography_text(path: str) -> str | None:
+    """Return re-extracted bibliography-page text in physical column order.
+
+    The public text-only helper remains available to existing callers.  Its
+    private companion also returns whether the bibliography region itself passed
+    an unambiguous three-column geometry check for the Parse adoption guard.
+    """
+    candidate = _columnaware_bibliography_candidate(path)
+    return candidate[0] if candidate is not None else None
 
 
 def _pdf_links_enabled() -> bool:
@@ -1080,7 +1754,91 @@ def _tag_pymupdf_page_layout_interruptions(text: str, meta: dict) -> str:
     return "\f".join(pages)
 
 
+def _relocate_pymupdf_preheading_blocks(text: str, meta: dict) -> str:
+    """Move exactly traceable pre-heading blocks out of the bibliography.
+
+    PDF stream order can emit a physically higher column after reference text.
+    Geometry proves its position before an isolated bibliography heading. Each
+    moved block and the heading must occur exactly once in the selected stream;
+    ambiguous geometry or spelling leaves that source text untouched.
+    """
+    if not isinstance(meta, dict) or meta.get("pdf_method") != "pymupdf":
+        return text
+    path = meta.get("pdf_path")
+    flags = meta.get("pdf_structure_flags")
+    if not path or (flags is not None and not isinstance(flags, list)):
+        return text
+    try:
+        import pymupdf as fitz
+        doc = fitz.open(path)
+    except (ImportError, OSError, RuntimeError):
+        return text
+    pages = text.split("\f")
+    moved = False
+    try:
+        if len(doc) != len(pages):
+            return text
+        heading_re = parser_text.bibliography_heading_re()
+        for number, selected in enumerate(pages):
+            blocks = [
+                block for block in doc[number].get_text("blocks")
+                if len(block) >= 5 and isinstance(block[4], str) and block[4].strip()
+            ]
+            headings = [block for block in blocks if heading_re.fullmatch(block[4].strip())]
+            if len(headings) != 1:
+                continue
+            heading = headings[0]
+            heading_text = heading[4]
+            if selected.count(heading_text) != 1:
+                continue
+            heading_start = selected.index(heading_text)
+            heading_bbox = tuple(float(value) for value in heading[:4])
+            if not all(math.isfinite(value) for value in heading_bbox):
+                continue
+            relocations = []
+            for block in blocks:
+                bbox = tuple(float(value) for value in block[:4])
+                if not (
+                    all(math.isfinite(value) for value in bbox)
+                    and bbox[2] > bbox[0] and bbox[3] > bbox[1]
+                    and bbox[3] <= heading_bbox[1]
+                    and selected.count(block[4]) == 1
+                ):
+                    continue
+                start = selected.index(block[4])
+                if start >= heading_start + len(heading_text):
+                    relocations.append((start, start + len(block[4]), block[4]))
+            relocations.sort()
+            if not relocations or any(
+                before[1] > after[0]
+                for before, after in zip(relocations, relocations[1:])
+            ):
+                continue
+            corrected = selected
+            for start, end, _block_text in reversed(relocations):
+                corrected = corrected[:start] + corrected[end:]
+            insert_at = corrected.index(heading_text)
+            corrected = (
+                corrected[:insert_at]
+                + "".join(row[2] for row in relocations)
+                + corrected[insert_at:]
+            )
+            pages[number] = corrected
+            moved = True
+    except (AttributeError, TypeError, ValueError, OSError, RuntimeError):
+        return text
+    finally:
+        doc.close()
+    if moved:
+        flag = "bibliography_preheading_block_relocated"
+        flags = meta.setdefault("pdf_structure_flags", [])
+        if flag not in flags:
+            flags.append(flag)
+    return "\f".join(pages)
+
+
 def postprocess(text: str, meta: dict) -> str:
+    text = _relocate_pymupdf_preheading_blocks(text, meta)
     # The apparatus, where there is one: lifted below, and consulted by the conversion
     # further down for the one shape only the document itself can settle.
     notes = None
@@ -1121,7 +1879,9 @@ def postprocess(text: str, meta: dict) -> str:
         text = _MID_SENTENCE_PAGE_BREAK.sub("\n", text)
         text = text.replace("\f", "")
     text = _strip_soft_hyphens(text)
-    body, cut_idx, biblio_lines = _split_body_bibliography(text)
+    body, cut_idx, biblio_lines = _split_body_bibliography(
+        text, allow_headerless=not bool(notes),
+    )
     body = _dehyphenate(body)
     body = unicodedata.normalize("NFC", body)
     body = _normalize_ligatures(body)

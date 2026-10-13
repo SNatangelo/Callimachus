@@ -343,6 +343,13 @@ def storage_root(run_dir: str | None = None, environ: dict[str, str] | None = No
     override = (env.get(ENV_STATE_DIR) or "").strip()
     if override:
         return os.path.join(os.path.abspath(override), STORE_SUBDIR)
+    if not run_dir:
+        # In frozen builds __file__ points into the read-only bundle. Keep
+        # global storage alongside the user's writable application data.
+        from core.app import runtime_paths
+
+        if runtime_paths.is_frozen():
+            return os.path.join(str(runtime_paths.user_data_root()), "storage")
     return os.path.join(_repo_root_from_run(run_dir), "storage")
 
 

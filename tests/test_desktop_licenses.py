@@ -247,6 +247,50 @@ def test_windows_named_folder_does_not_exempt_a_bundled_dll(monkeypatch, tmp_pat
         NOTICES.add_native_notices(notices, tmp_path / "Analysis-00.toc")
 
 
+def test_native_windows_python_build_binaries_are_scoped(monkeypatch, tmp_path):
+    python_root = tmp_path / "Python313"
+    native_build = python_root / "PCbuild" / "amd64"
+    native_build.mkdir(parents=True)
+    monkeypatch.setattr(NOTICES.sys, "platform", "win32")
+
+    assert NOTICES._is_cpython_binary(native_build / "_ssl.pyd", python_root)
+    assert NOTICES._windows_python_component(native_build / "libcrypto-3.dll", python_root) == "OpenSSL"
+    assert not NOTICES._is_cpython_binary(
+        python_root / "PCbuild" / "amd64-copy" / "_ssl.pyd", python_root,
+    )
+    assert NOTICES._windows_python_component(
+        python_root / "PCbuild" / "amd64-copy" / "libcrypto-3.dll", python_root,
+    ) is None
+    assert not NOTICES._is_cpython_binary(
+        tmp_path / "outside" / "PCbuild" / "amd64" / "_ssl.pyd", python_root,
+    )
+    assert NOTICES._windows_python_component(
+        tmp_path / "outside" / "PCbuild" / "amd64" / "libcrypto-3.dll", python_root,
+    ) is None
+    assert NOTICES._windows_python_component(native_build / "custom.dll", python_root) is None
+
+    monkeypatch.setattr(NOTICES.sys, "platform", "linux")
+    assert not NOTICES._is_cpython_binary(native_build / "_ssl.pyd", python_root)
+    assert NOTICES._windows_python_component(native_build / "libcrypto-3.dll", python_root) is None
+
+
+def test_unknown_native_windows_python_build_dll_is_rejected(monkeypatch, tmp_path):
+    python_root = tmp_path / "Python313"
+    source = python_root / "PCbuild" / "amd64" / "custom.dll"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"unknown native binary")
+    notices = tmp_path / "notices"
+    notices.mkdir()
+    (notices / "index.json").write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(NOTICES.sys, "platform", "win32")
+    monkeypatch.setattr(NOTICES.sys, "base_prefix", str(python_root))
+    monkeypatch.setattr(NOTICES, "_python_license", lambda: (b"PYTHON SOFTWARE FOUNDATION LICENSE", "test"))
+    monkeypatch.setattr(NOTICES, "_bundled_binaries", lambda _toc: [(source.name, source)])
+
+    with pytest.raises(RuntimeError, match="unidentified bundled native binary"):
+        NOTICES.add_native_notices(notices, tmp_path / "Analysis-00.toc")
+
+
 def test_external_windows_runtime_is_not_licensed_as_bundled_code(monkeypatch, tmp_path):
     python_root = tmp_path / "python"
     python_root.mkdir()
@@ -291,11 +335,13 @@ def test_external_pyside_runtime_copy_is_omitted_from_native_notices(monkeypatch
     assert [item["name"] for item in inventory] == ["CPython"]
 
 
-def test_windows_python_installer_libraries_get_separate_notices(monkeypatch, tmp_path):
+@pytest.mark.parametrize("relative_dir", ["DLLs", "PCbuild/amd64"])
+def test_windows_python_installer_libraries_get_separate_notices(monkeypatch, tmp_path, relative_dir):
     python_root = tmp_path / "Python313"
-    dlls = python_root / "DLLs"
+    dlls = python_root / Path(relative_dir)
     dlls.mkdir(parents=True)
     monkeypatch.setattr(NOTICES.sys, "platform", "win32")
+    assert NOTICES._is_cpython_binary(dlls / "_ssl.pyd", python_root)
     assert NOTICES._windows_python_component(dlls / "libcrypto-3.dll", python_root) == "OpenSSL"
     assert NOTICES._windows_python_component(dlls / "libssl-3.dll", python_root) == "OpenSSL"
     assert NOTICES._windows_python_component(dlls / "libffi-8.dll", python_root) == "libffi"
@@ -398,6 +444,24 @@ def test_pyinstaller_analysis_binary_inventory_is_not_empty(tmp_path):
         encoding="utf-8",
     )
     assert NOTICES._bundled_binaries(analysis) == [("native.so", source.resolve())]
+
+
+@pytest.mark.parametrize("version", ["6.11.2", "6.12.0"])
+def test_qt_documents_use_pinned_series_and_reject_wrong_version(monkeypatch, version):
+    requested = []
+    body = f"<h1>Qt {version}</h1>".encode()
+
+    def fetch(url, **_kwargs):
+        requested.append(url)
+        return io.BytesIO(body)
+
+    monkeypatch.setattr(NOTICES.urllib.request, "urlopen", fetch)
+    if version == NOTICES.QT_VERSION:
+        assert NOTICES._fetch_qt_document("licenses-used-in-qt.html") == body
+    else:
+        with pytest.raises(RuntimeError, match="not for 6.11.2"):
+            NOTICES._fetch_qt_document("licenses-used-in-qt.html")
+    assert requested == ["https://doc.qt.io/qt-6.11/licenses-used-in-qt.html"]
 
 
 def test_qt_attributions_include_component_license_pages(monkeypatch, tmp_path):

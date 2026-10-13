@@ -1,0 +1,78 @@
+{
+  "version": "2.0.6",
+  "reason": "Existing PyYAML>=5.1.* metadata is rejected by current pip; exact already-used package retained without metadata edits",
+  "files": [
+    {
+      "file": "omegaconf\\base.py",
+      "sha256": "160522764c7fc416db75fd3624d5b4fbb9bca7fc7f72a7e81522e27222c71fbf"
+    },
+    {
+      "file": "omegaconf\\basecontainer.py",
+      "sha256": "71b64cde768c45b0cd3f4ad71364aa710b462d12b0e83277c4fbd295813d3ecd"
+    },
+    {
+      "file": "omegaconf\\dictconfig.py",
+      "sha256": "c187404ddd4626ef768a6a9d54d6688b4f92df748ece0d2e038ceb096ce5d71e"
+    },
+    {
+      "file": "omegaconf\\errors.py",
+      "sha256": "c66d40eabc71428b22ffeba214ec55b293c198dfdd9458c61a39d0031d54d344"
+    },
+    {
+      "file": "omegaconf\\listconfig.py",
+      "sha256": "21312df652d74e87d7275a599d28e6a61aff6dc9556dda3a5ccc0cdb54680d28"
+    },
+    {
+      "file": "omegaconf\\nodes.py",
+      "sha256": "5eba25539528a19024fe0e7283a25b36ba1423ee3706d30ef44181b9d8c92111"
+    },
+    {
+      "file": "omegaconf\\omegaconf.py",
+      "sha256": "0cd2f5ed996d34e4976dda97bace2ffb3ae543ef912b8f1715105e5c1cfe58b9"
+    },
+    {
+      "file": "omegaconf\\py.typed",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "omegaconf\\version.py",
+      "sha256": "1d07f44bace439cbd28db50de0fe3503ea328788f9b2d7917de9490fe8f2c2a0"
+    },
+    {
+      "file": "omegaconf\\_utils.py",
+      "sha256": "ce58f6b584a5a2fb39f26bc5a69ce7e7fba994bb67c2cbbe4b4723d5cba4c0d9"
+    },
+    {
+      "file": "omegaconf\\__init__.py",
+      "sha256": "55a7082f77133d64256a9e283d130243f41fd0e9fcb35ba6ae5138af1dee8ef6"
+    },
+    {
+      "file": "omegaconf-2.0.6.dist-info\\INSTALLER",
+      "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9"
+    },
+    {
+      "file": "omegaconf-2.0.6.dist-info\\LICENSE",
+      "sha256": "b31375ed5d5cbe7ec2d0c4c14df8afa7a8e5501bbe25f70b6cbc461685f4b91a"
+    },
+    {
+      "file": "omegaconf-2.0.6.dist-info\\METADATA",
+      "sha256": "2d2a45a8c9ccc582ba28b062efe916c24266f8f602329ee4b59a19a18cc6983a"
+    },
+    {
+      "file": "omegaconf-2.0.6.dist-info\\RECORD",
+      "sha256": "95513fad2abfcf64f69af0df5e47b69921206132614dcf55503f123998afc8ce"
+    },
+    {
+      "file": "omegaconf-2.0.6.dist-info\\REQUESTED",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "file": "omegaconf-2.0.6.dist-info\\top_level.txt",
+      "sha256": "f062d8459fe9afa9fa0b3175e4712a2b7e0d8a473874042a718ecfc41624db28"
+    },
+    {
+      "file": "omegaconf-2.0.6.dist-info\\WHEEL",
+      "sha256": "11546323af45e6a5639bf620a9c4d73e74c0bf705f494af4595007b923f75e8a"
+    }
+  ]
+}

@@ -1,0 +1,467 @@
+[
+  {
+    "path": "PCbuild/amd64/_asyncio.lib",
+    "bytes": 1750,
+    "sha256": "cfd7d93cfb123c4bd798e8dbb01ac4929ef6473ac42099f830d00607b4847e34"
+  },
+  {
+    "path": "PCbuild/amd64/_asyncio.pyd",
+    "bytes": 60928,
+    "sha256": "1f5f7b2f7cdca0aeb175efca9568f9fc3a764aa247e78d0a93e5334274a781b1"
+  },
+  {
+    "path": "PCbuild/amd64/_bz2.lib",
+    "bytes": 1682,
+    "sha256": "162f41c93341a0e77fe80ad4b12a07027364718f950052317598f09d4927d72a"
+  },
+  {
+    "path": "PCbuild/amd64/_bz2.pyd",
+    "bytes": 78848,
+    "sha256": "c470717aa44049e5f5c2975594fb2efcdd7c4a3bca70aad3552eb2a7451c01bf"
+  },
+  {
+    "path": "PCbuild/amd64/_ctypes_test.lib",
+    "bytes": 30048,
+    "sha256": "44512fc42a7ffb89b370d26cebc5d922fc931a008b5ae0dcf21016da7b536112"
+  },
+  {
+    "path": "PCbuild/amd64/_ctypes_test.pyd",
+    "bytes": 24576,
+    "sha256": "3f094f4c692ad3a53992e74046e39328affb67f198a82ee998552f67108f8647"
+  },
+  {
+    "path": "PCbuild/amd64/_ctypes.lib",
+    "bytes": 1732,
+    "sha256": "3bd5203cf5a01d818dc23ed478e38f7c53140ce048c09962e024a1e6a14e9be4"
+  },
+  {
+    "path": "PCbuild/amd64/_ctypes.pyd",
+    "bytes": 130048,
+    "sha256": "2a95dc9bfacb6611842eba953966da9a10421216502010bd990f8dd7d3357a20"
+  },
+  {
+    "path": "PCbuild/amd64/_decimal.lib",
+    "bytes": 47148,
+    "sha256": "71fe910fb50f5248613e769ea142c358b937d9224b9f5ddc50b0cc1d38b8ada0"
+  },
+  {
+    "path": "PCbuild/amd64/_decimal.pyd",
+    "bytes": 338944,
+    "sha256": "c40e9f5646270add4e548811b2654e655aaa463739af8cf23459d72d14ebc941"
+  },
+  {
+    "path": "PCbuild/amd64/_elementtree.lib",
+    "bytes": 1896,
+    "sha256": "7d8e21fcd3a727525c4b55d3d3feb7784df159b9bfbab4680689dec6b953735b"
+  },
+  {
+    "path": "PCbuild/amd64/_elementtree.pyd",
+    "bytes": 130560,
+    "sha256": "6086093cefe90c490c7797e10957087ad716bac5d2e2f1851476dcf05db731a3"
+  },
+  {
+    "path": "PCbuild/amd64/_freeze_module.exe",
+    "bytes": 4794368,
+    "sha256": "a2e63a3ca55cace420b14d56de7125cb258a6d8f4d6e617be2e73858f7c77ce9"
+  },
+  {
+    "path": "PCbuild/amd64/_hashlib.lib",
+    "bytes": 1750,
+    "sha256": "482816163f7aaabfc7f2c551d6e1dd428066aaf40895f035405d25d977d10cec"
+  },
+  {
+    "path": "PCbuild/amd64/_hashlib.pyd",
+    "bytes": 51200,
+    "sha256": "fe33bf9d7310f55f250b2e3fca30ba029f06535cb66d7237a980a8974ea54036"
+  },
+  {
+    "path": "PCbuild/amd64/_lzma.lib",
+    "bytes": 1698,
+    "sha256": "299229fa2c10001f47df77974100e2df2db7be47813bb771dc6684efd2ebe303"
+  },
+  {
+    "path": "PCbuild/amd64/_lzma.pyd",
+    "bytes": 156672,
+    "sha256": "3673f089ac1a3f91218468c89335fae0d13b271e1468c1c5ff6037bba291e6e0"
+  },
+  {
+    "path": "PCbuild/amd64/_multiprocessing.lib",
+    "bytes": 1968,
+    "sha256": "b5054c5ab58dfaf5e9352405e0057e14d49f55446e05a8601f8bffa0ffc943a8"
+  },
+  {
+    "path": "PCbuild/amd64/_multiprocessing.pyd",
+    "bytes": 23040,
+    "sha256": "99f425bde5cdecd727157ffad247a1f1b231c7c33fa5faed9f8e76b5a9c9e330"
+  },
+  {
+    "path": "PCbuild/amd64/_overlapped.lib",
+    "bytes": 1800,
+    "sha256": "ca91c4b61f13b399063fc87986787eb49a1cd7eb4a8466a23a894b27bcc152e1"
+  },
+  {
+    "path": "PCbuild/amd64/_overlapped.pyd",
+    "bytes": 43520,
+    "sha256": "15e1953a12db5a841923b089b92965f7b3adc03a0ae881391f045724dba09ade"
+  },
+  {
+    "path": "PCbuild/amd64/_queue.lib",
+    "bytes": 1716,
+    "sha256": "72d2772a869883256ffe7a727c3afbf04edf54289a65fde4ac97acbdd3759e3e"
+  },
+  {
+    "path": "PCbuild/amd64/_queue.pyd",
+    "bytes": 20992,
+    "sha256": "0e901f759572dc84da422dcdaf0296f8382f7841ddbe40659631b1efb3fe05da"
+  },
+  {
+    "path": "PCbuild/amd64/_socket.lib",
+    "bytes": 1732,
+    "sha256": "2d62c92af4a81e99729dfb67a45061f58399617a6be0307975acb95b3c37e52b"
+  },
+  {
+    "path": "PCbuild/amd64/_socket.pyd",
+    "bytes": 73728,
+    "sha256": "086ecd6676b53d5570909f5b8dcf30a17003b295c53eb54020f4c962ede34d95"
+  },
+  {
+    "path": "PCbuild/amd64/_sqlite3.lib",
+    "bytes": 1750,
+    "sha256": "f5815ec263b1cf9e9f023b235ceab7b6a5e1e8cded7302554fa208e2b769a43a"
+  },
+  {
+    "path": "PCbuild/amd64/_sqlite3.pyd",
+    "bytes": 108544,
+    "sha256": "29edca77ee9cbc6646c4e9001eb5e84d98dbd2e3dfb82314a1b63a9d7b249b5e"
+  },
+  {
+    "path": "PCbuild/amd64/_ssl.lib",
+    "bytes": 1682,
+    "sha256": "557e01241a58ad5b0d2d3186cecbb874bda1ac9f149784ad8ecea60db0fae85e"
+  },
+  {
+    "path": "PCbuild/amd64/_ssl.pyd",
+    "bytes": 174080,
+    "sha256": "cddd6909de428fda94f93ff111c1ee1644acc876c898618470fc8c12777c510e"
+  },
+  {
+    "path": "PCbuild/amd64/_testbuffer.lib",
+    "bytes": 1800,
+    "sha256": "a1bbe42ff6607341af972f37f2dc8d026d94e908fe8bb483b74f0da697686a84"
+  },
+  {
+    "path": "PCbuild/amd64/_testbuffer.pyd",
+    "bytes": 43520,
+    "sha256": "b5e39b2613040f8e6478e410c64986ad769562f0787ae9f03ba5e148186a6070"
+  },
+  {
+    "path": "PCbuild/amd64/_testcapi.lib",
+    "bytes": 2018,
+    "sha256": "6dd88b2df8c2a357b806557c5f3711ff718e45fdd6177ae0d875ada60e42b896"
+  },
+  {
+    "path": "PCbuild/amd64/_testcapi.pyd",
+    "bytes": 276480,
+    "sha256": "07bc2b1d9cd135e42ce77a673433bb7d8cdd7f9deb844dfebb71f1916ad33203"
+  },
+  {
+    "path": "PCbuild/amd64/_testclinic_limited.lib",
+    "bytes": 2020,
+    "sha256": "128ee734d3fa95063232062d1480b1bedf450d8c89ecdc61171b76fa2ffe1360"
+  },
+  {
+    "path": "PCbuild/amd64/_testclinic_limited.pyd",
+    "bytes": 15360,
+    "sha256": "53a6553f6cff9e2120b5f47f0d075b47de55d7e6d7cf8ea744402f6d592931a4"
+  },
+  {
+    "path": "PCbuild/amd64/_testclinic.lib",
+    "bytes": 1800,
+    "sha256": "7ee06465ce2efd52021c13b0d6c30d105e53c4a5e396a12c35092a2abb4649a6"
+  },
+  {
+    "path": "PCbuild/amd64/_testclinic.pyd",
+    "bytes": 84992,
+    "sha256": "4ed2bd68d9d19155f7621c02845d661e47b8d750e716a67bf3c5c0bda19010a8"
+  },
+  {
+    "path": "PCbuild/amd64/_testconsole.lib",
+    "bytes": 1896,
+    "sha256": "a692f4606b6b049d0e84c969de6aef729a13064430ef71c66f12e1e745a321fa"
+  },
+  {
+    "path": "PCbuild/amd64/_testconsole.pyd",
+    "bytes": 15360,
+    "sha256": "06be4add53a212fed4a2d2184d62e2712cec3153f0faa0a192220c30f35f30e4"
+  },
+  {
+    "path": "PCbuild/amd64/_testembed.exe",
+    "bytes": 62464,
+    "sha256": "42c0f56f940d5f4a5714b3434675e5ee5d184ad5cdccf8bd79aa163912ce5b04"
+  },
+  {
+    "path": "PCbuild/amd64/_testembed.lib",
+    "bytes": 2374,
+    "sha256": "00533ff14496b5f85984585b94543e05e476c8118b498a98b62466d710b32153"
+  },
+  {
+    "path": "PCbuild/amd64/_testimportmultiple.lib",
+    "bytes": 2596,
+    "sha256": "b8e39cd492c79c2a3394bfacb48707e8f1b01144781690ddffd7dd905f7d7043"
+  },
+  {
+    "path": "PCbuild/amd64/_testimportmultiple.pyd",
+    "bytes": 13312,
+    "sha256": "cdb5bd15271a66a29ebf1472b49caf0130ed9d36270e96a10b5f1175d0f0ddc3"
+  },
+  {
+    "path": "PCbuild/amd64/_testinternalcapi.lib",
+    "bytes": 1984,
+    "sha256": "eeacb5081b69afca4d11d65472fb01e4f3500c6c19462b1439e03e881d4f2af6"
+  },
+  {
+    "path": "PCbuild/amd64/_testinternalcapi.pyd",
+    "bytes": 69632,
+    "sha256": "abd8850a48836f7632590dd4f2a07b481de944a925f8b52d55aa1d873d0ea01d"
+  },
+  {
+    "path": "PCbuild/amd64/_testlimitedcapi.lib",
+    "bytes": 1968,
+    "sha256": "9d2a5a6022b468fd84f6646a43184eb1920312273cf6c6836e06171d0a19c78a"
+  },
+  {
+    "path": "PCbuild/amd64/_testlimitedcapi.pyd",
+    "bytes": 138240,
+    "sha256": "0ccb5f446eec7c4aff010004b07c4acebc0e7f273bf6d93d59c3cc357a35d67c"
+  },
+  {
+    "path": "PCbuild/amd64/_testmultiphase.lib",
+    "bytes": 10984,
+    "sha256": "21f080a6092703f85542eb4fa9296f761f7e2ab7a3a91bc933fd87ae7ad1a0b1"
+  },
+  {
+    "path": "PCbuild/amd64/_testmultiphase.pyd",
+    "bytes": 27648,
+    "sha256": "a0bfa00e55238f84250fa4fbf1dc18bac581eeda46078b540426a24fe9d6d9f5"
+  },
+  {
+    "path": "PCbuild/amd64/_testsinglephase.lib",
+    "bytes": 4964,
+    "sha256": "9cde3cdea3aac21b753bc51ba832da0a8b8f1243c66e8c37a4b2aa83dc32c736"
+  },
+  {
+    "path": "PCbuild/amd64/_testsinglephase.pyd",
+    "bytes": 19968,
+    "sha256": "f8679157596272f3b7865a6046463be9025406b534b019a05d0cdbcb232f44dc"
+  },
+  {
+    "path": "PCbuild/amd64/_uuid.lib",
+    "bytes": 1698,
+    "sha256": "ac8514756ec75218871429249652e130163cd1666b3d0b75cfcb503ae0c86e99"
+  },
+  {
+    "path": "PCbuild/amd64/_uuid.pyd",
+    "bytes": 13312,
+    "sha256": "a796b3226115091fbe03a5a1dbd8b1d8015ba4ac621d2ead026b9f8cf0b6329c"
+  },
+  {
+    "path": "PCbuild/amd64/_wmi.lib",
+    "bytes": 1682,
+    "sha256": "de0a4413021eb22a7a6f2283b6c3e6789d5546383e05b1cf31ef0219b2f767f2"
+  },
+  {
+    "path": "PCbuild/amd64/_wmi.pyd",
+    "bytes": 25088,
+    "sha256": "323e5eb9b9f719b0d4d20e27418eb02ebf2fc6a427958782768b8ef4456f35af"
+  },
+  {
+    "path": "PCbuild/amd64/_zoneinfo.lib",
+    "bytes": 1766,
+    "sha256": "cb234135f7a26f87366f1d11ef946d0fb3c579620d82e08080eda6618735a2a7"
+  },
+  {
+    "path": "PCbuild/amd64/_zoneinfo.pyd",
+    "bytes": 36864,
+    "sha256": "6f7f02ee34a9778b9edb4a0391f2a452e2ae4238d3eda0ba458403239591ebaa"
+  },
+  {
+    "path": "PCbuild/amd64/concrt140.dll",
+    "bytes": 312360,
+    "sha256": "e02aefc7967e98c6372d68ad70405e9a78ebb899f385985ae9e263e10745f9fe"
+  },
+  {
+    "path": "PCbuild/amd64/libcrypto-3.dll",
+    "bytes": 4627968,
+    "sha256": "77408f2ec489427bebb29b22e68ada98aa4d4b14b1430c229ceb1e1c654c669e"
+  },
+  {
+    "path": "PCbuild/amd64/libffi-8.dll",
+    "bytes": 39696,
+    "sha256": "eff52743773eb550fcc6ce3efc37c85724502233b6b002a35496d828bd7b280a"
+  },
+  {
+    "path": "PCbuild/amd64/liblzma.lib",
+    "bytes": 7522962,
+    "sha256": "a88d06a7fb5b6945ac37d8284f8155195fc179ec7553e71c97ee5fcc03892174"
+  },
+  {
+    "path": "PCbuild/amd64/libssl-3.dll",
+    "bytes": 777728,
+    "sha256": "20cf49bd2388cbc3a5e0d4a3c1b18a74e7861febd2501682b9983147c5799173"
+  },
+  {
+    "path": "PCbuild/amd64/msvcp140_1.dll",
+    "bytes": 25536,
+    "sha256": "58c7208525b5dcc34ef0f6482c436dc594040f53f8bb923559bcef636419fc7c"
+  },
+  {
+    "path": "PCbuild/amd64/msvcp140_2.dll",
+    "bytes": 258080,
+    "sha256": "cd83ea129b429799f12197bf6cd8e218acb049ef54cfac94b729f544616bb168"
+  },
+  {
+    "path": "PCbuild/amd64/msvcp140_atomic_wait.dll",
+    "bytes": 40480,
+    "sha256": "2679492c2a9e6ce17a0cdd4bdb6cb332d8881d7ef99e2d78c9d95521999c386f"
+  },
+  {
+    "path": "PCbuild/amd64/msvcp140_codecvt_ids.dll",
+    "bytes": 21432,
+    "sha256": "3afe5011b521891a86bad6e5d5861585a66e9d3a2ebb834634f7ec40d354bb09"
+  },
+  {
+    "path": "PCbuild/amd64/msvcp140.dll",
+    "bytes": 564664,
+    "sha256": "fd96b594b1f418852893de4cb960f74b43d6905d9966c5532263ca619c9dafc7"
+  },
+  {
+    "path": "PCbuild/amd64/py.exe",
+    "bytes": 814592,
+    "sha256": "b6361fd29abec891d574e1f6dfbba86ae6ef57f1010066df59f54587b95f8b1d"
+  },
+  {
+    "path": "PCbuild/amd64/pyexpat.lib",
+    "bytes": 1732,
+    "sha256": "b16a9b3d1c51916b6bd46b3046c55f9c21a610b69ebb57d5f1649491d359d485"
+  },
+  {
+    "path": "PCbuild/amd64/pyexpat.pyd",
+    "bytes": 212480,
+    "sha256": "d25490d57f0848459303d02a722eedbda1157fe5591746b5f73118a73ddc7c39"
+  },
+  {
+    "path": "PCbuild/amd64/pyshellext.dll",
+    "bytes": 38912,
+    "sha256": "bc3a96b00f2a2c70e0dc785eee934b605476a67c330072469ec19ab7a6034667"
+  },
+  {
+    "path": "PCbuild/amd64/pyshellext.lib",
+    "bytes": 1570,
+    "sha256": "7fc747b6a56d3540057ac377d50c528f04b75abf42925519c88dee8a8e8bddab"
+  },
+  {
+    "path": "PCbuild/amd64/python.exe",
+    "bytes": 91136,
+    "sha256": "b14f09eb6319568adea935a9d860fd783d29123bfae476f3e7d00f3d3dbf8458"
+  },
+  {
+    "path": "PCbuild/amd64/python3.dll",
+    "bytes": 58368,
+    "sha256": "0db3519ddeb91f15cc974018ecdeb6376728e54d20ffdcae1a9cb0f12a36bbf9"
+  },
+  {
+    "path": "PCbuild/amd64/python3.lib",
+    "bytes": 194246,
+    "sha256": "77aea7b76f16eee5d7587d33d799ef95f394f32a39b4258625844227edb200c0"
+  },
+  {
+    "path": "PCbuild/amd64/python313.dll",
+    "bytes": 7199232,
+    "sha256": "0e40fe87c24826019ded717e50f0f2e976c56ef81657c4e94bd65b6b0dc9e851"
+  },
+  {
+    "path": "PCbuild/amd64/python313.lib",
+    "bytes": 369358,
+    "sha256": "0d6b72fc964f24ae59948dfdd8f42223efab529fc9685d326cae34fc517c26c0"
+  },
+  {
+    "path": "PCbuild/amd64/pythonw.exe",
+    "bytes": 89600,
+    "sha256": "7dfc065ba3869968eb7a961e01bf6b7c07e1eb06ce2d4e8631f4a7add3ea12b5"
+  },
+  {
+    "path": "PCbuild/amd64/pyw.exe",
+    "bytes": 812544,
+    "sha256": "c02bac590dc3c93063d5cb67762f4b72c1400626d6d8f3815f2d3b26de11d506"
+  },
+  {
+    "path": "PCbuild/amd64/select.lib",
+    "bytes": 1716,
+    "sha256": "253a7ef2db15837ace304a4b4bff1be2275bbba45482b6d5eb94b8e33409efcc"
+  },
+  {
+    "path": "PCbuild/amd64/select.pyd",
+    "bytes": 18944,
+    "sha256": "6b8a0fb2477026e319218dd7ff2420188cee49e6c3f4e02adb7f5b6dd9fa4b79"
+  },
+  {
+    "path": "PCbuild/amd64/sqlite3.dll",
+    "bytes": 1563136,
+    "sha256": "2c768d15985bb19f20d40932b959e30bb7516d89fec6c3a25bcfbe865e164723"
+  },
+  {
+    "path": "PCbuild/amd64/sqlite3.lib",
+    "bytes": 66348,
+    "sha256": "e9659a18ddac5890c8e25482aa882408487b0d6d9ff96844827e97bbc7509f07"
+  },
+  {
+    "path": "PCbuild/amd64/unicodedata.lib",
+    "bytes": 1800,
+    "sha256": "f3985c6aa7393c308dc464d3df80fb0b4c80057ea8c5a93d7a517dd0f9df7f1c"
+  },
+  {
+    "path": "PCbuild/amd64/unicodedata.pyd",
+    "bytes": 697344,
+    "sha256": "71e76b31030c6ebf84ca25187ce7db00f00f6f61783d3294722a13fb260dff55"
+  },
+  {
+    "path": "PCbuild/amd64/vcruntime140_1.dll",
+    "bytes": 39464,
+    "sha256": "63b9a905cfb0c822d403e2a511ffa4132b1433285530b3cc062f41e8e0a274ac"
+  },
+  {
+    "path": "PCbuild/amd64/vcruntime140.dll",
+    "bytes": 109608,
+    "sha256": "c4ae88c9eb48d63b23560f2e5babbdbf129e3787127688d5383415bbc7347b59"
+  },
+  {
+    "path": "PCbuild/amd64/venvlauncher.exe",
+    "bytes": 245760,
+    "sha256": "48a8aea3ec5b80a5eb5c9f8d49c14ae84961c892d9193cbb26914735c90c71f0"
+  },
+  {
+    "path": "PCbuild/amd64/venvwlauncher.exe",
+    "bytes": 242176,
+    "sha256": "1d7fcc92628ddb50179b074682e37b191af3e7ba9227ab85d356923a14f14de0"
+  },
+  {
+    "path": "PCbuild/amd64/winsound.lib",
+    "bytes": 1750,
+    "sha256": "5bbdf4fad7edef6e876e45327757c15a24a10834e9ce7e37b563b42367101d15"
+  },
+  {
+    "path": "PCbuild/amd64/winsound.pyd",
+    "bytes": 17408,
+    "sha256": "3a467c7cd21e23f199a751a319b9a9ab3c17074662d00b0388f50579b104fb95"
+  },
+  {
+    "path": "libs/python3.lib",
+    "bytes": 194246,
+    "sha256": "77aea7b76f16eee5d7587d33d799ef95f394f32a39b4258625844227edb200c0"
+  },
+  {
+    "path": "libs/python313.lib",
+    "bytes": 369358,
+    "sha256": "0d6b72fc964f24ae59948dfdd8f42223efab529fc9685d326cae34fc517c26c0"
+  }
+]

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from core.app.guided_fetch import build_source_inventory, source_payload
+from core.shared.filesystem_paths import io_path
 from .guided_fetch_viewmodel import GuidedFetchViewModel
 
 
@@ -45,18 +46,19 @@ def _preflight_source_file(path: str, tier: str) -> str:
     from core.parse import extract as parse_extract
 
     candidate = Path(path)
+    candidate_io = Path(io_path(candidate))
     suffix = candidate.suffix.lower()
     try:
-        parse_extract.probe_file(str(candidate))
+        parse_extract.probe_file(str(candidate_io))
     except (OSError, RuntimeError, ValueError) as exc:
         detail = str(exc).replace("\u2014", ":")
         raise ValueError(f"Cannot read {candidate.name}: {detail}") from exc
     try:
         if suffix in {".htm", ".html", ".xhtml"} and fetch_html.is_challenge_html(
-            candidate.read_bytes().decode("utf-8", errors="replace")
+            candidate_io.read_bytes().decode("utf-8", errors="replace")
         ):
             raise ValueError("the HTML contains a browser challenge or login page")
-        text, _format, details = parse_extract.extract_text(str(candidate))
+        text, _format, details = parse_extract.extract_text(str(candidate_io))
     except (OSError, RuntimeError, ValueError) as exc:
         if suffix == ".pdf" and tier == "fulltext":
             # A valid PDF with no extractable text can enter the existing OCR path.
@@ -1595,7 +1597,7 @@ def create_guided_fetch_window(
             self._selected_file_generation = None
             self._selected_file_ocr_pending = False
             self.file_label.setText("Drop one file here")
-            if not candidate.is_file():
+            if not Path(io_path(candidate)).is_file():
                 QtWidgets.QMessageBox.warning(self, "Invalid file", "Choose one existing file.")
                 return
             try:
@@ -2118,7 +2120,7 @@ def _read_preview(path: str | None) -> str:
     if path is None:
         return "No preview available."
     try:
-        with Path(path).open("r", encoding="utf-8", errors="replace") as source:
+        with Path(io_path(path)).open("r", encoding="utf-8", errors="replace") as source:
             return source.read(100_000)
     except (OSError, ValueError):
         return "Preview unavailable."

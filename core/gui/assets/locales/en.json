@@ -335,5 +335,10 @@
   "resume_latest_no_history": "No previous run is available to resume.",
   "resume_latest_unavailable": "The latest run is unavailable and cannot be resumed.",
   "resume_latest_active": "The latest run is already active and cannot be resumed.",
-  "resume_latest_completed": "The latest run is already complete and cannot be resumed."
+  "resume_latest_completed": "The latest run is already complete and cannot be resumed.",
+  "online_use_notice": "Start or Resume authorises online citation searches and sends claims and source passages to the selected AI providers.",
+  "online_use_details": "Services receive bibliographic queries and request metadata, including your IP and any configured contact email. Selected AI providers receive prompts; their terms and charges apply. Stop cancels further analysis work. Read Privacy before starting.",
+  "privacy_policy": "Privacy and AI",
+  "report_ai_content": "Report AI content",
+  "report_ai_content_tip": "Opens a public GitHub issue form. Nothing is sent automatically. Do not include keys or private documents."
 }

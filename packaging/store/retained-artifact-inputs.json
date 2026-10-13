@@ -1,0 +1,22 @@
+[
+  {
+    "file": "Callimachus.msix",
+    "bytes": 222698865,
+    "sha256": "b74b7155fcefa0dd675357b2fd371de038d1eb9c8b557bb925534d1871325312"
+  },
+  {
+    "file": "Microsoft.VCLibs.x64.14.00.Desktop.appx",
+    "bytes": 6757465,
+    "sha256": "077a3d1a5d0622bd3004dca85f5e192d6e98ec79b83d4aa06766759ea6c09c3d"
+  },
+  {
+    "file": "VC_CRT.Desktop.Appx.140.msi",
+    "bytes": 204800,
+    "sha256": "d94f2d9ac19fbb39ee2fb8ab0ef656fe657347b6cbc6d129218edf303b4364b9"
+  },
+  {
+    "file": "cab1.cab",
+    "bytes": 44937645,
+    "sha256": "0bd480f32e37eb2dc76d8555a65aa1664aedd46915d3d683f8dcde34eb380a7a"
+  }
+]

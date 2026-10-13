@@ -544,6 +544,9 @@ def create_desktop_window(
             form.addWidget(self.paper_drop)
             form.addWidget(QtWidgets.QLabel(text["mode"], config))
             modes = QtWidgets.QGridLayout()
+            self._analysis_modes_layout = modes
+            self._analysis_modes_container = config
+            self._analysis_mode_columns = 2
             self.mode_group = QtWidgets.QButtonGroup(self)
             self.mode_group.setExclusive(True)
             self.mode_buttons = {}
@@ -575,7 +578,9 @@ def create_desktop_window(
                 button.toggled.connect(self._refresh_llm_status)
                 severity.addWidget(button)
             form.addLayout(severity)
-            form.addWidget(QtWidgets.QLabel(text["llm_choices"], config))
+            llm_choices_label = QtWidgets.QLabel(text["llm_choices"], config)
+            llm_choices_label.setWordWrap(True)
+            form.addWidget(llm_choices_label)
             self.llm_choices = QtWidgets.QTableWidget(0, 3, config)
             self.llm_choices.setObjectName("llmChoices")
             self.llm_role_choices: dict[str, tuple[Any, Any]] = {}
@@ -710,6 +715,23 @@ def create_desktop_window(
                 QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
             left_scroll.setWidget(left_widget)
+            self._analysis_controls_scroll = left_scroll
+            self._analysis_checkbox_labels = (
+                (
+                    self.skip_parse_review,
+                    self.skip_parse_review.text().replace("\r\n", " ").replace("\r", " ").replace("\n", " "),
+                ),
+                (
+                    self.skip_manual_checks,
+                    self.skip_manual_checks.text().replace("\r\n", " ").replace("\r", " ").replace("\n", " "),
+                ),
+            )
+            self._analysis_checkbox_rewrap_pending = False
+            left_scroll.viewport().installEventFilter(self)
+            for checkbox, _full_text in self._analysis_checkbox_labels:
+                checkbox.installEventFilter(self)
+            for button in self.mode_buttons.values():
+                button.installEventFilter(self)
             left_scroll.setMinimumWidth(350)
             splitter.addWidget(left_scroll)
             right_widget = QtWidgets.QWidget(splitter)
@@ -964,6 +986,16 @@ def create_desktop_window(
             title = QtWidgets.QLabel(text["info_title"], tab)
             title.setObjectName("sectionTitle")
             layout.addWidget(title)
+            privacy_controls = QtWidgets.QHBoxLayout()
+            self.privacy_button = QtWidgets.QPushButton(text["privacy_policy"], tab)
+            self.privacy_button.clicked.connect(self._show_privacy_policy)
+            self.ai_report_button = QtWidgets.QPushButton(text["report_ai_content"], tab)
+            self.ai_report_button.setToolTip(text["report_ai_content_tip"])
+            self.ai_report_button.clicked.connect(self._report_ai_content)
+            privacy_controls.addWidget(self.privacy_button)
+            privacy_controls.addWidget(self.ai_report_button)
+            privacy_controls.addStretch()
+            layout.addLayout(privacy_controls)
             content = QtWidgets.QHBoxLayout()
             split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, tab)
             self.docs_outline = QtWidgets.QTreeWidget(tab)
@@ -1672,6 +1704,90 @@ def create_desktop_window(
                 self.history_actions_scroll.setMaximumHeight(
                     self.history_actions_widget.sizeHint().height() + 12
                 )
+            if hasattr(self, "_analysis_controls_scroll"):
+                self._schedule_analysis_checkbox_rewrap()
+
+        def _schedule_analysis_checkbox_rewrap(self):
+            if self._analysis_checkbox_rewrap_pending:
+                return
+            self._analysis_checkbox_rewrap_pending = True
+            QtCore.QTimer.singleShot(0, self._update_analysis_checkbox_wrapping)
+
+        def _update_analysis_checkbox_wrapping(self):
+            self._analysis_checkbox_rewrap_pending = False
+            scroll = getattr(self, "_analysis_controls_scroll", None)
+            if scroll is None or scroll.widget() is None or scroll.viewport().width() <= 0:
+                return
+            viewport = scroll.viewport()
+            content = scroll.widget()
+            modes = self._analysis_modes_layout
+            container = self._analysis_modes_container
+            if modes.geometry().width() > 0:
+                buttons = list(self.mode_buttons.values())
+                column_widths = [
+                    max(
+                        button.sizeHint().width()
+                        for index, button in enumerate(buttons)
+                        if index % 2 == column
+                    )
+                    for column in (0, 1)
+                ]
+                spacing = modes.horizontalSpacing()
+                if spacing < 0:
+                    spacing = modes.spacing()
+                margins = modes.contentsMargins()
+                two_column_width = (
+                    sum(column_widths) + spacing + margins.left() + margins.right()
+                )
+                container_x = container.mapTo(viewport, QtCore.QPoint(0, 0)).x()
+                content_x = container.mapTo(content, QtCore.QPoint(0, 0)).x()
+                container_trailing_space = max(
+                    0, content.width() - content_x - container.width()
+                )
+                grid_padding = max(0, container.width() - modes.geometry().width())
+                available_mode_width = (
+                    viewport.width()
+                    - container_x
+                    - container_trailing_space
+                    - grid_padding
+                )
+                columns = 1 if two_column_width > available_mode_width else 2
+                if columns != self._analysis_mode_columns:
+                    for index, button in enumerate(buttons):
+                        modes.removeWidget(button)
+                        modes.addWidget(button, index // columns, index % columns)
+                    self._analysis_mode_columns = columns
+            for checkbox, full_text in self._analysis_checkbox_labels:
+                checkbox_x = checkbox.mapTo(viewport, QtCore.QPoint(0, 0)).x()
+                content_x = checkbox.mapTo(content, QtCore.QPoint(0, 0)).x()
+                trailing_space = max(
+                    0, content.width() - content_x - checkbox.width()
+                )
+                style = checkbox.style()
+                reserved_width = style.pixelMetric(
+                    QtWidgets.QStyle.PixelMetric.PM_IndicatorWidth, None, checkbox
+                ) + style.pixelMetric(
+                    QtWidgets.QStyle.PixelMetric.PM_CheckBoxLabelSpacing, None, checkbox
+                )
+                text_width = max(
+                    1,
+                    viewport.width() - checkbox_x - trailing_space - reserved_width,
+                )
+                metrics = checkbox.fontMetrics()
+                lines = []
+                line = ""
+                for word in full_text.split():
+                    candidate = f"{line} {word}" if line else word
+                    if line and metrics.horizontalAdvance(candidate) > text_width:
+                        lines.append(line)
+                        line = word
+                    else:
+                        line = candidate
+                if line:
+                    lines.append(line)
+                wrapped_text = "\n".join(lines)
+                if checkbox.text() != wrapped_text:
+                    checkbox.setText(wrapped_text)
 
         def _style_combo_popup(self, combo):
             view = combo.view()
@@ -1731,6 +1847,25 @@ def create_desktop_window(
             self._apply_theme(self._dark)
 
         def eventFilter(self, watched, event):  # noqa: N802
+            analysis_scroll = getattr(self, "_analysis_controls_scroll", None)
+            if analysis_scroll is not None:
+                if (
+                    watched is analysis_scroll.viewport()
+                    and event.type() == QtCore.QEvent.Type.Resize
+                ) or (
+                    any(
+                        watched is widget
+                        for widget in (
+                            *(checkbox for checkbox, _text in self._analysis_checkbox_labels),
+                            *self.mode_buttons.values(),
+                        )
+                    )
+                    and event.type() in (
+                        QtCore.QEvent.Type.FontChange,
+                        QtCore.QEvent.Type.StyleChange,
+                    )
+                ):
+                    self._schedule_analysis_checkbox_rewrap()
             checkbox = getattr(self, "_llm_checkbox_cells", {}).get(watched)
             if checkbox is not None and event.type() in (
                 QtCore.QEvent.Type.MouseButtonPress,
@@ -4277,9 +4412,20 @@ def create_desktop_window(
             if isinstance(documents, str):
                 documents = {"README.md": documents}
             self._documents = {str(path): str(body) for path, body in dict(documents).items()}
+            visible_paths = {
+                "README.md",
+                "privacy-it.md" if self._language == "it" else "privacy.md",
+                "Third-party notices.md",
+            }
+            visible_paths.update(
+                path for path in self._documents
+                if re.fullmatch(r"\d{2}-[^/\\]+\.md", path)
+            )
             self.docs_outline.blockSignals(True)
             self.docs_outline.clear()
             for path, markdown in self._documents.items():
+                if path not in visible_paths:
+                    continue
                 title = next((line.lstrip("#").strip() for line in markdown.splitlines()
                               if line.startswith("# ")), Path(path).stem.replace("-", " "))
                 document = QtWidgets.QTreeWidgetItem([title])
@@ -4300,11 +4446,41 @@ def create_desktop_window(
             self.docs_outline.blockSignals(False)
             if self.docs_outline.topLevelItemCount():
                 self.docs_outline.setCurrentItem(self.docs_outline.topLevelItem(0))
+            if getattr(self, "_pending_privacy_document", False):
+                self._pending_privacy_document = False
+                self._select_privacy_document()
+
+        def _show_privacy_policy(self):
+            self._pending_privacy_document = True
+            self.navigation.setCurrentRow(5)
+            if self._documents:
+                self._pending_privacy_document = False
+                self._select_privacy_document()
+
+        def _select_privacy_document(self):
+            target = "privacy-it.md" if self._language == "it" else "privacy.md"
+            for index in range(self.docs_outline.topLevelItemCount()):
+                item = self.docs_outline.topLevelItem(index)
+                if item.data(0, QtCore.Qt.ItemDataRole.UserRole)[0] == target:
+                    self.docs_outline.setCurrentItem(item)
+                    return
+            self.docs_view.setPlainText(text["no_documentation"])
+
+        def _report_ai_content(self):
+            # Open a blank issue form. Never attach manuscript, logs or credentials.
+            url = QtCore.QUrl("https://github.com/SNatangelo/Callimachus/issues/new")
+            query = QtCore.QUrlQuery()
+            query.addQueryItem("title", "AI content concern")
+            url.setQuery(query)
+            QtGui.QDesktopServices.openUrl(url)
 
         def _navigate_documentation(self, item, _previous=None):
             if item is None:
                 return
             path, anchor = item.data(0, QtCore.Qt.ItemDataRole.UserRole) or ("", "")
+            self._display_documentation(path, anchor)
+
+        def _display_documentation(self, path, anchor=""):
             self._current_doc_path = str(path)
             markdown = self._documents.get(str(path), text["no_documentation"])
             self.docs_view.document().setDefaultStyleSheet(_documentation_css(dark=self._dark, font_size=self._font_size))
@@ -4422,11 +4598,23 @@ def create_desktop_window(
                 for index in range(self.docs_outline.topLevelItemCount()):
                     item = self.docs_outline.topLevelItem(index)
                     if item.data(0, QtCore.Qt.ItemDataRole.UserRole)[0] == target:
+                        current_item = self.docs_outline.currentItem()
+                        current_data = (
+                            current_item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+                            if current_item is not None else None
+                        )
+                        current_path = (current_data or ("", ""))[0]
+                        if current_path == target:
+                            self._display_documentation(target, anchor.replace("-", " "))
+                            return
                         self.docs_outline.setCurrentItem(item)
                         if anchor:
                             cursor = self.docs_view.document().find(anchor.replace("-", " "))
                             if not cursor.isNull(): self.docs_view.setTextCursor(cursor); self.docs_view.ensureCursorVisible()
                         return
+            if target in self._documents:
+                self.docs_outline.setCurrentItem(None)
+                self._display_documentation(target, anchor.replace("-", " "))
 
         def _render_cache(self):
             query = self.cache_search.text().casefold().strip()

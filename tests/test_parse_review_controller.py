@@ -1,6 +1,6 @@
+# tests/test_parse_review_controller.py
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
-
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from core.app.parse_review import ParseReviewController
-
 from core.infra.db import RunRepository
+
 
 def _paused_parse_run(tmp_path):
     repo = RunRepository.create(
@@ -40,6 +40,7 @@ def _paused_parse_run(tmp_path):
     repo.close()
     return target_hash
 
+
 def test_parse_review_controller_projects_readable_closed_choices(tmp_path):
     target_hash = _paused_parse_run(tmp_path)
     controller = ParseReviewController(str(tmp_path))
@@ -52,6 +53,7 @@ def test_parse_review_controller_projects_readable_closed_choices(tmp_path):
     assert tasks[0]["claim_text"] == "A concrete claim."
     assert tasks[0]["candidates"][0]["id"] == "r1"
     assert tasks[0]["candidates"][0]["label"] == "[1] Smith (2020). Source title."
+
 
 def test_parse_review_controller_admits_operator_choice_through_gate(tmp_path, monkeypatch):
     target_hash = _paused_parse_run(tmp_path)
@@ -84,6 +86,7 @@ def test_parse_review_controller_admits_operator_choice_through_gate(tmp_path, m
     with pytest.raises(ValueError, match="unavailable"):
         controller.submit_decision("missing", {"action": "keep_unresolved"})
     assert len(calls) == 1
+
 
 def test_skip_remaining_reviews_uses_stable_order_and_preserves_answered_tasks(tmp_path, monkeypatch):
     citation_hash = _paused_parse_run(tmp_path)
@@ -151,6 +154,7 @@ def test_skip_remaining_reviews_uses_stable_order_and_preserves_answered_tasks(t
         assert repo.get_task("review").task_payload["target_sha256"] == citation_hash
     finally:
         repo.close()
+
 
 def test_skip_review_answer_requires_nonempty_reason_and_current_hash(tmp_path):
     target_hash = _paused_parse_run(tmp_path)

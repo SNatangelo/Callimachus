@@ -48,6 +48,9 @@ RETRYABLE_SERVER_CODES = {502, 503, 504}
 ENV_HTTP_MEMO = "CITATION_VERIFIER_HTTP_MEMO"
 _response_memo: dict[tuple[str, str, bool], tuple[int, str | bytes]] = {}
 _memo_lock = threading.Lock()
+# The public Crossref REST pool allows only one outstanding request. Hold the
+# permit through response consumption and retries, including with contact data.
+_crossref_rest_lock = threading.Lock()
 _provider_failure_scope: ContextVar[dict | None] = ContextVar(
     "provider_failure_scope", default=None
 )
@@ -270,6 +273,22 @@ def _get_bytes_with_final_url(
 
 
 def _get_recorded(
+    url, accept, headers_extra, preserve_cooldown_after_429=False,
+    *, include_final_url=False, decode=True,
+):
+    permit = (
+        _crossref_rest_lock
+        if urllib.parse.urlsplit(url).hostname == "api.crossref.org"
+        else contextlib.nullcontext()
+    )
+    with permit:
+        return _get_recorded_admitted(
+            url, accept, headers_extra, preserve_cooldown_after_429,
+            include_final_url=include_final_url, decode=decode,
+        )
+
+
+def _get_recorded_admitted(
     url, accept, headers_extra, preserve_cooldown_after_429=False,
     *, include_final_url=False, decode=True,
 ):

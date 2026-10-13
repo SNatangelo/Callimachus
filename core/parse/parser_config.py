@@ -45,11 +45,20 @@ DEFAULT_SCHEMES = {
     "numeric": {"enabled": True},
 }
 
+DEFAULT_REFERENCE_READER_ORDER = [
+    "bluebook", "apa-journal", "vancouver-fields", "semicolon-journal", "dated-book", "generic-text",
+]
+DEFAULT_REFERENCE_READERS = {
+    name: {"enabled": True} for name in DEFAULT_REFERENCE_READER_ORDER
+}
+
 _TOP_LEVEL_KEYS = {
     "extractor_order",
     "extractors",
     "scheme_order",
     "schemes",
+    "reference_reader_order",
+    "reference_readers",
 }
 
 _FILE_CACHE: dict[str, object] | None = None
@@ -113,6 +122,8 @@ def _defaults() -> dict[str, object]:
         "extractors": deepcopy(DEFAULT_EXTRACTORS),
         "scheme_order": list(DEFAULT_SCHEME_ORDER),
         "schemes": deepcopy(DEFAULT_SCHEMES),
+        "reference_reader_order": list(DEFAULT_REFERENCE_READER_ORDER),
+        "reference_readers": deepcopy(DEFAULT_REFERENCE_READERS),
     }
 
 
@@ -143,6 +154,10 @@ def _merge_file_data(raw: dict[str, object]) -> dict[str, object]:
     scheme_order = _normalize_name_list(raw.get("scheme_order"), label="scheme_order")
     if scheme_order:
         merged["scheme_order"] = scheme_order
+
+    reader_order = _normalize_name_list(raw.get("reference_reader_order"), label="reference_reader_order")
+    if reader_order:
+        merged["reference_reader_order"] = reader_order
 
     extractors = raw.get("extractors")
     if isinstance(extractors, dict):
@@ -177,6 +192,22 @@ def _merge_file_data(raw: dict[str, object]) -> dict[str, object]:
             base.update(deepcopy(config))
     elif schemes is not None:
         _warn("schemes must be an object; ignoring invalid value")
+
+    readers = raw.get("reference_readers")
+    if isinstance(readers, dict):
+        merged_readers = merged["reference_readers"]
+        assert isinstance(merged_readers, dict)
+        for name, config in readers.items():
+            if not isinstance(name, str) or not isinstance(config, dict):
+                _warn("reference_readers entries must be reader-name -> object; skipping invalid entry")
+                continue
+            normalized = name.strip().lower()
+            if normalized:
+                base = merged_readers.setdefault(normalized, {})
+                assert isinstance(base, dict)
+                base.update(deepcopy(config))
+    elif readers is not None:
+        _warn("reference_readers must be an object; ignoring invalid value")
 
     return merged
 

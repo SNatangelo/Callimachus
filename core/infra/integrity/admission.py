@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.infra.db import ExecutionAssuranceRecord, RunRepository
+from core.shared.filesystem_paths import io_path, logical_path
 
 from .authority import AuthorityError, FileAuthority
 from .local_identity import local_process_identity
@@ -54,11 +55,12 @@ def _ensure_real_directory(path: str, *, create: bool) -> None:
 
 
 def _open_admitted_source(source_path: str) -> tuple[str, int, os.stat_result]:
-    requested = os.path.abspath(source_path)
-    realpath = os.path.realpath(requested)
+    requested_io = io_path(source_path)
+    requested = str(logical_path(requested_io, resolve=False))
+    realpath = str(logical_path(os.path.realpath(requested_io), resolve=False))
     requested_key = os.path.normcase(os.path.normpath(requested))
     realpath_key = os.path.normcase(os.path.normpath(realpath))
-    if realpath_key != requested_key or os.path.islink(requested):
+    if realpath_key != requested_key or os.path.islink(requested_io):
         raise AuthorityError("admitted source must not use symlinks")
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -66,7 +68,7 @@ def _open_admitted_source(source_path: str) -> tuple[str, int, os.stat_result]:
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
     try:
-        source = os.open(requested, flags)
+        source = os.open(requested_io, flags)
     except OSError as exc:
         raise AuthorityError("admitted source file is unavailable") from exc
     try:

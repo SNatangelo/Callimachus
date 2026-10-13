@@ -235,6 +235,43 @@ def _meta_identity(parser: "_HTML", values: dict | None = None) -> dict:
     return identity
 
 
+def _publisher_citation_metadata(html_text: str) -> dict[str, list[str]]:
+    """Read only native ``citation_*`` fields from an already-fetched HTML page.
+
+    Network access belongs to the resolver's audited HTTP layer. This private
+    extractor deliberately returns the repeated raw meta values so callers can
+    reject missing or ambiguous publisher assertions rather than guessing from
+    page prose or JSON-LD.
+    """
+    if not isinstance(html_text, str) or not html_text.strip():
+        return {}
+    if _challenge_marker(_visible_raw_html(html_text)):
+        return {}
+    try:
+        parser = _HTML()
+        parser.feed(html_text)
+        parser.close()
+    except (TypeError, ValueError):
+        return {}
+    fields = (
+        "citation_doi",
+        "citation_title",
+        "citation_author",
+        "citation_publication_date",
+        "citation_journal_title",
+        "citation_volume",
+        "citation_issue",
+        "citation_firstpage",
+        "citation_lastpage",
+        "citation_article_type",
+    )
+    return {
+        field: [str(value).strip() for value in parser.meta[field] if str(value).strip()]
+        for field in fields
+        if parser.meta.get(field)
+    }
+
+
 def html_meta_identity(path: str) -> dict:
     """Extract declared identity (doi/pmid/title/year/author) from an HTML file's
     <meta> tags and JSON-LD, without requiring an explicit abstract section.

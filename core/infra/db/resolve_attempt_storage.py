@@ -7,8 +7,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import math
+import re
 import sqlite3
+import urllib.parse
 from typing import Any
 
 
@@ -75,6 +79,19 @@ PROVIDER_OBJECT_FIELDS = (
     "trial_registration",
     "identity_search",
 )
+CROSSREF_NATIVE_WORK_PROOF_FIELD = "_crossref_native_work_proof"
+CROSSREF_NATIVE_WORK_PROOF_FIELDS = {
+    "version", "requested_doi", "request_url", "http_status",
+    "response_body", "response_sha256",
+}
+CROSSREF_NATIVE_ARTICLE_PROOF_FIELDS = CROSSREF_NATIVE_WORK_PROOF_FIELDS | {
+    "source_raw_sha256",
+}
+DATACITE_NATIVE_DOI_PROOF_FIELD = "_datacite_native_doi_proof"
+DATACITE_NATIVE_DOI_PROOF_FIELDS = {
+    "version", "requested_doi", "request_url", "http_status",
+    "response_body", "response_sha256",
+}
 
 PROVIDER_FIELDS = {
     "status",
@@ -87,6 +104,8 @@ PROVIDER_FIELDS = {
     "matched_year",
     *PROVIDER_COLLECTION_FIELDS,
     *PROVIDER_OBJECT_FIELDS,
+    CROSSREF_NATIVE_WORK_PROOF_FIELD,
+    DATACITE_NATIVE_DOI_PROOF_FIELD,
 }
 
 METADATA_MINIMAL_FIELDS = {"title_overlap", "matched_year"}
@@ -114,6 +133,40 @@ METADATA_CONFLICT_FIELDS = {
     "hard_conflicts",
 }
 METADATA_COORDINATE_COMPARISONS_FIELD = "coordinate_comparisons"
+PUBLISHER_NATIVE_URI_PROOF_FIELD = "_publisher_native_uri_proof"
+GENERIC_ARTICLE_LOCATOR_CERTIFICATE_FIELD = "_crossref_generic_article_locator_certificate"
+TITLELESS_NATIVE_VENUE_COMPOSITION_FIELD = "_titleless_native_venue_composition"
+REGISTERED_COORDINATE_CERTIFICATE_FIELD = "registered_coordinate_certificate"
+REGISTERED_COORDINATE_CERTIFICATE_RULE_VERSION = "crossref-nlm-registered-coordinates/v1"
+GENERIC_ARTICLE_LOCATOR_CERTIFICATE_RULE_VERSION = "crossref-generic-locator-role/v1"
+GENERIC_ARTICLE_LOCATOR_SEARCH_RULE_VERSION = "crossref-complete-generic-locator-query/v1"
+GENERIC_ARTICLE_LOCATOR_REGISTERED_SCOPE_RULE_VERSION = "crossref-nlm-issn-source-scope/v2"
+GENERIC_NATIVE_RECORD_FIELDS = {
+    "DOI", "type", "title", "subtitle", "author", "published-print",
+    "published-online", "published", "issued", "container-title",
+    "short-container-title", "volume", "issue", "page", "article-number",
+}
+GENERIC_CERTIFICATE_FIELDS = {
+    "rule_version", "raw_entry_sha256", "source", "native_locator_field",
+    "native_locator_value", "native_venue", "native_record_sha256",
+    "native_record_snapshot",
+}
+PUBLISHER_NATIVE_URI_PROOF_FIELDS = {
+    "version",
+    "selected_doi",
+    "source_uri",
+    "source_pii",
+    "source_entry_sha256",
+    "crossref_request_url",
+    "crossref_http_status",
+    "crossref_response_body",
+    "crossref_response_sha256",
+    "publisher_request_url",
+    "publisher_final_url",
+    "publisher_http_status",
+    "publisher_response_body",
+    "publisher_response_sha256",
+}
 METADATA_COORDINATE_KINDS = {
     "container", "volume", "issue", "article_page_range", "chapter_page_range",
     "elocator", "article_number", "article_locator",
@@ -289,6 +342,10 @@ CREATE TABLE IF NOT EXISTS resolve_attempt_provider_details (
   resolved_identifier_present INTEGER NOT NULL CHECK(resolved_identifier_present IN (0,1)),
   trial_registration_present INTEGER NOT NULL CHECK(trial_registration_present IN (0,1)),
   identity_search_present INTEGER NOT NULL CHECK(identity_search_present IN (0,1)),
+  crossref_native_work_proof_json TEXT,
+  crossref_native_work_proof_present INTEGER NOT NULL CHECK(crossref_native_work_proof_present IN (0,1)),
+  datacite_native_doi_proof_json TEXT,
+  datacite_native_doi_proof_present INTEGER NOT NULL CHECK(datacite_native_doi_proof_present IN (0,1)),
   PRIMARY KEY(ref_id,attempt_order),
   FOREIGN KEY(ref_id,attempt_order) REFERENCES resolve_attempts(ref_id,attempt_order) ON DELETE CASCADE,
   {_PROVIDER_TEXT_CHECKS},
@@ -306,7 +363,11 @@ CREATE TABLE IF NOT EXISTS resolve_attempt_provider_details (
   CHECK(identifiers_present=1 OR identifiers_count=0),
   CHECK(matched_authors_present=1 OR matched_authors_count=0),
   CHECK(oa_license_urls_present=1 OR oa_license_urls_count=0),
-  CHECK(fulltext_links_present=1 OR fulltext_links_count=0)
+  CHECK(fulltext_links_present=1 OR fulltext_links_count=0),
+  CHECK((crossref_native_work_proof_present=0 AND crossref_native_work_proof_json IS NULL) OR
+        (crossref_native_work_proof_present=1 AND typeof(crossref_native_work_proof_json)='text')),
+  CHECK((datacite_native_doi_proof_present=0 AND datacite_native_doi_proof_json IS NULL) OR
+        (datacite_native_doi_proof_present=1 AND typeof(datacite_native_doi_proof_json)='text'))
 );
 
 CREATE TABLE IF NOT EXISTS resolve_attempt_identifier_values (
@@ -378,6 +439,10 @@ CREATE TABLE IF NOT EXISTS resolve_attempt_trial_registrations (
 CREATE TABLE IF NOT EXISTS resolve_attempt_metadata_matches (
   ref_id TEXT NOT NULL, attempt_order INTEGER NOT NULL,
   metadata_kind TEXT NOT NULL CHECK(metadata_kind IN ('minimal','ordinary')),
+  publisher_native_uri_proof_json TEXT,
+  registered_coordinate_certificate_json TEXT,
+  generic_article_locator_certificate_json TEXT,
+  titleless_native_venue_composition_json TEXT,
   score REAL, score_present INTEGER NOT NULL CHECK(score_present IN (0,1)),
   title_overlap REAL, title_overlap_present INTEGER NOT NULL CHECK(title_overlap_present IN (0,1)),
   author_match INTEGER, author_match_present INTEGER NOT NULL CHECK(author_match_present IN (0,1)),
@@ -665,7 +730,14 @@ def _validate_metadata_match(value: Any) -> JsonDict:
         METADATA_ORDINARY_FIELDS
         | METADATA_ORDINAL_FIELDS
         | METADATA_CONFLICT_FIELDS
-        | {"year_mismatch_plausible", METADATA_COORDINATE_COMPARISONS_FIELD}
+        | {
+            "year_mismatch_plausible",
+            METADATA_COORDINATE_COMPARISONS_FIELD,
+            PUBLISHER_NATIVE_URI_PROOF_FIELD,
+            REGISTERED_COORDINATE_CERTIFICATE_FIELD,
+            GENERIC_ARTICLE_LOCATOR_CERTIFICATE_FIELD,
+            TITLELESS_NATIVE_VENUE_COMPOSITION_FIELD,
+        }
     )
     if not METADATA_ORDINARY_FIELDS <= keys or keys - allowed:
         raise ValueError("resolve attempt metadata_match has an invalid field set")
@@ -679,6 +751,30 @@ def _validate_metadata_match(value: Any) -> JsonDict:
         _text(value[key], f"metadata_match.{key}", nullable=True)
     if value["matched_year"] is not None and type(value["matched_year"]) is not int:
         raise ValueError("resolve attempt metadata_match.matched_year must be integer or null")
+    if PUBLISHER_NATIVE_URI_PROOF_FIELD in value:
+        _validate_publisher_native_uri_proof(value[PUBLISHER_NATIVE_URI_PROOF_FIELD])
+    if REGISTERED_COORDINATE_CERTIFICATE_FIELD in value:
+        _validate_registered_coordinate_certificate(
+            value[REGISTERED_COORDINATE_CERTIFICATE_FIELD],
+        )
+    generic_certificate = None
+    if GENERIC_ARTICLE_LOCATOR_CERTIFICATE_FIELD in value:
+        generic_certificate = _validate_generic_article_locator_certificate(
+            value[GENERIC_ARTICLE_LOCATOR_CERTIFICATE_FIELD],
+        )
+    if TITLELESS_NATIVE_VENUE_COMPOSITION_FIELD in value:
+        if generic_certificate is None:
+            raise _generic_locator_certificate_error(
+                "native venue companion has no generic article locator certificate",
+            )
+        _validate_generic_locator_venue_companion(
+            value[TITLELESS_NATIVE_VENUE_COMPOSITION_FIELD], generic_certificate,
+        )
+    elif (
+        generic_certificate is not None
+        and generic_certificate["native_venue"].get("mode") == "ordered_primary_short"
+    ):
+        raise _generic_locator_certificate_error("native venue companion is required")
 
     ordinal_keys = keys & METADATA_ORDINAL_FIELDS
     if ordinal_keys:
@@ -738,6 +834,699 @@ def _validate_metadata_match(value: Any) -> JsonDict:
         ):
             if type(value[key]) is not bool or value[key] != (label in conflicts):
                 raise ValueError("resolve attempt metadata_match conflicts are inconsistent")
+    return copy.deepcopy(value)
+
+
+def _validate_publisher_native_uri_proof(value: Any) -> JsonDict:
+    if type(value) is not dict or set(value) != PUBLISHER_NATIVE_URI_PROOF_FIELDS:
+        raise ValueError("resolve attempt publisher native URI proof has an invalid field set")
+    if type(value["version"]) is not int or value["version"] != 1:
+        raise ValueError("resolve attempt publisher native URI proof version is invalid")
+    for key in (
+        "selected_doi", "source_uri", "source_pii", "crossref_request_url",
+        "publisher_request_url", "publisher_final_url",
+    ):
+        _text(value[key], f"publisher native URI proof {key}", nonempty=True)
+    source_digest = value["source_entry_sha256"]
+    if type(source_digest) is not str or re.fullmatch(r"[0-9a-f]{64}", source_digest) is None:
+        raise ValueError("resolve attempt publisher native URI proof source_entry_sha256 is invalid")
+    for key in ("crossref_http_status", "publisher_http_status"):
+        if type(value[key]) is not int:
+            raise ValueError(f"resolve attempt publisher native URI proof {key} must be integer")
+    for body_key, digest_key in (
+        ("crossref_response_body", "crossref_response_sha256"),
+        ("publisher_response_body", "publisher_response_sha256"),
+    ):
+        body = _text(value[body_key], f"publisher native URI proof {body_key}", nonempty=True)
+        digest = value[digest_key]
+        if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError(f"resolve attempt publisher native URI proof {digest_key} is invalid")
+        if hashlib.sha256(body.encode("utf-8")).hexdigest() != digest:
+            raise ValueError(f"resolve attempt publisher native URI proof {digest_key} does not match its body")
+    return copy.deepcopy(value)
+
+
+def _registered_coordinate_certificate_error(detail: str) -> ValueError:
+    return ValueError(f"resolve attempt registered coordinate certificate {detail} is invalid")
+
+
+def _validate_registered_coordinate_certificate(value: Any) -> JsonDict:
+    required = {
+        "rule_version", "registry", "registry_version", "record_id",
+        "snapshot_sha256", "candidate_issns",
+    }
+    if type(value) is not dict or set(value) != required:
+        raise _registered_coordinate_certificate_error("field set")
+    if (
+        _text(value["rule_version"], "registered coordinate certificate rule_version", nonempty=True)
+        != REGISTERED_COORDINATE_CERTIFICATE_RULE_VERSION
+        or _text(value["registry"], "registered coordinate certificate registry", nonempty=True)
+        != "nlm-pubmed"
+    ):
+        raise _registered_coordinate_certificate_error("rule or registry")
+    _text(value["registry_version"], "registered coordinate certificate registry_version", nonempty=True)
+    _text(value["record_id"], "registered coordinate certificate record_id", nonempty=True)
+    snapshot_sha256 = _text(
+        value["snapshot_sha256"],
+        "registered coordinate certificate snapshot_sha256",
+        nonempty=True,
+    )
+    if re.fullmatch(r"[0-9a-f]{64}", snapshot_sha256) is None:
+        raise _registered_coordinate_certificate_error("snapshot_sha256")
+
+    candidate_issns = value["candidate_issns"]
+    if type(candidate_issns) is not list or not candidate_issns:
+        raise _registered_coordinate_certificate_error("candidate_issns")
+    for issn in candidate_issns:
+        _text(issn, "registered coordinate certificate ISSN", nonempty=True)
+        if re.fullmatch(r"[0-9]{4}-[0-9]{3}[0-9X]", issn) is None:
+            raise _registered_coordinate_certificate_error("ISSN format")
+        compact = issn.replace("-", "")
+        weighted_sum = sum(
+            int(char) * weight
+            for char, weight in zip(compact[:7], range(8, 1, -1))
+        )
+        remainder = (11 - weighted_sum % 11) % 11
+        expected_check_digit = "X" if remainder == 10 else str(remainder)
+        if compact[7] != expected_check_digit:
+            raise _registered_coordinate_certificate_error("ISSN check digit")
+    if candidate_issns != sorted(set(candidate_issns)):
+        raise _registered_coordinate_certificate_error("ISSN ordering or duplicates")
+    return copy.deepcopy(value)
+
+
+def _generic_locator_certificate_error(detail: str) -> ValueError:
+    return ValueError(f"resolve attempt generic article locator certificate {detail} is invalid")
+
+
+def _generic_locator_digest(value: Any, label: str) -> str:
+    if type(value) is not str or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise _generic_locator_certificate_error(label)
+    return value
+
+
+def _generic_locator_json_sha256(value: Any, label: str) -> str:
+    try:
+        serialized = json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise _generic_locator_certificate_error(label) from exc
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _generic_locator_json_value(value: Any) -> bool:
+    if value is None or type(value) in {str, bool, int}:
+        return True
+    if type(value) is float:
+        return math.isfinite(value)
+    if type(value) is list:
+        return all(_generic_locator_json_value(item) for item in value)
+    if type(value) is dict:
+        return all(
+            type(key) is str and _generic_locator_json_value(item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _generic_locator_span(value: Any, label: str, *, allow_empty: bool = False) -> list[int]:
+    if (
+        type(value) is not list
+        or len(value) != 2
+        or any(type(item) is not int for item in value)
+        or value[0] < 0
+        or (value[1] < value[0] if allow_empty else value[1] <= value[0])
+    ):
+        raise _generic_locator_certificate_error(label)
+    return list(value)
+
+
+def _validate_generic_native_record_snapshot(
+    value: Any,
+    label: str,
+    *,
+    require_certificate_record: bool = False,
+    registered_scope: bool = False,
+) -> JsonDict:
+    if type(value) is not dict or not _generic_locator_json_value(value):
+        raise _generic_locator_certificate_error(label)
+    allowed = GENERIC_NATIVE_RECORD_FIELDS | ({"ISSN"} if registered_scope else set())
+    if set(value) - allowed:
+        raise _generic_locator_certificate_error(label)
+    if not require_certificate_record:
+        return copy.deepcopy(value)
+    for key in ("DOI", "type", "volume"):
+        if key in value:
+            _text(value[key], f"{label}.{key}", nonempty=True)
+    for key in ("title", "container-title"):
+        if key in value:
+            _text_list(value[key], f"{label}.{key}")
+    for key in ("subtitle", "short-container-title"):
+        if key in value and value[key] is not None:
+            _text_list(value[key], f"{label}.{key}")
+    for key in ("published-print", "published-online", "published", "issued"):
+        if key in value and value[key] is not None and type(value[key]) is not dict:
+            raise _generic_locator_certificate_error(f"{label}.{key}")
+    for key in ("page", "article-number"):
+        if key in value and value[key] is not None:
+            _text(value[key], f"{label}.{key}")
+    if registered_scope and "ISSN" in value:
+        _text_list(value["ISSN"], f"{label}.ISSN")
+    required = {"DOI", "type", "title", "author", "container-title", "volume"}
+    if not required <= set(value) or value.get("type") != "journal-article":
+        raise _generic_locator_certificate_error(label)
+    if not any(type(value.get(key)) is dict for key in (
+        "published-print", "published-online", "published", "issued",
+    )):
+        raise _generic_locator_certificate_error(f"{label}.publication_date")
+    title = _text_list(value["title"], f"{label}.title")
+    container = _text_list(value["container-title"], f"{label}.container-title")
+    authors = value["author"]
+    if (
+        not title or not title[0].strip()
+        or len(container) != 1 or not container[0].strip()
+        or type(authors) is not list or not authors
+        or type(authors[0]) is not dict
+        or not _generic_locator_json_value(authors)
+    ):
+        raise _generic_locator_certificate_error(label)
+    first_author = authors[0].get("family") or authors[0].get("name")
+    _text(first_author, f"{label}.author.family", nonempty=True)
+    _text(value["volume"], f"{label}.volume", nonempty=True)
+    if registered_scope:
+        if "ISSN" not in value or not value["ISSN"]:
+            raise _generic_locator_certificate_error(f"{label}.ISSN")
+    return copy.deepcopy(value)
+
+
+def _validate_generic_locator_source(value: Any, raw_digest: str) -> JsonDict:
+    required = {
+        "author", "year", "container", "volume", "issue", "locator",
+        "spans", "title_span", "source_titleless",
+    }
+    if type(value) is not dict or set(value) != required:
+        raise _generic_locator_certificate_error("source field set")
+    for key in ("author", "container", "volume", "locator"):
+        _text(value[key], f"source.{key}", nonempty=True)
+    _text(value["issue"], "source.issue", nullable=True)
+    if (
+        type(value["year"]) is not int
+        or re.fullmatch(r"[0-9]{1,4}", value["volume"]) is None
+        or re.fullmatch(r"[0-9]+", value["locator"]) is None
+        or (value["issue"] is not None and re.fullmatch(r"[0-9]+", value["issue"]) is None)
+        or type(value["source_titleless"]) is not bool
+    ):
+        raise _generic_locator_certificate_error("source")
+    spans = value["spans"]
+    expected_span_keys = {"container", "volume", "article_locator"}
+    if value["issue"] is not None:
+        expected_span_keys.add("issue")
+    if type(spans) is not dict or set(spans) != expected_span_keys:
+        raise _generic_locator_certificate_error("source.spans field set")
+    for key, span in spans.items():
+        _generic_locator_span(span, f"source.spans.{key}")
+    _generic_locator_span(value["title_span"], "source.title_span", allow_empty=True)
+    return copy.deepcopy(value)
+
+
+def _validate_generic_locator_native_venue(
+    value: Any, snapshot: JsonDict, raw_digest: str,
+) -> JsonDict:
+    if type(value) is not dict:
+        raise _generic_locator_certificate_error("native_venue")
+    primary_values = snapshot.get("container-title")
+    short_values = snapshot.get("short-container-title")
+    expected_short = (
+        short_values[0].strip()
+        if type(short_values) is list and len(short_values) == 1
+        and type(short_values[0]) is str else None
+    )
+    _text(value.get("primary"), "native_venue.primary", nonempty=True)
+    _text(value.get("short"), "native_venue.short", nullable=True)
+    if (
+        type(primary_values) is not list or len(primary_values) != 1
+        or value["primary"] != primary_values[0].strip()
+        or value["short"] != expected_short
+    ):
+        raise _generic_locator_certificate_error("native_venue binding")
+    mode = value.get("mode")
+    if mode == "literal":
+        if set(value) != {"primary", "short", "mode", "alias"}:
+            raise _generic_locator_certificate_error("native_venue literal field set")
+        _text(value["alias"], "native_venue.alias")
+        if value["alias"] and not value["short"]:
+            raise _generic_locator_certificate_error("native_venue alias")
+    elif mode == "ordered_primary_short":
+        required = {
+            "primary", "short", "mode", "rule", "raw_entry_sha256",
+            "native_primary", "native_short",
+        }
+        if set(value) != required:
+            raise _generic_locator_certificate_error("native_venue composition field set")
+        if (
+            value["rule"] != "ordered_native_primary_short_tokens_v1"
+            or value["raw_entry_sha256"] != raw_digest
+            or value["native_primary"] != value["primary"]
+            or value["native_short"] != value["short"]
+            or not value["short"]
+        ):
+            raise _generic_locator_certificate_error("native_venue composition")
+    else:
+        raise _generic_locator_certificate_error("native_venue mode")
+    return copy.deepcopy(value)
+
+
+def _registered_generic_locator_source_scope_query(source: JsonDict) -> JsonDict:
+    return {
+        "kind": "generic",
+        "author": source["author"],
+        "year": source["year"],
+        "volume": source["volume"],
+        "locator": source["locator"],
+        "locator_kind": "article_locator",
+        "bibliographic": "",
+    }
+
+
+def _generic_scope_record_projection(value: JsonDict) -> JsonDict:
+    return {
+        key: item for key, item in value.items()
+        if key in GENERIC_NATIVE_RECORD_FIELDS
+        and not (key == "subtitle" and item == [])
+        and not (key == "subtitle" and item is None)
+    }
+
+
+def _validate_registered_generic_locator_search(
+    value: Any,
+    source: JsonDict,
+    raw_digest: str,
+    native_snapshot: JsonDict,
+) -> JsonDict:
+    required = {
+        "rule_version", "source_scope", "query", "scopes", "selected_doi",
+        "selected_native_record_snapshot", "selected_native_record_sha256",
+        "direct_native_record_snapshot", "direct_native_record_sha256",
+    }
+    if type(value) is not dict or set(value) != required:
+        raise _generic_locator_certificate_error("registered search field set")
+    expected_query = _registered_generic_locator_source_scope_query(source)
+    query = value["query"]
+    if (
+        value["rule_version"] != GENERIC_ARTICLE_LOCATOR_REGISTERED_SCOPE_RULE_VERSION
+        or type(query) is not dict
+        or set(query) != set(expected_query)
+        or type(query.get("year")) is not int
+        or any(type(query.get(key)) is not str for key in expected_query if key != "year")
+        or query != expected_query
+    ):
+        raise _generic_locator_certificate_error("registered search query")
+
+    scope = value["source_scope"]
+    scope_fields = {
+        "status", "registry", "registry_version", "record_id", "cited_venue",
+        "canonical_title", "matched_alias", "match_basis", "snapshot_sha256",
+        "issns", "source", "venue_witness",
+    }
+    if type(scope) is not dict or set(scope) != scope_fields:
+        raise _generic_locator_certificate_error("registered source scope field set")
+    for key in (
+        "registry_version", "record_id", "cited_venue", "canonical_title",
+        "matched_alias",
+    ):
+        _text(scope[key], f"registered source scope.{key}", nonempty=True)
+    if (
+        scope["status"] != "recognized"
+        or scope["registry"] != "nlm-pubmed"
+        or scope["match_basis"] not in {
+            "canonical_title", "registered_alias", "registered_title_alias_composition",
+        }
+    ):
+        raise _generic_locator_certificate_error("registered source scope identity")
+    _generic_locator_digest(scope["snapshot_sha256"], "registered source scope snapshot_sha256")
+    issns = _text_list(scope["issns"], "registered source scope.issns")
+    if not issns or len(issns) != len(set(issns)):
+        raise _generic_locator_certificate_error("registered source scope issns")
+    scope_source = scope["source"]
+    if type(scope_source) is not dict or set(scope_source) != {
+        "raw_entry_sha256", "container_span", "container_value",
+    }:
+        raise _generic_locator_certificate_error("registered source scope source")
+    if _generic_locator_digest(
+        scope_source["raw_entry_sha256"], "registered source scope raw_entry_sha256",
+    ) != raw_digest:
+        raise _generic_locator_certificate_error("registered source scope raw_entry_sha256")
+    _generic_locator_span(scope_source["container_span"], "registered source scope container_span")
+    _text(scope_source["container_value"], "registered source scope container_value", nonempty=True)
+    venue_witness = scope["venue_witness"]
+    if type(venue_witness) is not dict or set(venue_witness) != {
+        "mode", "canonical_title", "registered_alias",
+    }:
+        raise _generic_locator_certificate_error("registered source scope venue witness")
+    if venue_witness["mode"] not in {
+        "exact_registered_name", "ordered_canonical_registered_alias_tokens_v1",
+    }:
+        raise _generic_locator_certificate_error("registered source scope venue witness mode")
+    for key in ("canonical_title", "registered_alias"):
+        _text(venue_witness[key], f"registered source scope venue witness.{key}", nonempty=True)
+    if venue_witness["canonical_title"] != scope["canonical_title"]:
+        raise _generic_locator_certificate_error("registered source scope venue witness binding")
+
+    scopes = value["scopes"]
+    if type(scopes) is not list or len(scopes) != len(issns):
+        raise _generic_locator_certificate_error("registered search scopes")
+    for expected_issn, item in zip(issns, scopes):
+        if type(item) is not dict or set(item) != {
+            "issn", "request_url", "complete", "result_total", "records", "records_sha256",
+        }:
+            raise _generic_locator_certificate_error("registered search scope field set")
+        _text(item["issn"], "registered search scope issn", nonempty=True)
+        if item["issn"] != expected_issn or item["complete"] is not True:
+            raise _generic_locator_certificate_error("registered search scope identity")
+        expected_url = "https://api.crossref.org/journals/" + urllib.parse.quote(
+            expected_issn, safe="",
+        ) + "/works?" + urllib.parse.urlencode({
+            "rows": "1000",
+            "query.author": source["author"],
+            "filter": (
+                f"from-pub-date:{source['year']}-01-01,"
+                f"until-pub-date:{source['year']}-12-31"
+            ),
+        })
+        if item["request_url"] != expected_url:
+            raise _generic_locator_certificate_error("registered search scope request_url")
+        records = item["records"]
+        total = item["result_total"]
+        _generic_locator_digest(item["records_sha256"], "registered search scope records_sha256")
+        if (
+            type(records) is not list or type(total) is not int
+            or total != len(records) or total > 1000
+            or _generic_locator_json_sha256(records, "registered search scope records")
+            != item["records_sha256"]
+        ):
+            raise _generic_locator_certificate_error("registered search scope records")
+        for record in records:
+            _validate_generic_native_record_snapshot(
+                record, "registered search record", registered_scope=True,
+            )
+
+    selected = _validate_generic_native_record_snapshot(
+        value["selected_native_record_snapshot"], "registered selected record",
+        require_certificate_record=True, registered_scope=True,
+    )
+    direct = _validate_generic_native_record_snapshot(
+        value["direct_native_record_snapshot"], "registered direct record",
+        require_certificate_record=True, registered_scope=True,
+    )
+    selected_digest = _generic_locator_digest(
+        value["selected_native_record_sha256"], "selected_native_record_sha256",
+    )
+    direct_digest = _generic_locator_digest(
+        value["direct_native_record_sha256"], "direct_native_record_sha256",
+    )
+    selected_doi = _text(value["selected_doi"], "registered selected_doi", nonempty=True)
+    if (
+        _generic_locator_json_sha256(selected, "selected native record") != selected_digest
+        or _generic_locator_json_sha256(direct, "direct native record") != direct_digest
+        or selected != direct
+        or selected["DOI"].strip().casefold() != selected_doi.casefold()
+        or _generic_scope_record_projection(selected) != native_snapshot
+    ):
+        raise _generic_locator_certificate_error("registered selected record binding")
+    return copy.deepcopy(value)
+
+
+def _validate_generic_locator_search_evidence(
+    value: Any,
+    source: JsonDict,
+    raw_digest: str,
+    native_snapshot: JsonDict,
+) -> JsonDict:
+    if type(value) is not dict:
+        raise _generic_locator_certificate_error("search_evidence")
+    if "registered_source_scope" in value or "route" in value:
+        required = {"rule_version", "route", "registered_source_scope"}
+        if (
+            set(value) != required
+            or value["rule_version"] != GENERIC_ARTICLE_LOCATOR_SEARCH_RULE_VERSION
+            or value["route"] != GENERIC_ARTICLE_LOCATOR_REGISTERED_SCOPE_RULE_VERSION
+        ):
+            raise _generic_locator_certificate_error("registered search_evidence field set")
+        _validate_registered_generic_locator_search(
+            value["registered_source_scope"], source, raw_digest, native_snapshot,
+        )
+        return copy.deepcopy(value)
+
+    required = {
+        "rule_version", "query", "request_url", "complete", "result_total",
+        "records", "records_sha256",
+    }
+    if set(value) != required or value["rule_version"] != GENERIC_ARTICLE_LOCATOR_SEARCH_RULE_VERSION:
+        raise _generic_locator_certificate_error("search_evidence field set")
+    query = value["query"]
+    expected_query = {
+        "bibliographic": " ".join((
+            str(source["year"]), source["container"], source["volume"], source["locator"],
+        )),
+        "author": source["author"],
+        "year": source["year"],
+    }
+    if (
+        type(query) is not dict
+        or set(query) != set(expected_query)
+        or type(query.get("year")) is not int
+        or any(type(query.get(key)) is not str for key in expected_query if key != "year")
+        or query != expected_query
+    ):
+        raise _generic_locator_certificate_error("search_evidence query")
+    expected_url = "https://api.crossref.org/works?" + urllib.parse.urlencode({
+        "query.bibliographic": expected_query["bibliographic"],
+        "rows": "1000",
+        "query.author": expected_query["author"],
+        "filter": (
+            f"from-pub-date:{source['year']}-01-01,"
+            f"until-pub-date:{source['year']}-12-31"
+        ),
+    })
+    if value["request_url"] != expected_url or value["complete"] is not True:
+        raise _generic_locator_certificate_error("search_evidence request")
+    records = value["records"]
+    total = value["result_total"]
+    record_digest = _generic_locator_digest(value["records_sha256"], "records_sha256")
+    if (
+        type(records) is not list or not records
+        or type(total) is not int or total != len(records) or total > 1000
+        or _generic_locator_json_sha256(records, "search_evidence records") != record_digest
+    ):
+        raise _generic_locator_certificate_error("search_evidence records")
+    for record in records:
+        _validate_generic_native_record_snapshot(record, "search record")
+    if sum(record == native_snapshot for record in records) != 1:
+        raise _generic_locator_certificate_error("search_evidence selected record")
+    return copy.deepcopy(value)
+
+
+def _validate_generic_article_locator_certificate(value: Any) -> JsonDict:
+    if type(value) is not dict or set(value) - (GENERIC_CERTIFICATE_FIELDS | {"search_evidence"}) or not GENERIC_CERTIFICATE_FIELDS <= set(value):
+        raise _generic_locator_certificate_error("field set")
+    if value["rule_version"] != GENERIC_ARTICLE_LOCATOR_CERTIFICATE_RULE_VERSION:
+        raise _generic_locator_certificate_error("rule_version")
+    raw_digest = _generic_locator_digest(value["raw_entry_sha256"], "raw_entry_sha256")
+    source = _validate_generic_locator_source(value["source"], raw_digest)
+    native_snapshot = _validate_generic_native_record_snapshot(
+        value["native_record_snapshot"], "native_record_snapshot",
+        require_certificate_record=True,
+    )
+    snapshot_digest = _generic_locator_digest(
+        value["native_record_sha256"], "native_record_sha256",
+    )
+    if _generic_locator_json_sha256(native_snapshot, "native_record_snapshot") != snapshot_digest:
+        raise _generic_locator_certificate_error("native_record_sha256 binding")
+    locator_field = value["native_locator_field"]
+    if locator_field not in {"article-number", "page"}:
+        raise _generic_locator_certificate_error("native_locator_field")
+    locator_value = _text(value["native_locator_value"], "native_locator_value", nonempty=True)
+    supplied = [
+        key for key in ("article-number", "page")
+        if native_snapshot.get(key) is not None and native_snapshot.get(key) != ""
+    ]
+    if (
+        supplied != [locator_field]
+        or native_snapshot.get(locator_field) != locator_value
+        or (locator_field == "article-number" and locator_value != source["locator"])
+    ):
+        raise _generic_locator_certificate_error("native locator binding")
+    if locator_field == "page":
+        match = re.fullmatch(r"([0-9]+)\s*[-‐‑‒–—−]\s*([0-9]+)", locator_value)
+        if (
+            match is None or match.group(1) != source["locator"]
+            or int(match.group(2)) < int(match.group(1))
+        ):
+            raise _generic_locator_certificate_error("native page range")
+    _validate_generic_locator_native_venue(value["native_venue"], native_snapshot, raw_digest)
+    if "search_evidence" in value:
+        _validate_generic_locator_search_evidence(
+            value["search_evidence"], source, raw_digest, native_snapshot,
+        )
+    return copy.deepcopy(value)
+
+
+def _validate_generic_locator_venue_companion(
+    value: Any, certificate: JsonDict,
+) -> JsonDict:
+    required = {"rule", "raw_entry_sha256", "native_primary", "native_short"}
+    if type(value) is not dict or set(value) != required:
+        raise _generic_locator_certificate_error("native venue companion field set")
+    _text(value["rule"], "native venue companion.rule", nonempty=True)
+    _generic_locator_digest(
+        value["raw_entry_sha256"], "native venue companion.raw_entry_sha256",
+    )
+    _text(value["native_primary"], "native venue companion.native_primary", nonempty=True)
+    _text(value["native_short"], "native venue companion.native_short", nonempty=True)
+
+    native_venue = certificate["native_venue"]
+    if (
+        native_venue.get("mode") != "ordered_primary_short"
+        or {key: native_venue.get(key) for key in required} != value
+    ):
+        raise _generic_locator_certificate_error("native venue companion binding")
+    return copy.deepcopy(value)
+
+
+def _validate_crossref_native_work_proof(value: Any) -> JsonDict:
+    if type(value) is dict and value.get("version") == 2:
+        return _validate_crossref_native_article_proof(value)
+    if type(value) is not dict or set(value) != CROSSREF_NATIVE_WORK_PROOF_FIELDS:
+        raise ValueError("resolve attempt Crossref native work proof has an invalid field set")
+    if type(value["version"]) is not int or value["version"] != 1:
+        raise ValueError("resolve attempt Crossref native work proof version is invalid")
+    requested_doi = _text(
+        value["requested_doi"], "Crossref native work proof requested_doi", nonempty=True,
+    )
+    if re.fullmatch(r"10\.\d{4,9}/[^\s]+", requested_doi) is None:
+        raise ValueError("resolve attempt Crossref native work proof DOI is invalid")
+    expected_url = (
+        "https://api.crossref.org/works/" + urllib.parse.quote(requested_doi)
+    )
+    if value["request_url"] != expected_url:
+        raise ValueError("resolve attempt Crossref native work proof request URL is invalid")
+    if type(value["http_status"]) is not int or value["http_status"] != 200:
+        raise ValueError("resolve attempt Crossref native work proof HTTP status is invalid")
+    body = _text(
+        value["response_body"], "Crossref native work proof response_body", nonempty=True,
+    )
+    digest = value["response_sha256"]
+    if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("resolve attempt Crossref native work proof response_sha256 is invalid")
+    if hashlib.sha256(body.encode("utf-8")).hexdigest() != digest:
+        raise ValueError("resolve attempt Crossref native work proof body digest does not match")
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("resolve attempt Crossref native work proof body is malformed") from exc
+    message = payload.get("message") if isinstance(payload, dict) else None
+    returned_doi = message.get("DOI") if isinstance(message, dict) else None
+    if (
+        not isinstance(returned_doi, str)
+        or returned_doi.strip().casefold() != requested_doi.casefold()
+        or message.get("type") != "posted-content"
+        or message.get("subtype") != "preprint"
+    ):
+        raise ValueError("resolve attempt Crossref native work proof body is not the requested preprint")
+    return copy.deepcopy(value)
+
+
+def _validate_crossref_native_article_proof(value: Any) -> JsonDict:
+    """Validate a source-bound direct journal-article response proof."""
+    if type(value) is not dict or set(value) != CROSSREF_NATIVE_ARTICLE_PROOF_FIELDS:
+        raise ValueError("resolve attempt Crossref native article proof has an invalid field set")
+    if type(value["version"]) is not int or value["version"] != 2:
+        raise ValueError("resolve attempt Crossref native article proof version is invalid")
+    requested_doi = _text(
+        value["requested_doi"], "Crossref native article proof requested_doi", nonempty=True,
+    )
+    if re.fullmatch(r"10\.\d{4,9}/[^\s]+", requested_doi) is None:
+        raise ValueError("resolve attempt Crossref native article proof DOI is invalid")
+    expected_url = (
+        "https://api.crossref.org/works/" + urllib.parse.quote(requested_doi)
+    )
+    if value["request_url"] != expected_url:
+        raise ValueError("resolve attempt Crossref native article proof request URL is invalid")
+    if type(value["http_status"]) is not int or value["http_status"] != 200:
+        raise ValueError("resolve attempt Crossref native article proof HTTP status is invalid")
+    body = _text(
+        value["response_body"], "Crossref native article proof response_body", nonempty=True,
+    )
+    digest = value["response_sha256"]
+    if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("resolve attempt Crossref native article proof response_sha256 is invalid")
+    if hashlib.sha256(body.encode("utf-8")).hexdigest() != digest:
+        raise ValueError("resolve attempt Crossref native article proof body digest does not match")
+    source_digest = value["source_raw_sha256"]
+    if type(source_digest) is not str or re.fullmatch(r"[0-9a-f]{64}", source_digest) is None:
+        raise ValueError("resolve attempt Crossref native article proof source hash is invalid")
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("resolve attempt Crossref native article proof body is malformed") from exc
+    message = payload.get("message") if isinstance(payload, dict) else None
+    returned_doi = message.get("DOI") if isinstance(message, dict) else None
+    if (
+        not isinstance(returned_doi, str)
+        or returned_doi.strip().casefold() != requested_doi.casefold()
+        or message.get("type") != "journal-article"
+    ):
+        raise ValueError(
+            "resolve attempt Crossref native article proof body is not the requested journal article"
+        )
+    return copy.deepcopy(value)
+
+
+def _validate_datacite_native_doi_proof(value: Any) -> JsonDict:
+    if type(value) is not dict or set(value) != DATACITE_NATIVE_DOI_PROOF_FIELDS:
+        raise ValueError("DataCite native DOI proof has an invalid field set")
+    if type(value["version"]) is not int or value["version"] != 1:
+        raise ValueError("DataCite native DOI proof version is invalid")
+    requested_doi = _text(
+        value["requested_doi"], "DataCite native DOI proof requested DOI", nonempty=True,
+    )
+    if re.fullmatch(r"10\.\d{4,9}/[^\s]+", requested_doi, flags=re.IGNORECASE) is None:
+        raise ValueError("DataCite native DOI proof requested DOI is invalid")
+    expected_url = (
+        "https://api.datacite.org/dois/" + urllib.parse.quote(requested_doi)
+    )
+    if value["request_url"] != expected_url:
+        raise ValueError("DataCite native DOI proof request URL is invalid")
+    if type(value["http_status"]) is not int or value["http_status"] != 200:
+        raise ValueError("DataCite native DOI proof HTTP status is invalid")
+    body = _text(
+        value["response_body"], "DataCite native DOI proof response body", nonempty=True,
+    )
+    digest = value["response_sha256"]
+    if type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        raise ValueError("DataCite native DOI proof response digest is invalid")
+    if hashlib.sha256(body.encode("utf-8")).hexdigest() != digest:
+        raise ValueError("DataCite native DOI proof body digest does not match")
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("DataCite native DOI proof body is malformed") from exc
+    record = payload.get("data") if isinstance(payload, dict) else None
+    attributes = record.get("attributes") if isinstance(record, dict) else None
+    record_id = record.get("id") if isinstance(record, dict) else None
+    record_doi = attributes.get("doi") if isinstance(attributes, dict) else None
+    if (
+        not isinstance(record, dict)
+        or record.get("type") != "dois"
+        or not isinstance(record_id, str)
+        or record_id.strip().casefold() != requested_doi.casefold()
+        or not isinstance(attributes, dict)
+        or not isinstance(record_doi, str)
+        or record_doi.strip().casefold() != requested_doi.casefold()
+    ):
+        raise ValueError("DataCite native DOI proof body is not the requested DOI record")
     return copy.deepcopy(value)
 
 
@@ -861,11 +1650,78 @@ def _validate_provider_attempt(raw: JsonDict, kind: str) -> JsonDict:
             raise ValueError("resolve attempt identity_search outcome is invalid")
         if (item["completion"] == "incomplete") != (item["outcome"] == "inconclusive"):
             raise ValueError("identity search completion contradicts outcome")
+    if CROSSREF_NATIVE_WORK_PROOF_FIELD in raw:
+        proof = _validate_crossref_native_work_proof(
+            raw[CROSSREF_NATIVE_WORK_PROOF_FIELD],
+        )
+        requested_doi = proof["requested_doi"].casefold()
+        if proof["version"] == 1:
+            if raw["status"] != "resolved" or raw["via"] not in {
+                "crossref", "identifier_validation:crossref",
+            }:
+                raise ValueError("resolve attempt Crossref native proof is not attached to a direct result")
+            if kind == "identifier_validation" and (
+                str(raw.get("identifier_value") or "").strip().casefold() != requested_doi
+            ):
+                raise ValueError("resolve attempt Crossref native proof DOI does not match identifier value")
+            if raw.get("doi") is not None and (
+                str(raw.get("doi")).strip().casefold() != requested_doi
+            ):
+                raise ValueError("resolve attempt Crossref native proof DOI does not match provider DOI")
+        else:
+            resolved = raw.get("resolved_identifier")
+            identity_search = raw.get("identity_search")
+            if (
+                kind != "provider_result"
+                or raw["status"] != "resolved"
+                or raw["via"] != "crossref_metadata"
+                or raw.get("resolution_basis") != "metadata_search"
+                or raw.get("work_type") != "journal-article"
+                or not isinstance(resolved, dict)
+                or resolved.get("type") != "doi"
+                or str(resolved.get("value") or "").strip().casefold() != requested_doi
+                or resolved.get("validated_via")
+                != "crossref:ambiguous_title_journal_boundary_certificate"
+                or not isinstance(identity_search, dict)
+                or identity_search.get("completion") != "complete"
+                or identity_search.get("outcome") != "compatible_identity"
+            ):
+                raise ValueError(
+                    "resolve attempt Crossref native article proof is not attached to its admitted search result"
+                )
+            if raw.get("doi") is None or str(raw.get("doi")).strip().casefold() != requested_doi:
+                raise ValueError("resolve attempt Crossref native article proof DOI does not match provider DOI")
+    if DATACITE_NATIVE_DOI_PROOF_FIELD in raw:
+        proof = _validate_datacite_native_doi_proof(
+            raw[DATACITE_NATIVE_DOI_PROOF_FIELD],
+        )
+        if (
+            kind != "identifier_validation"
+            or raw.get("status") != "resolved"
+            or raw.get("via") != "identifier_validation:datacite"
+            or raw.get("identifier_type") != "doi"
+        ):
+            raise ValueError(
+                "DataCite native DOI proof is not attached to a direct DOI validation"
+            )
+        requested_doi = proof["requested_doi"].casefold()
+        if str(raw.get("identifier_value") or "").strip().casefold() != requested_doi:
+            raise ValueError(
+                "DataCite native DOI proof DOI does not match identifier value"
+            )
+        if raw.get("doi") is not None and (
+            str(raw.get("doi")).strip().casefold() != requested_doi
+        ):
+            raise ValueError("DataCite native DOI proof DOI does not match provider DOI")
     if "fulltext_links" in raw:
         _validate_fulltext_links(raw["fulltext_links"])
 
     if kind == "identifier_validation":
-        if raw["via"] not in {"identifier_validation:crossref", "identifier_validation:doi.org"}:
+        if raw["via"] not in {
+            "identifier_validation:crossref",
+            "identifier_validation:doi.org",
+            "identifier_validation:datacite",
+        }:
             raise ValueError("resolve attempt identifier-validation via is invalid")
         if raw.get("identifier_type") != "doi":
             raise ValueError("resolve attempt identifier-validation type is invalid")
@@ -1015,7 +1871,39 @@ def _write_metadata(conn: sqlite3.Connection, ref_id: str, order: int, item: Jso
         "matched_venue", "year_mismatch_plausible", "ordinal_conflict",
         "author_conflict", "year_conflict", "venue_conflict", "metadata_conflict",
     )
-    values: list[Any] = [ref_id, order, "ordinary" if ordinary else "minimal"]
+    proof_json = (
+        json.dumps(
+            item[PUBLISHER_NATIVE_URI_PROOF_FIELD],
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        )
+        if PUBLISHER_NATIVE_URI_PROOF_FIELD in item else None
+    )
+    registered_coordinate_certificate_json = (
+        json.dumps(
+            item[REGISTERED_COORDINATE_CERTIFICATE_FIELD],
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        )
+        if REGISTERED_COORDINATE_CERTIFICATE_FIELD in item else None
+    )
+    generic_locator_certificate_json = (
+        json.dumps(
+            item[GENERIC_ARTICLE_LOCATOR_CERTIFICATE_FIELD],
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        )
+        if GENERIC_ARTICLE_LOCATOR_CERTIFICATE_FIELD in item else None
+    )
+    titleless_native_venue_composition_json = (
+        json.dumps(
+            item[TITLELESS_NATIVE_VENUE_COMPOSITION_FIELD],
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        )
+        if TITLELESS_NATIVE_VENUE_COMPOSITION_FIELD in item else None
+    )
+    values: list[Any] = [
+        ref_id, order, "ordinary" if ordinary else "minimal", proof_json,
+        registered_coordinate_certificate_json, generic_locator_certificate_json,
+        titleless_native_venue_composition_json,
+    ]
     for name in scalar_fields:
         value = item.get(name)
         if name in {"author_match", "year_match", "year_mismatch_plausible", "ordinal_conflict", "author_conflict", "year_conflict", "venue_conflict", "metadata_conflict"} and name in item:
@@ -1026,7 +1914,12 @@ def _write_metadata(conn: sqlite3.Connection, ref_id: str, order: int, item: Jso
         METADATA_COORDINATE_COMPARISONS_FIELD,
     ):
         values.extend((int(name in item), len(item.get(name, []))))
-    columns = ["ref_id", "attempt_order", "metadata_kind"]
+    columns = [
+        "ref_id", "attempt_order", "metadata_kind",
+        "publisher_native_uri_proof_json", "registered_coordinate_certificate_json",
+        "generic_article_locator_certificate_json",
+        "titleless_native_venue_composition_json",
+    ]
     for name in scalar_fields:
         columns.extend((name, f"{name}_present"))
     for name in (
@@ -1165,6 +2058,27 @@ def _write_provider(conn: sqlite3.Connection, ref_id: str, order: int, item: Jso
     for name in PROVIDER_OBJECT_FIELDS:
         columns.append(f"{name}_present")
         values.append(int(name in item))
+    native_work_proof = item.get(CROSSREF_NATIVE_WORK_PROOF_FIELD)
+    columns.extend(("crossref_native_work_proof_json", "crossref_native_work_proof_present"))
+    values.extend((
+        json.dumps(native_work_proof, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        if native_work_proof is not None else None,
+        int(CROSSREF_NATIVE_WORK_PROOF_FIELD in item),
+    ))
+    datacite_native_doi_proof = item.get(DATACITE_NATIVE_DOI_PROOF_FIELD)
+    columns.extend((
+        "datacite_native_doi_proof_json",
+        "datacite_native_doi_proof_present",
+    ))
+    values.extend((
+        json.dumps(
+            datacite_native_doi_proof,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ) if datacite_native_doi_proof is not None else None,
+        int(DATACITE_NATIVE_DOI_PROOF_FIELD in item),
+    ))
     conn.execute(
         f"INSERT INTO resolve_attempt_provider_details({','.join(columns)}) VALUES({','.join('?' for _ in columns)})",
         tuple(values),
@@ -1363,6 +2277,42 @@ def _read_metadata(conn: sqlite3.Connection, ref_id: str, order: int) -> JsonDic
             out[name] = value
         elif row[name] is not None:
             raise RuntimeError("typed resolve attempt metadata has an absent value")
+    proof_json = row["publisher_native_uri_proof_json"]
+    if proof_json is not None:
+        try:
+            out[PUBLISHER_NATIVE_URI_PROOF_FIELD] = json.loads(proof_json)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("typed resolve attempt publisher native URI proof is malformed") from exc
+    registered_coordinate_certificate_json = row["registered_coordinate_certificate_json"]
+    if registered_coordinate_certificate_json is not None:
+        try:
+            out[REGISTERED_COORDINATE_CERTIFICATE_FIELD] = json.loads(
+                registered_coordinate_certificate_json,
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "typed resolve attempt registered coordinate certificate is malformed"
+            ) from exc
+    generic_certificate_json = row["generic_article_locator_certificate_json"]
+    if generic_certificate_json is not None:
+        try:
+            out[GENERIC_ARTICLE_LOCATOR_CERTIFICATE_FIELD] = json.loads(
+                generic_certificate_json,
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "typed resolve attempt generic article locator certificate is malformed"
+            ) from exc
+    venue_composition_json = row["titleless_native_venue_composition_json"]
+    if venue_composition_json is not None:
+        try:
+            out[TITLELESS_NATIVE_VENUE_COMPOSITION_FIELD] = json.loads(
+                venue_composition_json,
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "typed resolve attempt generic locator venue companion is malformed"
+            ) from exc
     for kind, key in (("cited", "cited_ordinals"), ("matched", "matched_ordinals")):
         children = list(conn.execute(
             "SELECT ordinal_order,ordinal_value FROM resolve_attempt_metadata_ordinals "
@@ -1604,6 +2554,41 @@ def _read_provider(conn: sqlite3.Connection, ref_id: str, order: int) -> JsonDic
         raise RuntimeError("typed resolve attempt provider identity search state is inconsistent")
     if identity_search is not None:
         out["identity_search"] = {key: identity_search[key] for key in ("resolver", "query_contract", "completion", "outcome")}
+
+    native_proof_present = _boolean(
+        row["crossref_native_work_proof_present"], "provider Crossref native proof presence",
+    )
+    native_proof_json = row["crossref_native_work_proof_json"]
+    if native_proof_present:
+        try:
+            out[CROSSREF_NATIVE_WORK_PROOF_FIELD] = _validate_crossref_native_work_proof(
+                json.loads(native_proof_json)
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("typed resolve attempt Crossref native proof is malformed") from exc
+    elif native_proof_json is not None:
+        raise RuntimeError("typed resolve attempt Crossref native proof has an absent value")
+
+    datacite_proof_present = _boolean(
+        row["datacite_native_doi_proof_present"],
+        "provider DataCite native DOI proof presence",
+    )
+    datacite_proof_json = row["datacite_native_doi_proof_json"]
+    if datacite_proof_present:
+        try:
+            out[DATACITE_NATIVE_DOI_PROOF_FIELD] = (
+                _validate_datacite_native_doi_proof(
+                    json.loads(datacite_proof_json)
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "typed resolve attempt DataCite native DOI proof is malformed"
+            ) from exc
+    elif datacite_proof_json is not None:
+        raise RuntimeError(
+            "typed resolve attempt DataCite native DOI proof has an absent value"
+        )
 
     metadata_present = _boolean(row["metadata_match_present"], "provider metadata presence")
     metadata_exists = conn.execute(

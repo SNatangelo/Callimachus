@@ -1,0 +1,92 @@
+[
+  {
+    "filename": "brotli-1.2.0-cp313-cp313-win_amd64.whl",
+    "bytes": 368669,
+    "sha256": "55b1f6148559fcd828da50582e31ad10afd7e00c6a6d2ba3926316eae816e538"
+  },
+  {
+    "filename": "cffi-2.1.1-cp313-cp313-win_amd64.whl",
+    "bytes": 185472,
+    "sha256": "2b7bb3262056d3d9e57ae35d5eee595a8b57a46852b0d84ec7aede97519fa918"
+  },
+  {
+    "filename": "charset_normalizer-3.5.1-cp313-cp313-win_amd64.whl",
+    "bytes": 206482,
+    "sha256": "92f316a691f6244af8a377a9e9d9d475945d25d474ee02556997b2a6491a84b7"
+  },
+  {
+    "filename": "cryptography-50.0.1-cp313-abi3-win_amd64.whl",
+    "bytes": 3668094,
+    "sha256": "f7bb6400ef0f1b80c9cbd03e2a8dc95c997947d132d220d241d3359c86eefa35"
+  },
+  {
+    "filename": "greenlet-3.5.6-cp313-cp313-win_amd64.whl",
+    "bytes": 246183,
+    "sha256": "9508191833a6de4b0fa4274a40e630fd116dc65cdfcf5091c822d9016ac9c09a"
+  },
+  {
+    "filename": "numpy-2.5.3-cp313-cp313-win_amd64.whl",
+    "bytes": 5742560,
+    "sha256": "fb3383c85e4cc19ae27928cf98ab8d7d54ebf21dbba380236e2eb7efec4369b8"
+  },
+  {
+    "filename": "onnxruntime-1.29.0-cp313-cp313-win_amd64.whl",
+    "bytes": 13736967,
+    "sha256": "339736db4d377e9e7a5e3bed1f3dfb17549cb5204505214daa010da9a6da4014"
+  },
+  {
+    "filename": "opencv_python-5.0.0.93-cp313-cp313-win_amd64.whl",
+    "bytes": 44604770,
+    "sha256": "fa034bc094fa0f8dc18afa4116d3cc5f351c19a2dedd5e33d5dc6cc4c7084c73"
+  },
+  {
+    "filename": "pillow-12.3.0-cp313-cp313-win_amd64.whl",
+    "bytes": 7066009,
+    "sha256": "b98eef34725f37115564f0d1f936b73475a97935b1f2de0abc64a68dd8d3c4ab"
+  },
+  {
+    "filename": "pyclipper-1.4.0-cp313-cp313-win_amd64.whl",
+    "bytes": 105873,
+    "sha256": "9198aa1e369368f4b2b18ecea09994f3e18bd171f5d6dce336deac04096f4330"
+  },
+  {
+    "filename": "pyinstaller-6.22.3-py3-none-any.whl",
+    "bytes": 2429320,
+    "sha256": "867b8f997050d38ddfeba7f9193cb4f3580905b7a4e1f280ca1156a8db75796d"
+  },
+  {
+    "filename": "pymupdf-1.28.0-cp313-abi3-win_amd64.whl",
+    "bytes": 19802056,
+    "sha256": "6a1ffc1bae2bb77d9f0d2eca9d78b2c3a1516572dca9a3cd8a3132df4896fde6"
+  },
+  {
+    "filename": "pyyaml-6.0.3-cp313-cp313-win_amd64.whl",
+    "bytes": 154959,
+    "sha256": "882e98867ea3988226393a041bc37b339ad649696a33d7ffbf077a435860fb0b"
+  },
+  {
+    "filename": "shapely-2.1.2-cp313-cp313-win_amd64.whl",
+    "bytes": 433704,
+    "sha256": "e062342eb45e2553c921d8355bacf74dbeabefd181ccf85e03e92a31aa1e14f3"
+  },
+  {
+    "filename": "pyside6_addons-6.11.2-cp310-abi3-win_amd64.whl",
+    "bytes": 265751,
+    "sha256": "c8fd2f4b90f2d14740c6bb40037e980d2ec3895eafcb6297c7443df5a54f575e"
+  },
+  {
+    "filename": "pyside6_essentials-6.11.2-cp310-abi3-win_amd64.whl",
+    "bytes": 21168485,
+    "sha256": "a1d626c0832f1c7e2d518cf893a55052d05f574e323173b9e7dfae8047e4eda7"
+  },
+  {
+    "filename": "pyside6-6.11.2-cp310-abi3-win_amd64.whl",
+    "bytes": 251756,
+    "sha256": "8360a21640c078cf1f977a18f363a66c9ddd38535c33fff8e2faadebf2737dfa"
+  },
+  {
+    "filename": "shiboken6-6.11.2-cp310-abi3-win_amd64.whl",
+    "bytes": 284798,
+    "sha256": "787a7a5eab1a307a77b9116824e28269731a64b28182e7e1dbd7ad31137ad746"
+  }
+]

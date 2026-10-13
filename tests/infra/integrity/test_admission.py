@@ -7,6 +7,8 @@ import builtins
 import hashlib
 import os
 import sqlite3
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +19,7 @@ from core.infra.integrity import admission
 from core.infra.integrity import authority as authority_module
 from core.infra.integrity.authority import AUTHORITY_PROTOCOL_VERSION
 from core.infra.integrity.service import _parse_peer_identities, dispatch_request
+from core.shared.filesystem_paths import io_path
 from tests._recovery_fixtures import _current_fetch_task
 
 
@@ -152,13 +155,13 @@ def _request(run_dir, payload):
 def test_peer_identities_are_server_configured_and_strict():
     assert _parse_peer_identities([
         "1001=agent:codex",
-        "1002=operator:test-operator",
+        "1002=operator:stena",
     ]) == {
         1001: "agent:codex",
-        1002: "operator:test-operator",
+        1002: "operator:stena",
     }
     with pytest.raises(AuthorityError, match="duplicated"):
-        _parse_peer_identities(["1001=agent:codex", "1001=operator:test-operator"])
+        _parse_peer_identities(["1001=agent:codex", "1001=operator:stena"])
     with pytest.raises(AuthorityError, match="CLASS:IDENTITY"):
         _parse_peer_identities(["1001=user:codex"])
 
@@ -287,6 +290,37 @@ def test_missing_admitted_file_aborts_without_persisting_an_answer(tmp_path):
     assert authority.check(
         str(run_dir), authenticated_caller="agent:codex@uid:1001"
     )["status"] == "clean"
+
+
+def test_admission_copies_source_from_a_windows_long_path(tmp_path):
+    source_root = tmp_path / "long-source"
+    source_root.mkdir()
+    source_path = source_root / "long-source.pdf"
+    while len(str(source_path)) <= 270:
+        source_root = source_root / ("d" * 80)
+        Path(io_path(source_root)).mkdir()
+        source_path = source_root / "long-source.pdf"
+    payload = b"long-path admitted PDF bytes"
+    try:
+        with open(io_path(source_path), "wb") as handle:
+            handle.write(payload)
+        assert len(str(source_path)) > 260
+
+        destination = tmp_path / "admitted.pdf"
+        record = admission._copy_one_file(
+            str(source_path), str(destination),
+            run_dir=str(tmp_path), remaining_answer_bytes=1024,
+        )
+
+        assert destination.read_bytes() == payload
+        assert record == {
+            "original_name": "long-source.pdf",
+            "stored_path": "admitted.pdf",
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "byte_count": len(payload),
+        }
+    finally:
+        shutil.rmtree(io_path(tmp_path / "long-source"))
 
 
 def test_admitted_source_accepts_windows_case_canonicalization(

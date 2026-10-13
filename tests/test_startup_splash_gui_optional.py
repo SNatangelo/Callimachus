@@ -1,19 +1,58 @@
 # tests/test_startup_splash_gui_optional.py
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Startup splash handoff, cancellation and error handling."""
 
 from __future__ import annotations
+
 import threading
 import time
+
 import pytest
+
 from core.gui.startup_splash import run_with_splash
+
+
 def _application(monkeypatch):
     pytest.importorskip("PySide6")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
 
     return QApplication.instance() or QApplication([])
+
+
+def test_native_chrome_and_splash_use_packaged_blue_mark(monkeypatch):
+    app = _application(monkeypatch)
+    previous_app_icon = app.windowIcon()
+    from PySide6 import QtCore, QtGui, QtWidgets
+    from core.gui.guided_fetch import _callimachus_icon
+    from core.gui.startup_splash import _create_splash
+
+    chrome_icon = _callimachus_icon(QtCore, QtGui)
+    splash = _create_splash(QtCore, QtGui, QtWidgets)
+    try:
+        splash_icon = splash.windowIcon()
+        for icon in (chrome_icon, splash_icon, app.windowIcon()):
+            assert not icon.isNull()
+            image = icon.pixmap(96, 96).toImage().convertToFormat(
+                QtGui.QImage.Format.Format_RGBA8888
+            )
+            blue_pixels = 0
+            white_pixels = 0
+            for y in range(image.height()):
+                for x in range(image.width()):
+                    color = image.pixelColor(x, y)
+                    if color.alpha() > 200 and color.blue() > 100 and color.blue() > color.red() * 1.3:
+                        blue_pixels += 1
+                    if color.alpha() > 200 and color.red() > 220 and color.green() > 220 and color.blue() > 220:
+                        white_pixels += 1
+            assert blue_pixels > 100
+            assert white_pixels > 5
+        assert chrome_icon.pixmap(96, 96).toImage() == splash_icon.pixmap(96, 96).toImage()
+    finally:
+        splash.close()
+        app.setWindowIcon(previous_app_icon)
+
+
 def test_splash_is_visible_while_prepare_runs_and_closes_after_handoff(monkeypatch):
     app = _application(monkeypatch)
     from PySide6.QtCore import QThread, QTimer
@@ -96,6 +135,8 @@ def test_splash_is_visible_while_prepare_runs_and_closes_after_handoff(monkeypat
         watchdog.stop()
         prepare_release.set()
         app.setQuitOnLastWindowClosed(previous_quit_setting)
+
+
 def test_native_close_cancels_promptly_without_waiting_for_prepare(monkeypatch):
     app = _application(monkeypatch)
     from PySide6.QtCore import Qt, QTimer
@@ -143,6 +184,8 @@ def test_native_close_cancels_promptly_without_waiting_for_prepare(monkeypatch):
         "window_icon": True,
         "native_close_button": True,
     }
+
+
 def test_prepare_and_start_errors_are_reraised_and_zero_requires_handoff(monkeypatch):
     app = _application(monkeypatch)
     previous_quit_setting = app.quitOnLastWindowClosed()
@@ -168,6 +211,8 @@ def test_prepare_and_start_errors_are_reraised_and_zero_requires_handoff(monkeyp
 
     assert run_with_splash(prepare=lambda: None, start=lambda: 7) == 7
     assert app.quitOnLastWindowClosed() is previous_quit_setting
+
+
 def test_close_during_initial_show_skips_prepare_and_event_loop(monkeypatch):
     app = _application(monkeypatch)
     from PySide6.QtCore import QTimer

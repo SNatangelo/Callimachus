@@ -1,0 +1,23 @@
+{
+  "omegaconf": {
+    "wheel_sha256": "9e349fd76819b95b47aa628edea1ff83fed5b25108608abdd6c7fdca188e302a",
+    "package_and_metadata_files_equal": 12
+  },
+  "mupdf": {
+    "wheel_sha256": "e01e90fd86abfeb37ceb921eddb951f988a11d45ff6ce6b7664f2039849068ec",
+    "verified_original_components": [
+      {
+        "wheel_path": "pymupdf/mupdfcpp64.dll",
+        "sha256": "6d26bbdcbbb2489fd1343a7f317aecd5614243b98d6db5c3776db170a6edfea7"
+      },
+      {
+        "wheel_path": "pymupdf/mupdf-devel/lib/mupdfcpp64.lib",
+        "sha256": "3efaf06f68442e6a6e0a2350be945b960043861c62242fc6e0a894ae3d4d1e6e"
+      },
+      {
+        "wheel_path": "pymupdf/mupdf-devel/lib/libmuthreads.lib",
+        "sha256": "08b42109f279bd802917e3a7aa997f9cbfeb674d189e4cbba030e8d649243c96"
+      }
+    ]
+  }
+}

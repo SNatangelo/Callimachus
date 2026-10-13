@@ -67,6 +67,7 @@ Usage:
 import argparse
 import hashlib
 import html
+import ipaddress
 import json
 import os
 import re
@@ -74,6 +75,7 @@ import sys
 import time
 import urllib.error
 import urllib.parse
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 try:
@@ -82,11 +84,16 @@ try:
     from . import retraction_watch as _rw
     from core.infra import perf as _perf
     from .providers.openalex import raw_source_pdf_url as _openalex_raw_source_pdf_url
+    from .providers.europepmc import (
+        _discovered_doi_metadata_candidate as _europepmc_discovered_doi_metadata_candidate,
+    )
     from . import providers as resolver_modules
     from .journal_authority import assess_local_journal
     from .bibliographic_adjudication import (
         adjudicate_bibliographic_evidence,
         has_unresolved_identity_attempt,
+        _publisher_literal_article_uri,
+        _resolved_identity_is_locked,
     )
     from . import policy as resolver_policy
     from .books import (
@@ -100,10 +107,17 @@ try:
     )
     from . import http as _http
     from .decision import (
+        _PUBLISHER_NATIVE_HTML_QUERY_CONTRACT,
+        _PUBLISHER_NATIVE_URI_QUERY_CONTRACT,
+        _PUBLISHER_NATIVE_URI_VALIDATED_VIA,
         _build_resolution_decision,
+        _has_published_journal_unit,
+        _is_published_preprint_candidate,
+        _metadata_identity_not_admitted,
         _prefer_metadata_candidate,
         _promote_validated_identifier,
         _result_has_pdf,
+        _withhold_metadata_candidate_identity,
     )
     from .identifiers import (
         _doi_handle,
@@ -128,11 +142,17 @@ try:
         _aggregate_metadata_identity_signals,
         _article_like_resolution_candidate,
         _article_title_candidate,
+        _author_names_equivalent,
         _canonical_link_host,
+        _fold_author,
         _first_author_key,
         _metadata_has_canonical_host,
         _metadata_match_profile,
+        _metadata_candidate_rejection_reason,
         _genuine_author_conflict,
+        _has_structurally_titleless_article_coordinates,
+        _pubmed_titleless_coordinate_profile_supported,
+        _pubmed_titled_coordinate_profile_supported,
         is_unique_same_work_correction_candidate,
         is_same_work_correction_shape,
         requires_same_work_correction_author_gate,
@@ -151,11 +171,16 @@ except ImportError:  # direct execution
     from resolve import retraction_watch as _rw
     import perf as _perf
     from resolve.providers.openalex import raw_source_pdf_url as _openalex_raw_source_pdf_url
+    from resolve.providers.europepmc import (
+        _discovered_doi_metadata_candidate as _europepmc_discovered_doi_metadata_candidate,
+    )
     from resolve import providers as resolver_modules
     from resolve.journal_authority import assess_local_journal
     from resolve.bibliographic_adjudication import (
         adjudicate_bibliographic_evidence,
         has_unresolved_identity_attempt,
+        _publisher_literal_article_uri,
+        _resolved_identity_is_locked,
     )
     from resolve import policy as resolver_policy
     from resolve.books import (
@@ -168,10 +193,17 @@ except ImportError:  # direct execution
         _resolve_book,
     )
     from resolve.decision import (
+        _PUBLISHER_NATIVE_HTML_QUERY_CONTRACT,
+        _PUBLISHER_NATIVE_URI_QUERY_CONTRACT,
+        _PUBLISHER_NATIVE_URI_VALIDATED_VIA,
         _build_resolution_decision,
+        _has_published_journal_unit,
+        _is_published_preprint_candidate,
+        _metadata_identity_not_admitted,
         _prefer_metadata_candidate,
         _promote_validated_identifier,
         _result_has_pdf,
+        _withhold_metadata_candidate_identity,
     )
     _http = importlib.import_module("resolve.http")
     from resolve.identifiers import (
@@ -197,11 +229,17 @@ except ImportError:  # direct execution
         _aggregate_metadata_identity_signals,
         _article_like_resolution_candidate,
         _article_title_candidate,
+        _author_names_equivalent,
         _canonical_link_host,
+        _fold_author,
         _first_author_key,
         _metadata_has_canonical_host,
         _metadata_match_profile,
+        _metadata_candidate_rejection_reason,
         _genuine_author_conflict,
+        _has_structurally_titleless_article_coordinates,
+        _pubmed_titleless_coordinate_profile_supported,
+        _pubmed_titled_coordinate_profile_supported,
         is_unique_same_work_correction_candidate,
         is_same_work_correction_shape,
         requires_same_work_correction_author_gate,
@@ -393,6 +431,109 @@ def _article_coordinate_eligible(ref: dict) -> bool:
     )
 
 
+def _pubmed_titleless_candidate_is_supported(
+    ref: dict,
+    candidate: dict,
+    profile: dict,
+    *,
+    journal: str,
+    year: str,
+    volume: str,
+    first_page: str,
+    author: str,
+) -> bool:
+    """Validate the fetched ECitMatch route plus strict titleless coordinates."""
+    if (
+        not _has_structurally_titleless_article_coordinates(ref)
+        or candidate.get("status") != "resolved"
+        or candidate.get("via") != "pubmed_citation_match"
+    ):
+        return False
+    try:
+        http_status = int(candidate.get("ecitmatch_http_status"))
+    except (TypeError, ValueError):
+        return False
+    pmid = str(candidate.get("pmid") or "").strip()
+    article_ids = candidate.get("article_ids")
+    if (
+        not 200 <= http_status < 300
+        or not pmid.isdigit()
+        or not isinstance(article_ids, dict)
+        or not _sources._DOI_SHAPE_RE.fullmatch(
+            _normalize_doi_value(article_ids.get("doi")) or ""
+        )
+    ):
+        return False
+    listed_pmid = article_ids.get("pubmed") or article_ids.get("pmid")
+    if listed_pmid and str(listed_pmid).strip() != pmid:
+        return False
+    body = candidate.get("ecitmatch_body")
+    if not isinstance(body, str):
+        return False
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return False
+    fields = lines[0].split("|")
+    expected = (journal, year, volume, first_page, author, "callimachus")
+    echoed = tuple(" ".join(item.split()).casefold() for item in fields[:6])
+    wanted = tuple(" ".join(item.split()).casefold() for item in expected)
+    return bool(
+        len(fields) == 7
+        and echoed == wanted
+        and fields[-1].strip() == pmid
+        and _pubmed_titleless_coordinate_profile_supported(ref, profile)
+    )
+
+
+def _pubmed_titled_candidate_is_supported(
+    ref: dict,
+    candidate: dict,
+    profile: dict,
+    *,
+    journal: str,
+    year: str,
+    volume: str,
+    first_page: str,
+    author: str,
+) -> bool:
+    """Validate the complete, literal-title PubMed identity certificate."""
+    if (
+        candidate.get("status") != "resolved"
+        or candidate.get("via") != "pubmed_citation_match"
+        or not _pubmed_titled_coordinate_profile_supported(ref, profile)
+    ):
+        return False
+    try:
+        http_status = int(candidate.get("ecitmatch_http_status"))
+    except (TypeError, ValueError):
+        return False
+    pmid = str(candidate.get("pmid") or "").strip()
+    article_ids = candidate.get("article_ids")
+    if (
+        not 200 <= http_status < 300
+        or not pmid.isdigit()
+        or not isinstance(article_ids, dict)
+        or str(article_ids.get("pubmed") or article_ids.get("pmid") or "").strip() != pmid
+        or not _normalize_doi_value(article_ids.get("doi"))
+    ):
+        return False
+    body = candidate.get("ecitmatch_body")
+    if not isinstance(body, str):
+        return False
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return False
+    fields = lines[0].split("|")
+    expected = (journal, year, volume, first_page, author, "callimachus")
+    echoed = tuple(" ".join(item.split()).casefold() for item in fields[:6])
+    wanted = tuple(" ".join(item.split()).casefold() for item in expected)
+    return bool(
+        len(fields) == 7
+        and echoed == wanted
+        and fields[-1].strip() == pmid
+    )
+
+
 def _journal_issue_eligible(ref: dict) -> bool:
     """Whether a citation structurally supports a journal issue check."""
     if not isinstance(ref, dict):
@@ -441,11 +582,37 @@ def _pubmed_coordinate_correction_search(ref: dict) -> dict | None:
         ),
     }
     metadata_match = _metadata_match_profile(ref, msg, candidate.get("matched_title"))
+    titleless_support = _pubmed_titleless_candidate_is_supported(
+        ref,
+        candidate,
+        metadata_match,
+        journal=journal,
+        year=year,
+        volume=volume,
+        first_page=first_page,
+        author=str(author),
+    )
+    titled_support = _pubmed_titled_candidate_is_supported(
+        ref,
+        candidate,
+        metadata_match,
+        journal=journal,
+        year=year,
+        volume=volume,
+        first_page=first_page,
+        author=str(author),
+    )
     accepted = (
         metadata_match.get("ordinal_conflict") is not True
-        and (metadata_match.get("title_overlap") or 0) >= 0.90
-        and metadata_match.get("author_match") is True
-        and metadata_match.get("year_match") is not False
+        and (
+            (
+                (metadata_match.get("title_overlap") or 0) >= 0.90
+                and metadata_match.get("author_match") is True
+                and metadata_match.get("year_match") is not False
+            )
+            or titleless_support
+            or titled_support
+        )
     )
     article_ids = candidate.get("article_ids") or {}
     identifiers = {
@@ -529,6 +696,12 @@ def _pubmed_coordinate_occupancy_search(
                 ),
             }
             profile = _metadata_match_profile(ref, msg, candidate.get("matched_title"))
+        elif _has_structurally_titleless_article_coordinates(ref):
+            # The source-spanned raw tuple proves the title is absent. Preserve
+            # the provider's coordinate comparisons, but do not treat a
+            # titleless comparison as evidence of a different occupant.
+            profile = dict(profile)
+            profile["title_overlap"] = None
         comparisons = {
             item["kind"]: item for item in profile.get("coordinate_comparisons") or ()
         }
@@ -918,10 +1091,18 @@ def _adopt_preferred_metadata_candidate(
     ref: dict,
     current: dict | None,
     candidate: dict | None,
+    attempts: list[dict] | None = None,
 ) -> dict | None:
+    if _is_published_preprint_candidate(ref, candidate, attempts):
+        return None if _is_published_preprint_candidate(ref, current, attempts) else current
     if candidate is None:
-        return current
-    preferred = _prefer_metadata_candidate(ref, current, candidate)
+        return None if _is_published_preprint_candidate(ref, current, attempts) else current
+    current_is_published_preprint = _is_published_preprint_candidate(ref, current, attempts)
+    if current_is_published_preprint and candidate.get("status") != "resolved":
+        return None
+    if current_is_published_preprint:
+        current = None
+    preferred = _prefer_metadata_candidate(ref, current, candidate, attempts)
     if preferred is None:
         return None
     if preferred is candidate and current and current is not candidate:
@@ -988,11 +1169,92 @@ def _result_doi(result: dict | None) -> str:
     return ""
 
 
+def _promote_validated_identifier_once(
+    ref: dict,
+    result: dict | None,
+    attempts: list[dict],
+    *,
+    trusted_publisher_uri_attestation: bool = False,
+) -> dict | None:
+    """Do not repeat a direct Crossref validation already recorded this run."""
+    doi = _normalize_doi_value(_result_doi(result))
+    has_matching_validation = any(
+        isinstance(attempt, dict)
+        and attempt.get("via") == "identifier_validation:crossref"
+        and attempt.get("identifier_type") == "doi"
+        and _normalize_doi_value(attempt.get("identifier_value")) == doi
+        for attempt in attempts or ()
+    )
+    has_matching_epmc_discovery = any(
+        isinstance(attempt, dict)
+        and attempt.get("via") == "europepmc"
+        and _normalize_doi_value(attempt.get("doi") or _attempt_doi(attempt)) == doi
+        for attempt in attempts or ()
+    )
+    if (
+        doi
+        and not ref.get("doi")
+        and has_matching_validation
+        and has_matching_epmc_discovery
+        and not _is_published_preprint_candidate(ref, result, attempts)
+    ):
+        return result
+    if trusted_publisher_uri_attestation:
+        return _promote_validated_identifier(
+            ref, result, attempts, trusted_publisher_uri_attestation=True,
+        )
+    return _promote_validated_identifier(ref, result, attempts)
+
+
+def _attempt_doi(attempt: dict | None) -> str:
+    identifiers = attempt.get("identifiers") if isinstance(attempt, dict) else None
+    return str(identifiers.get("doi") or "") if isinstance(identifiers, dict) else ""
+
+
 def _resolved_identifier_summary(result: dict | None) -> dict | None:
     if not isinstance(result, dict):
         return None
     summary = result.get("resolved_identifier")
     return summary if isinstance(summary, dict) else None
+
+
+def _crossref_metadata_search_complete(attempts: list[dict]) -> bool:
+    """Whether Crossref metadata discovery already completed this citation search."""
+    return any(
+        isinstance(attempt, dict)
+        and attempt.get("via") == "crossref_metadata"
+        and isinstance(attempt.get("identity_search"), dict)
+        and attempt["identity_search"].get("completion") == "complete"
+        and isinstance(attempt["identity_search"].get("outcome"), str)
+        and bool(attempt["identity_search"]["outcome"].strip())
+        and attempt["identity_search"]["outcome"] != "inconclusive"
+        for attempt in attempts or []
+    )
+
+
+def _epmc_title_search_requires_crossref(
+    ref: dict,
+    result: dict | None,
+    attempts: list[dict],
+) -> bool:
+    """Continue article discovery after a provisional, identifier-free EPMC title hit."""
+    return bool(
+        isinstance(result, dict)
+        and result.get("status") == "resolved"
+        and result.get("via") == "europepmc"
+        and result.get("resolution_basis") == "metadata_search"
+        and not ref.get("doi")
+        and not ref.get("pmid")
+        and not ref.get("isbn")
+        and _resolved_identifier_summary(result) is None
+        and not _resolved_identity_is_locked(
+            ref,
+            {"has_author": _has_author(ref), "has_year": bool(ref.get("year"))},
+            result,
+            attempts,
+        )
+        and not _crossref_metadata_search_complete(attempts)
+    )
 
 
 def _resolved_identifier_type(result: dict | None) -> str | None:
@@ -1094,10 +1356,37 @@ def _co_identified(winner: dict, sibling: dict) -> bool:
         and abs(winner_year - sibling_year) > 1
     ):
         return False
+
+    winner_profile = winner.get("metadata_match") or {}
+    sibling_profile = sibling.get("metadata_match") or {}
+    same_doi_proof = bool(winner_doi and sibling_doi and winner_doi == sibling_doi)
+    if not same_doi_proof and (
+        winner_profile.get("author_match") is True
+        and sibling_profile.get("author_match") is False
+    ):
+        winner_cited = _fold_author(winner_profile.get("cited_first_author"))
+        sibling_cited = _fold_author(sibling_profile.get("cited_first_author"))
+        winner_observed = _fold_author(winner_profile.get("matched_first_author"))
+        sibling_observed = _fold_author(sibling_profile.get("matched_first_author"))
+        if (
+            winner_cited
+            and winner_cited == sibling_cited
+            and winner_observed
+            and sibling_observed
+            and _author_names_equivalent(winner_cited, winner_observed)
+            and not _author_names_equivalent(winner_cited, sibling_observed)
+            and not _author_names_equivalent(winner_observed, sibling_observed)
+        ):
+            return False
     return True
 
 
-def _harvest_co_identified_siblings(result: dict, attempts: list[dict]) -> dict:
+def _harvest_co_identified_siblings(
+    result: dict,
+    attempts: list[dict],
+    *,
+    ref: dict | None = None,
+) -> dict:
     """Fill a resolved result's missing abstract / full-text links from co-identified
     sibling attempts already collected, with no new network request.
 
@@ -1112,13 +1401,18 @@ def _harvest_co_identified_siblings(result: dict, attempts: list[dict]) -> dict:
     """
     if not isinstance(result, dict) or result.get("status") != "resolved":
         return result
+    if _is_published_preprint_candidate(ref, result, attempts):
+        return _promote_validated_identifier(ref, result, attempts)
     if result.get("abstract") and _links_have_fulltext(result.get("fulltext_links")):
-        return result
+        return _without_published_preprint_links(ref, result)
     enriched = dict(result)
+    enriched = _without_published_preprint_links(ref, enriched)
     for attempt in attempts or []:
         if not isinstance(attempt, dict) or attempt is result:
             continue
         if attempt.get("status") != "resolved" or attempt.get("enrichment_only"):
+            continue
+        if _is_published_preprint_candidate(ref, attempt, attempts):
             continue
         if attempt.get("via") and attempt.get("via") == result.get("via"):
             continue
@@ -1136,7 +1430,37 @@ def _harvest_co_identified_siblings(result: dict, attempts: list[dict]) -> dict:
         if not enriched.get("abstract") and attempt.get("abstract"):
             enriched["abstract"] = attempt.get("abstract")
             enriched["abstract_via"] = attempt.get("via")
-    return enriched
+    return _without_published_preprint_links(ref, enriched)
+
+
+def _without_published_preprint_links(ref: dict | None, result: dict) -> dict:
+    """Keep explicitly marked preprint files out of a published citation's content."""
+    if not _has_published_journal_unit(ref):
+        return result
+    sources = _sources
+    content_version_for = getattr(sources, "content_version_for", None)
+    host_is_preprint = getattr(sources, "host_is_preprint", None)
+    if not callable(content_version_for):
+        return result
+
+    def keep_link(link: object) -> bool:
+        if not isinstance(link, dict):
+            return True
+        is_preprint = content_version_for(
+            link.get("url"), link.get("content_version")
+        ) == "preprint"
+        if not is_preprint and callable(host_is_preprint):
+            is_preprint = host_is_preprint(link.get("url"))
+        return not is_preprint
+
+    filtered = dict(result)
+    for field in ("fulltext_links", "auxiliary_fulltext_links"):
+        links = filtered.get(field)
+        if isinstance(links, list):
+            kept = [link for link in links if keep_link(link)]
+            if kept != links:
+                filtered[field] = kept
+    return filtered
 
 
 def _attest_repository_record(
@@ -1257,7 +1581,7 @@ def _enrich_resolved_metadata(
         # Cheapest enrichment first: reuse abstract/full-text links already fetched by a
         # co-identified sibling resolver before re-querying providers by identifier
         # (which fails for DOI-less papers like older conference proceedings).
-        result = _harvest_co_identified_siblings(result, attempts)
+        result = _harvest_co_identified_siblings(result, attempts, ref=ref)
 
         via = result.get("via")
         enriched = dict(result)
@@ -1605,6 +1929,17 @@ def _reference_evidence_profile(ref: dict, result: dict, status: str,
                                 attempts: list[dict], overlap, prov: dict,
                                 coverage_article_lookups: list[dict] | None = None,
                                 coverage_payloads: list[dict] | None = None) -> dict:
+    def profile_metadata_match(value):
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: item for key, item in value.items()
+            if key not in (
+                "_publisher_native_uri_proof",
+                "_crossref_generic_article_locator_certificate",
+            )
+        }
+
     checks = _checks_completed(attempts)
     checks_incomplete = has_unresolved_identity_attempt(attempts)
     best = None
@@ -1614,7 +1949,7 @@ def _reference_evidence_profile(ref: dict, result: dict, status: str,
                 "source": a.get("via"),
                 "title": a.get("matched_title"),
                 "title_overlap": title_overlap(a.get("matched_title"), ref.get("raw_entry")),
-                "metadata_match": a.get("metadata_match"),
+                "metadata_match": profile_metadata_match(a.get("metadata_match")),
                 "authors": a.get("matched_authors"),
                 "status": a.get("status"),
                 "reason": a.get("reason"),
@@ -1638,7 +1973,7 @@ def _reference_evidence_profile(ref: dict, result: dict, status: str,
         "resolution_basis": prov.get("resolution_basis"),
         "existence_confidence": prov.get("existence_confidence"),
         "title_overlap": overlap,
-        "metadata_match": result.get("metadata_match"),
+        "metadata_match": profile_metadata_match(result.get("metadata_match")),
         "identifier_fallback": result.get("identifier_fallback"),
     }
     if result.get("issue_attestations") is not None:
@@ -1648,6 +1983,20 @@ def _reference_evidence_profile(ref: dict, result: dict, status: str,
         evidence["journal_authority"] = journal_authority
     from .journal_authority import assess_local_journal_alias
     journal_alias_assessment = assess_local_journal_alias(ref)
+    resolved_identifier = result.get("resolved_identifier") if isinstance(result, dict) else None
+    if (
+        journal_alias_assessment is None
+        and isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == "crossref:ambiguous_title_journal_boundary_certificate"
+    ):
+        from .providers import crossref_metadata
+
+        journal_alias_assessment = (
+            crossref_metadata._crossref_ambiguous_boundary_journal_alias_assessment(
+                ref, result, attempts,
+            )
+        )
     if journal_alias_assessment is not None:
         evidence["journal_alias_assessment"] = journal_alias_assessment
     evidence["bibliographic_adjudication"] = adjudicate_bibliographic_evidence(
@@ -1791,7 +2140,7 @@ def _reference_status_tag(ref: dict, status: str, evidence: dict, result: dict) 
     if status == "unverified":
         if adjudication.get("outcome") == "refuted" and coordinate_occupied:
             return "suspected_fabricated", "high", (
-                "no compatible work was reconstructed and PubMed positively identifies "
+                "no compatible work was reconstructed and recorded bibliographic evidence positively identifies "
                 "another work at the cited journal, year, volume, and starting page"
             )
         if issue_absent:
@@ -1811,7 +2160,9 @@ def _reference_status_tag(ref: dict, status: str, evidence: dict, result: dict) 
                 "completed independent bibliographic checks did not identify a compatible "
                 "source; this is an elevated non-diagnostic suspicion, not a fabrication finding"
             )
-        if evidence.get("indexability") != "high" and not _article_coordinate_eligible(ref):
+        if (evidence.get("source_kind") not in (None, "", "unknown")
+                and evidence.get("indexability") in {"low", "medium"}
+                and not _article_coordinate_eligible(ref)):
             return "unverified_low_indexability", "low", "source type has weak catalog/index coverage"
         if pre_index_era:
             return "unverified_low_indexability", "low", (
@@ -1886,7 +2237,7 @@ def _run_optional_resolvers(
             continue
         if r is None:
             continue
-        attempts.append(r)
+        _append_provider_attempt(attempts, r)
         if (
             r.get("via") == "tac_search" and r.get("status") == "resolved"
             and r.get("resolution_basis") == "canonical_source"
@@ -1894,7 +2245,7 @@ def _run_optional_resolvers(
         ):
             result = r
             continue
-        preferred = _adopt_preferred_metadata_candidate(ref, result, r)
+        preferred = _adopt_preferred_metadata_candidate(ref, result, r, attempts)
         if preferred is not None and preferred is not result:
             result = preferred
             continue
@@ -1933,12 +2284,12 @@ def _apply_optional_result(ref: dict, result: dict | None, attempts: list[dict],
     """Apply one resumed optional result without rerunning its completed suffix."""
     if r is None:
         return result
-    attempts.append(r)
+    _append_provider_attempt(attempts, r)
     if (r.get("via") == "tac_search" and r.get("status") == "resolved"
             and r.get("resolution_basis") == "canonical_source"
             and r.get("existence_confidence") == "high"):
         return r
-    preferred = _adopt_preferred_metadata_candidate(ref, result, r)
+    preferred = _adopt_preferred_metadata_candidate(ref, result, r, attempts)
     if preferred is not None and preferred is not result:
         return preferred
     result = resolver_policy.capture_same_work_companion_links(
@@ -1978,6 +2329,8 @@ def exhaust_provider_cooldown(
     """Close one bounded provider continuation without cancelling siblings."""
     if not isinstance(deferred, ProviderDeferredWork):
         return {"_provider_deferred_cancelled": True}
+    if deferred.kind == "discovery_fallback":
+        _validate_discovery_fallback_state(deferred.state)
     task = deferred.tasks.pop(provider, None)
     if task is None:
         return {"_provider_deferred_cancelled": True}
@@ -1991,6 +2344,36 @@ def exhaust_provider_cooldown(
         "retryable": False,
     }
     deferred.state["attempts"].append(exhaustion)
+    if deferred.kind == "discovery_fallback":
+        state = deferred.state
+        if state["stage"] == "primary":
+            state["stage"] = "fallback"
+            state["primary_result"] = None
+            state["blocked_preprint"] = False
+            state["next_fallback_index"] = 0
+        elif state["stage"] == "fallback_resume":
+            state["stage"] = "fallback"
+            state["deferred_fallback_index"] = -1
+        else:
+            state["next_fallback_index"] += 1
+        state["finish_current_round"] = True
+        if deferred.tasks:
+            raise deferred
+        deferred.terminal = True
+        try:
+            openalex_result = _continue_resolver_fallback(state)
+            result = _apply_openalex_result(
+                state["ref"], state["result"], state["attempts"], openalex_result,
+            )
+            return _complete_discovery_after_openalex(
+                state["ref"], result, state["attempts"],
+                publisher_uri_discovered_candidate_selected=(
+                    state["publisher_uri_discovered_candidate_selected"]
+                ),
+                discovery_only=state["discovery_only"],
+            )
+        except ProviderDeferredWork as next_work:
+            return next_work
     if deferred.kind == "discovery_provider" and deferred.state["result"] is None:
         # The absence of a response is uncertainty, never negative existence
         # evidence. Preserve the explicit bound in the final resolution while
@@ -2026,7 +2409,7 @@ def _complete_discovery_after_optional(
     source_type = ref.get("source_type", "unknown")
     source_kind = ref.get("source_kind")
     article_candidate = _article_like_resolution_candidate(ref)
-    result = _promote_validated_identifier(ref, result, attempts)
+    result = _promote_validated_identifier_once(ref, result, attempts)
     if result is not None and result.get("status") == "resolved":
         for module in resolver_policy.canonical_companion_modules(
             attempts, load_order=_load_fallback_order, registry=_resolver_registry,
@@ -2034,7 +2417,7 @@ def _complete_discovery_after_optional(
             r = _call_registry_resolver(module, ref)
             if r is None:
                 continue
-            attempts.append(r)
+            _append_provider_attempt(attempts, r)
             result = resolver_policy.capture_same_work_companion_links(
                 ref, result, r,
                 article_title_candidate=_article_title_candidate,
@@ -2192,16 +2575,28 @@ def _resolve_impl(ref: dict, *, discovery_only: bool = False) -> dict:
         # metadata/correction searches may still identify the intended work.
         result = authoritative_results[0]
 
-    # 1) DOI → Crossref. 404 = not_found (hard identifier error).
+    # 1) DOI → Crossref; the Handle registry can also confirm a declared DOI
+    # when Crossref transport is temporarily unavailable. It cannot override
+    # completed metadata validation or supply bibliographic/version evidence.
     if doi and "doi" not in superseded_schemes:
         r = _crossref_resolver_module().resolve_doi(doi, ref=ref)
         attempts.append(r)
-        if r["status"] == "not_found":
+        crossref_transport_unavailable = r["status"] == "unresolved" and (
+            r.get("reason") == "rate_limited (HTTP 429) - NOT fabrication"
+            or re.fullmatch(r"HTTP (?:408|429|5\d\d)", str(r.get("reason") or ""))
+            or re.fullmatch(
+                r"network: (?:HostCooldownExceeded|TimeoutError|URLError|"
+                r"ConnectionError|ConnectionResetError|ConnectionAbortedError|"
+                r"ConnectionRefusedError|RemoteDisconnected)",
+                str(r.get("reason") or ""),
+            )
+        )
+        if r["status"] == "not_found" or crossref_transport_unavailable:
             h = _doi_handle(doi)
             attempts.append(h)
             if h["status"] == "resolved":
                 result = h
-            elif h["status"] == "not_found":
+            elif h["status"] == "not_found" and r["status"] == "not_found":
                 result = {"status": "not_found", "via": "crossref+doi.org",
                           "reason": "DOI not found on Crossref or DOI resolver "
                                     "(hard identifier error)",
@@ -2321,7 +2716,7 @@ def _resolve_impl(ref: dict, *, discovery_only: bool = False) -> dict:
             r = _call_registry_resolver(module, ref)
             if r is None:
                 continue
-            attempts.append(r)
+            _append_provider_attempt(attempts, r)
             candidate = _promote_validated_identifier(ref, r, attempts)
             identifier = _resolved_identifier_summary(candidate)
             if (
@@ -2340,13 +2735,199 @@ def _resolve_impl(ref: dict, *, discovery_only: bool = False) -> dict:
                 result = candidate
                 break
 
-    if (result is None and article_candidate
-            and (source_type == "article" or _article_title_candidate(ref))):
-        r = _crossref_resolver_module().discover(ref)
-        attempts.append(r)
+    book_metadata_candidate = (
+        source_type == "book"
+        and source_kind in {"book_like", "chapter_like"}
+        and not isbn
+        and bool(_extract_book_title(ref))
+    )
+    article_metadata_candidate = bool(
+        article_candidate
+        and (source_type == "article" or _article_title_candidate(ref))
+    )
+    continue_crossref_after_epmc = bool(
+        article_metadata_candidate
+        and _epmc_title_search_requires_crossref(ref, result, attempts)
+    )
+    epmc_identity_locked_after_validation = False
+    if continue_crossref_after_epmc and _result_doi(result):
+        # Keep the continuation decision latched above, but validate the current
+        # EPMC DOI before another provider can replace it. Only the existing
+        # source-aware lock may protect this candidate from later adoption.
+        result = _promote_validated_identifier(ref, result, attempts)
+        epmc_identity_locked_after_validation = _resolved_identity_is_locked(
+            ref,
+            {"has_author": _has_author(ref), "has_year": bool(ref.get("year"))},
+            result,
+            attempts,
+        )
+    crossref_module = None
+    titleless_crossref_candidate = False
+    crossref_candidate_selected = False
+    epmc_discovered_candidate_selected = False
+    epmc_discovered_candidate_doi = None
+    publisher_discovered_candidate_selected = False
+    publisher_discovered_candidate_doi = None
+    publisher_uri_discovered_candidate_selected = False
+    publisher_uri_discovered_candidate_doi = None
+    if result is None and not article_candidate:
+        crossref_module = _resolver_registry().get("crossref_metadata")
+        crossref_supports = getattr(crossref_module, "supports", None)
+        titleless_crossref_candidate = bool(
+            callable(crossref_supports) and crossref_supports(ref)
+        )
+    if (
+        (result is None and (
+            article_metadata_candidate
+            or book_metadata_candidate
+            or titleless_crossref_candidate
+        ))
+        or continue_crossref_after_epmc
+    ):
+        r = (crossref_module or _crossref_resolver_module()).discover(ref)
+        _append_provider_attempt(attempts, r)
+        prior_result = result
         if r["status"] in ("resolved", "unverified"):
-            result = r
-    result = _promote_validated_identifier(ref, result, attempts)
+            if prior_result is None:
+                result = r
+                crossref_candidate_selected = True
+            elif r["status"] == "resolved":
+                preferred = (
+                    prior_result
+                    if epmc_identity_locked_after_validation
+                    else _adopt_preferred_metadata_candidate(ref, prior_result, r, attempts)
+                )
+                if preferred is not None:
+                    result = preferred
+                    crossref_candidate_selected = preferred is not prior_result
+        profile = r.get("metadata_match") if isinstance(r, dict) else None
+        candidate_ids = r.get("candidate_identifiers") if isinstance(r, dict) else None
+        candidate_doi = candidate_ids.get("doi") if isinstance(candidate_ids, dict) else None
+        if (
+            crossref_candidate_selected
+            and r.get("status") == "unverified"
+            and r.get("via") == "crossref_metadata"
+            and r.get("resolution_basis") == "metadata_search"
+            and not ref.get("doi")
+            and isinstance(r.get("matched_title"), str)
+            and isinstance(profile, dict)
+            and profile.get("author_match") is True
+            and profile.get("year_match") is True
+            and profile.get("title_overlap") is not None
+            and profile.get("title_overlap") < 0.85
+            and profile.get("ordinal_conflict") is not True
+            and profile.get("metadata_conflict") is not True
+            and isinstance(candidate_doi, str)
+            and bool(candidate_doi.strip())
+        ):
+            native_candidate = _europepmc_discovered_doi_metadata_candidate(
+                ref,
+                candidate_doi,
+            )
+            if isinstance(native_candidate, dict):
+                epmc_attempt = {
+                    key: value for key, value in native_candidate.items()
+                    if key != "candidate_identifiers"
+                }
+                _append_provider_attempt(attempts, epmc_attempt)
+            else:
+                _append_provider_attempt(attempts, native_candidate)
+            if isinstance(native_candidate, dict) and native_candidate.get("status") == "resolved":
+                result = native_candidate
+                epmc_discovered_candidate_selected = True
+                epmc_discovered_candidate_doi = candidate_doi
+            elif (
+                isinstance(native_candidate, dict)
+                and isinstance(native_candidate.get("identity_search"), dict)
+                and native_candidate["identity_search"].get("outcome")
+                in {"no_compatible_identity", "inconclusive"}
+            ):
+                publisher_candidate = _publisher_native_doi_candidate(
+                    ref,
+                    candidate_doi,
+                )
+                if isinstance(publisher_candidate, dict):
+                    publisher_attempt = {
+                        key: value for key, value in publisher_candidate.items()
+                        if key != "candidate_identifiers"
+                    }
+                    _append_provider_attempt(attempts, publisher_attempt)
+                else:
+                    _append_provider_attempt(attempts, publisher_candidate)
+                if (
+                    isinstance(publisher_candidate, dict)
+                    and publisher_candidate.get("status") == "resolved"
+                ):
+                    result = publisher_candidate
+                    publisher_discovered_candidate_selected = True
+                    publisher_discovered_candidate_doi = candidate_doi
+                elif (
+                    isinstance(publisher_candidate, dict)
+                    and isinstance(publisher_candidate.get("identity_search"), dict)
+                    and publisher_candidate["identity_search"].get("outcome")
+                    == "inconclusive"
+                ):
+                    publisher_uri_candidate = _publisher_native_pii_uri_candidate(
+                        ref,
+                        candidate_doi,
+                    )
+                    if isinstance(publisher_uri_candidate, dict):
+                        publisher_uri_attempt = {
+                            key: value for key, value in publisher_uri_candidate.items()
+                            if key != "candidate_identifiers"
+                        }
+                        _append_provider_attempt(attempts, publisher_uri_attempt)
+                    else:
+                        _append_provider_attempt(attempts, publisher_uri_candidate)
+                    if (
+                        isinstance(publisher_uri_candidate, dict)
+                        and publisher_uri_candidate.get("status") == "resolved"
+                    ):
+                        result = publisher_uri_candidate
+                        publisher_uri_discovered_candidate_selected = True
+                        publisher_uri_discovered_candidate_doi = candidate_doi
+    if publisher_uri_discovered_candidate_selected:
+        result = _promote_validated_identifier_once(
+            ref,
+            result,
+            attempts,
+            trusted_publisher_uri_attestation=True,
+        )
+    else:
+        result = _promote_validated_identifier_once(ref, result, attempts)
+    if (
+        epmc_discovered_candidate_selected
+        and isinstance(result, dict)
+        and result.get("status") == "resolved"
+        and _resolved_identifier_summary(result) is None
+    ):
+        result = _withhold_metadata_candidate_identity(
+            result,
+            doi=epmc_discovered_candidate_doi,
+            reason="Europe PMC candidate did not pass direct Crossref DOI validation",
+        )
+    if (
+        publisher_discovered_candidate_selected
+        and isinstance(result, dict)
+        and result.get("status") == "resolved"
+        and _resolved_identifier_summary(result) is None
+    ):
+        result = _withhold_metadata_candidate_identity(
+            result,
+            doi=publisher_discovered_candidate_doi,
+            reason="publisher candidate did not pass direct Crossref DOI validation",
+        )
+    if (
+        publisher_uri_discovered_candidate_selected
+        and isinstance(result, dict)
+        and result.get("status") == "resolved"
+        and _resolved_identifier_summary(result) is None
+    ):
+        result = _withhold_metadata_candidate_identity(
+            result,
+            doi=publisher_uri_discovered_candidate_doi,
+            reason="publisher PII URI candidate did not pass direct Crossref DOI validation",
+        )
 
     # 4) OpenAlex title search — universal index covering journals, arXiv, conference
     #    papers, bioRxiv, and more.  Called when:
@@ -2394,17 +2975,50 @@ def _resolve_impl(ref: dict, *, discovery_only: bool = False) -> dict:
                 "openalex_search", ref,
                 result=result, attempts=attempts,
                 can_use_title_search=bool(_article_title_candidate(ref)),
+                discovery_only=discovery_only,
+                publisher_uri_discovered_candidate_selected=(
+                    publisher_uri_discovered_candidate_selected
+                ),
             )
-            if r is not None and r.get("status") == "resolved":
-                if result is None or result.get("status") != "resolved":
-                    result = r
-                else:
-                    preferred = _adopt_preferred_metadata_candidate(ref, result, r)
-                    if preferred is not None and preferred is not result:
-                        result = preferred
-            elif r is not None and r["status"] == "unverified" and result is None:
-                result = r
-    result = _promote_validated_identifier(ref, result, attempts)
+            result = _apply_openalex_result(ref, result, attempts, r)
+    return _complete_discovery_after_openalex(
+        ref, result, attempts,
+        publisher_uri_discovered_candidate_selected=(
+            publisher_uri_discovered_candidate_selected
+        ),
+        discovery_only=discovery_only,
+    )
+
+
+def _apply_openalex_result(
+    ref: dict, result: dict | None, attempts: list[dict], candidate: dict | None,
+) -> dict | None:
+    """Apply one OpenAlex/fallback result using the normal resolver rules."""
+    if candidate is not None and candidate.get("status") == "resolved":
+        if result is None or result.get("status") != "resolved":
+            return candidate
+        preferred = _adopt_preferred_metadata_candidate(ref, result, candidate, attempts)
+        return preferred if preferred is not None and preferred is not result else result
+    if candidate is not None and candidate.get("status") == "unverified" and result is None:
+        return candidate
+    return result
+
+
+def _complete_discovery_after_openalex(
+    ref: dict, result: dict | None, attempts: list[dict], *,
+    publisher_uri_discovered_candidate_selected: bool, discovery_only: bool,
+) -> dict:
+    """Run the unchanged discovery suffix after the OpenAlex fallback stage."""
+    article_candidate = _article_like_resolution_candidate(ref)
+    if publisher_uri_discovered_candidate_selected:
+        result = _promote_validated_identifier_once(
+            ref,
+            result,
+            attempts,
+            trusted_publisher_uri_attestation=True,
+        )
+    else:
+        result = _promote_validated_identifier_once(ref, result, attempts)
 
     # 4.5) arXiv API title search — universal last-resort for papers that should be on
     #      arXiv but lack a DOI in the citation.  Many machine learning papers cite
@@ -2457,18 +3071,46 @@ def _resolve_impl(ref: dict, *, discovery_only: bool = False) -> dict:
             # if attempts are present; guard against None before string operations.
             if resolved_doi and any(resolved_doi.lower().startswith(prefix) for prefix in official_oa_doi_prefixes):
                 need_arxiv = True
-    if (need_arxiv and article_candidate
-            and _article_title_candidate(ref)):
+    if need_arxiv and article_candidate:
         arxiv_module = _resolver_registry().get("arxiv_search")
-        if arxiv_module is not None:
+        source_relation = getattr(
+            arxiv_module, "_source_published_relation_unit", None,
+        ) if arxiv_module is not None else None
+        source_relation_unit = (
+            source_relation(ref)
+            if callable(source_relation) else None
+        )
+        if arxiv_module is not None and (
+            _article_title_candidate(ref) or source_relation_unit is not None
+        ):
             arxiv_result = _call_registry_resolver(arxiv_module, ref)
             if arxiv_result is not None:
                 attempts.append(arxiv_result)
                 if arxiv_result["status"] == "resolved":
-                    preferred = _adopt_preferred_metadata_candidate(ref, result, arxiv_result)
-                    if preferred is not None:
-                        result = preferred
-    result = _promote_validated_identifier(ref, result, attempts)
+                    published_relation_check = getattr(
+                        arxiv_module, "_published_relation_proof_is_valid", None,
+                    )
+                    relation_proven = bool(
+                        callable(published_relation_check)
+                        and published_relation_check(ref, arxiv_result, attempts)
+                    )
+                    if relation_proven:
+                        result = arxiv_result
+                    else:
+                        preferred = _adopt_preferred_metadata_candidate(
+                            ref, result, arxiv_result, attempts,
+                        )
+                        if preferred is not None:
+                            result = preferred
+    if publisher_uri_discovered_candidate_selected:
+        result = _promote_validated_identifier_once(
+            ref,
+            result,
+            attempts,
+            trusted_publisher_uri_attestation=True,
+        )
+    else:
+        result = _promote_validated_identifier_once(ref, result, attempts)
 
     # 4.6) Semantic Scholar + Lens — optional metadata resolvers, consulted when
     #      the result is still missing or only a weak metadata match.  (They are
@@ -2498,30 +3140,171 @@ def _resolve_impl(ref: dict, *, discovery_only: bool = False) -> dict:
     )
 
 
+def _declared_doi_points_to_journal_container(ref: dict, result: dict | None) -> bool:
+    """Recognize a declared DOI resolving only to its cited journal container."""
+    if (
+        not isinstance(result, dict)
+        or result.get("status") != "resolved"
+        or result.get("via") != "crossref"
+        or str(result.get("work_type") or "").strip().casefold() != "journal"
+        or not _normalize_doi_value(ref.get("doi"))
+        or ref.get("source_type") != "article"
+        or ref.get("source_kind") != "article_like"
+        or ref.get("source_type_confidence") != "high"
+        or "journal_volume_issue_pages" not in (ref.get("source_type_evidence") or ())
+    ):
+        return False
+
+    cited_title = _title_key(ref.get("title"))
+    container_title = _title_key(_coordinate_value(ref, "container"))
+    matched_title = _title_key(result.get("matched_title"))
+    if not cited_title or not container_title or not matched_title:
+        return False
+    if matched_title != container_title or matched_title == cited_title:
+        return False
+
+    citation_coordinates = {
+        item.get("kind") for item in ref.get("cited_coordinates") or ()
+        if isinstance(item, dict)
+    }
+    locator_kinds = {"article_page_range", "elocator", "article_number", "article_locator"}
+    cited_locators = citation_coordinates & locator_kinds
+    if "volume" not in citation_coordinates or not cited_locators:
+        return False
+
+    profile = result.get("metadata_match")
+    comparisons = (profile or {}).get("coordinate_comparisons")
+    if not isinstance(comparisons, (list, tuple)):
+        return False
+    compared = {
+        item.get("kind"): item for item in comparisons if isinstance(item, dict)
+    }
+    # The candidate must be missing every cited locator.  A journal-typed
+    # Crossref record with article-level pages or an e-locator is not this case.
+    for kind in cited_locators:
+        item = compared.get(kind)
+        if item is None or str(item.get("matched_value") or "").strip():
+            return False
+    return True
+
+
 def _finalize_resolution(
     ref: dict, result: dict, attempts: list[dict], *, enrichment_continuation: dict | None = None,
 ) -> dict:
     """Apply enrichment and admission to a completed discovery state."""
+    if _is_published_preprint_candidate(ref, result, attempts):
+        result = _promote_validated_identifier(ref, result, attempts)
     doi = _normalize_doi_value(ref.get("doi"))
     pmid = ref.get("pmid")
     isbn = ref.get("isbn")
     raw_entry = ref.get("raw_entry")
+    declared_journal_container_mismatch = _declared_doi_points_to_journal_container(
+        ref, result,
+    )
+    if declared_journal_container_mismatch:
+        # Keep the original Crossref response in attempts.  The selected result
+        # carries only the declared-identifier error, so enrichment cannot use a
+        # journal record's abstract or full-text links as article evidence.
+        rejected = result
+        result = {
+            "status": "identifier_mismatch",
+            "via": rejected.get("via"),
+            "matched_title": rejected.get("matched_title"),
+            "reason": "declared DOI resolves to the journal container, not the cited article",
+            "resolution_basis": "doi",
+            "existence_confidence": "high",
+            "metadata_match": rejected.get("metadata_match"),
+        }
     result = _attest_repository_record(ref, result, attempts)
     result = _enrich_resolved_metadata(
         ref, result, attempts, continuation=enrichment_continuation,
     )
+    if _is_published_preprint_candidate(ref, result, attempts):
+        result = _promote_validated_identifier(ref, result, attempts)
     result = _annotate_primary_fulltext_links(result)
 
+    status = result["status"]
+    resolved_identifier = _resolved_identifier_summary(result) or {}
+    candidate_doi = _normalize_doi_value(result.get("doi"))
+    titleless_crossref_certificate = bool(
+        status == "resolved"
+        and result.get("via") == "crossref_metadata"
+        and result.get("resolution_basis") == "metadata_search"
+        and resolved_identifier.get("type") == "doi"
+        and (
+            resolved_identifier.get("validated_via")
+            == "crossref:complete_coordinate_certificate"
+            or (
+                resolved_identifier.get("validated_via")
+                == "crossref:generic_article_locator_role_certificate"
+                and isinstance(result.get("metadata_match"), dict)
+                and isinstance(result["metadata_match"].get(
+                    "_crossref_generic_article_locator_certificate"), dict)
+                and isinstance(result["metadata_match"][
+                    "_crossref_generic_article_locator_certificate"].get("source"), dict)
+                and result["metadata_match"][
+                    "_crossref_generic_article_locator_certificate"]["source"].get(
+                        "source_titleless") is True
+            )
+        )
+        and candidate_doi
+        and candidate_doi == _normalize_doi_value(resolved_identifier.get("value"))
+        and _resolved_identity_is_locked(ref, {}, result, attempts)
+    )
+    ambiguous_title_journal_crossref_certificate = bool(
+        status == "resolved"
+        and result.get("via") == "crossref_metadata"
+        and result.get("resolution_basis") == "metadata_search"
+        and resolved_identifier.get("type") == "doi"
+        and resolved_identifier.get("validated_via")
+        == "crossref:ambiguous_title_journal_boundary_certificate"
+        and candidate_doi
+        and candidate_doi == _normalize_doi_value(resolved_identifier.get("value"))
+        and _resolved_identity_is_locked(ref, {}, result, attempts)
+    )
+    registered_titled_crossref_certificate = bool(
+        status == "resolved"
+        and result.get("via") == "crossref_metadata"
+        and result.get("resolution_basis") == "metadata_search"
+        and resolved_identifier.get("type") == "doi"
+        and resolved_identifier.get("validated_via")
+        == "crossref:registered_coordinate_certificate"
+        and candidate_doi
+        and candidate_doi == _normalize_doi_value(resolved_identifier.get("value"))
+        and _resolved_identity_is_locked(ref, {}, result, attempts)
+    )
+    arxiv_published_relation_certificate = bool(
+        status == "resolved"
+        and result.get("via") == "crossref_metadata"
+        and result.get("resolution_basis") == "metadata_search"
+        and resolved_identifier.get("type") == "doi"
+        and resolved_identifier.get("validated_via")
+        == "crossref:arxiv_published_journal_unit_certificate"
+        and candidate_doi
+        and candidate_doi == _normalize_doi_value(resolved_identifier.get("value"))
+        and _resolved_identity_is_locked(ref, {}, result, attempts)
+    )
+    # A source-proved titleless certificate compares the complete author/year/
+    # venue/volume/locator tuple instead. Its Crossref title remains candidate
+    # metadata, not a title found in the citation, so title overlap is inapplicable.
+    overlap = (
+        None if titleless_crossref_certificate
+        else title_overlap(result.get("matched_title"), raw_entry)
+    )
+    flag = None if titleless_crossref_certificate else title_flag(overlap)
     # Title vs cited entry comparison: applicable only when the service resolved and
     # returned a title. A clear mismatch downgrades 'resolved' to 'identifier_mismatch'
     # a partial mismatch stays 'resolved' + yellow warning.
-    overlap = title_overlap(result.get("matched_title"), raw_entry)
-    flag = title_flag(overlap)
-    status = result["status"]
     # A trial resolved by its registration id is identified by that strong id, not
     # by title: citations often give only the id, so a title mismatch against the
     # citation text is meaningless and must not downgrade the resolution.
-    if status == "resolved" and flag == "mismatch" and not result.get("trial_registration"):
+    if (
+        status == "resolved" and flag == "mismatch"
+        and not result.get("trial_registration")
+        and not registered_titled_crossref_certificate
+        and not ambiguous_title_journal_crossref_certificate
+        and not arxiv_published_relation_certificate
+    ):
         if doi or pmid or isbn:
             status = "identifier_mismatch"
         else:
@@ -2586,6 +3369,7 @@ def _finalize_resolution(
             attempts.extend(resolver_modules.occupy_coordinates(ref))
     if status in ("not_found", "identifier_mismatch"):
         fallback = _identifier_fallback_search(ref)
+        fallback = _take_candidate_rejections(attempts, fallback)
         identifier_check = {
             "status": status,
             "reason": result.get("reason"),
@@ -2595,7 +3379,10 @@ def _finalize_resolution(
             attempts.append({
                 "attempt_kind": "identifier_fallback",
                 "provider_via": fallback.get("via"),
-                **fallback,
+                **{
+                    key: value for key, value in fallback.items()
+                    if key != "candidate_identifiers"
+                },
             })
             result["identifier_fallback"] = _fallback_evidence_view(fallback)
             identifier_check.update({
@@ -2703,6 +3490,10 @@ def _finalize_resolution(
         meta.pop("abstract_via", None)
     evidence = _reference_evidence_profile(ref, result, status, attempts, overlap, prov,
                                             coverage_article_lookups, coverage_payloads)
+    if titleless_crossref_certificate:
+        best_candidate = evidence.get("best_candidate")
+        if isinstance(best_candidate, dict):
+            best_candidate["title_overlap"] = None
     adjudication = evidence.get("bibliographic_adjudication") or {}
     if adjudication.get("identity_status") not in {"identified", "identified_with_errors"}:
         # Preserve the candidate in attempts/evidence, but never project content
@@ -2718,6 +3509,20 @@ def _finalize_resolution(
         evidence = dict(evidence)
         evidence["fulltext_availability"] = meta["fulltext_availability"]
     tag, risk, tag_reason = _reference_status_tag(ref, status, evidence, result)
+    recovered_identifier = _resolved_identifier_summary(result) or {}
+    recovered_doi = (
+        _normalize_doi_value(recovered_identifier.get("value"))
+        if (result.get("identifier_error_recovered") is True
+            and str(recovered_identifier.get("type") or "").strip().lower() == "doi"
+            and recovered_identifier.get("validated_via"))
+        else ""
+    )
+    declared_doi = _normalize_doi_value(ref.get("doi"))
+    recovered_article_doi = bool(
+        recovered_doi
+        and declared_doi
+        and recovered_doi.casefold() != declared_doi.casefold()
+    )
     decision = _build_resolution_decision(
         ref,
         result,
@@ -2730,6 +3535,10 @@ def _finalize_resolution(
         meta=meta,
         bibliographic_identity_status=adjudication.get("identity_status"),
         evidence_via=result.get("content_via") or result.get("via"),
+        withhold_identity=(
+            declared_journal_container_mismatch
+            and not recovered_article_doi
+        ),
     )
     out = {
         "ref_id": ref["id"],
@@ -2756,10 +3565,14 @@ def _finalize_resolution(
         "attempts": attempts,
         "checked_at": now(),
     }
-    if result.get("resolved_identifier") is not None:
-        out["resolved_identifier"] = result.get("resolved_identifier")
-    if result.get("identifiers"):
-        out["identifiers"] = dict(result["identifiers"])
+    metadata_identity_not_admitted = _metadata_identity_not_admitted(
+        prov["resolution_basis"], adjudication.get("identity_status"),
+    )
+    if not metadata_identity_not_admitted:
+        if result.get("resolved_identifier") is not None:
+            out["resolved_identifier"] = result.get("resolved_identifier")
+        if result.get("identifiers"):
+            out["identifiers"] = dict(result["identifiers"])
     if result.get("identifier_error_recovered") is True:
         out["identifier_error_recovered"] = True
     if result.get("title_guard") is not None:
@@ -2829,8 +3642,40 @@ def resume_semantic_scholar_cooldown(deferred: _http.ProviderCooldownDeferred, p
                     state["ref"], state["result"], state["attempts"],
                     discovery_only=state["discovery_only"],
                 )
+            if deferred.kind == "discovery_fallback":
+                _validate_discovery_fallback_state(state)
+                try:
+                    openalex_result = _continue_resolver_fallback(
+                        state, deferred_work=deferred,
+                    )
+                except _http.ProviderCooldownDeferred as exc:
+                    module = (
+                        state["primary_module"] if state["stage"] == "primary"
+                        else state["fallback_modules"][state["deferred_fallback_index"]]
+                    )
+                    if exc.provider == provider and task["module"] is module:
+                        task["exc"] = exc
+                        deferred.not_before = exc.not_before
+                        raise deferred
+                    raise ProviderDeferredWork(
+                        kind="discovery_fallback", tasks=[(exc, module)], state=state,
+                    ) from exc
+                deferred.tasks.pop(provider, None)
+                deferred.terminal = True
+                result = _apply_openalex_result(
+                    state["ref"], state["result"], state["attempts"], openalex_result,
+                )
+                return _complete_discovery_after_openalex(
+                    state["ref"], result, state["attempts"],
+                    publisher_uri_discovered_candidate_selected=(
+                        state["publisher_uri_discovered_candidate_selected"]
+                    ),
+                    discovery_only=state["discovery_only"],
+                )
             with resolver_modules.credential_scope_for_resolver(module):
                 enrichment = module.enrich(state["effective_ref"])
+        except ProviderDeferredWork:
+            raise
         except _http.ProviderCooldownDeferred as exc:
             task["exc"] = exc
             raise deferred
@@ -3191,6 +4036,1037 @@ def _crossref_resolver_module():
     return module
 
 
+def _public_http_host(url: object) -> str | None:
+    """Validate public-URL syntax without resolving names or making a request."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(url.strip())
+        port = parsed.port
+    except (TypeError, ValueError):
+        return None
+    scheme = parsed.scheme.lower()
+    if (
+        scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or port not in {None, 80 if scheme == "http" else 443}
+    ):
+        return None
+    host = parsed.hostname.rstrip(".").lower()
+    if (
+        not host
+        or host == "localhost"
+        or host.endswith((".localhost", ".local", ".internal"))
+    ):
+        return None
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            normalized_host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            return None
+        labels = normalized_host.split(".")
+        if (
+            len(normalized_host) > 253
+            or len(labels) < 2
+            or any(
+                not label
+                or len(label) > 63
+                or re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label) is None
+                for label in labels
+            )
+        ):
+            return None
+        return normalized_host
+    else:
+        if not address.is_global:
+            return None
+        return address.compressed
+
+
+def _publisher_resource_url(message: dict) -> str | None:
+    """Choose one URL expressly returned by Crossref for its publication page."""
+    resource = message.get("resource")
+    if resource is not None:
+        if not isinstance(resource, dict):
+            return None
+        primary = resource.get("primary")
+        if not isinstance(primary, dict):
+            return None
+        url = primary.get("URL")
+        return url if isinstance(url, str) and url.strip() else None
+
+    links = message.get("link")
+    if not isinstance(links, list):
+        return None
+    candidates = []
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        content_type = str(link.get("content-type") or "").split(";", 1)[0].strip().lower()
+        url = link.get("URL")
+        if (
+            content_type in {"text/html", "application/xhtml+xml"}
+            and isinstance(url, str)
+            and url.strip()
+        ):
+            candidates.append(url.strip())
+    unique = list(dict.fromkeys(candidates))
+    return unique[0] if len(unique) == 1 else None
+
+
+def _publisher_native_doi_candidate(ref: dict, doi: str) -> dict:
+    """Corroborate one weak Crossref DOI lead with its returned publisher page."""
+    crossref = _crossref_resolver_module()
+    normalize_doi = _normalize_doi_value
+    requested_doi = normalize_doi(doi)
+    query_contract = _PUBLISHER_NATIVE_HTML_QUERY_CONTRACT
+    request_url = None
+    crossref_digest = None
+    publisher_url = None
+    final_url = None
+    html_digest = None
+    native_profile = None
+
+    def failed(
+        reason: str,
+        *,
+        outcome: str = "inconclusive",
+        completion: str = "incomplete",
+        status: str = "unresolved",
+        matched_title: str | None = None,
+        metadata_match: dict | None = None,
+    ) -> dict:
+        provenance = []
+        if request_url:
+            provenance.append(f"query_url={request_url}")
+        if publisher_url:
+            provenance.append(f"publisher_url={_audit_url(publisher_url)}")
+        if final_url:
+            provenance.append(f"final_url={_audit_url(final_url)}")
+        if html_digest:
+            provenance.append(f"decoded_response_sha256={html_digest}")
+        if crossref_digest:
+            provenance.append(f"crossref_decoded_response_sha256={crossref_digest}")
+        result = {
+            "status": status,
+            "via": "publisher_native_metadata",
+            "reason": "; ".join([reason, *provenance]),
+            "candidate_identifiers": {"doi": requested_doi} if requested_doi else {},
+            "identity_search": {
+                "resolver": "crossref",
+                "query_contract": query_contract,
+                "completion": completion,
+                "outcome": outcome,
+            },
+        }
+        if matched_title:
+            result["matched_title"] = matched_title
+        if metadata_match is not None:
+            result["metadata_match"] = metadata_match
+        return result
+
+    if ref.get("doi"):
+        return failed(
+            "publisher corroboration applies only to citations without a declared DOI",
+            completion="not_run", status="unverified",
+        )
+    if not requested_doi:
+        return failed("Crossref discovery supplied no usable DOI", completion="not_run")
+
+    request_url = (
+        "https://api.crossref.org/works/"
+        + urllib.parse.quote(requested_doi, safe="")
+    )
+    try:
+        crossref_status, crossref_body = _get(request_url)
+    except Exception as exc:
+        return failed(f"Crossref direct candidate lookup network: {type(exc).__name__}")
+    if isinstance(crossref_body, bytes):
+        try:
+            crossref_text = crossref_body.decode("utf-8")
+        except UnicodeDecodeError:
+            return failed("Crossref direct candidate body was not valid UTF-8")
+    elif isinstance(crossref_body, str):
+        crossref_text = crossref_body
+    else:
+        return failed("Crossref direct candidate returned no decodable response body")
+    crossref_digest = hashlib.sha256(crossref_text.encode("utf-8")).hexdigest()
+    if crossref_status != 200:
+        return failed(f"Crossref direct candidate lookup HTTP {crossref_status}")
+    try:
+        crossref_payload = json.loads(crossref_text)
+    except (TypeError, ValueError):
+        return failed("Crossref direct candidate returned malformed JSON")
+    message = crossref_payload.get("message") if isinstance(crossref_payload, dict) else None
+    if not isinstance(message, dict):
+        return failed("Crossref direct candidate response is malformed")
+    direct_doi = normalize_doi(message.get("DOI"))
+    if not direct_doi or direct_doi.casefold() != requested_doi.casefold():
+        return failed(
+            "Crossref direct record did not confirm the selected DOI",
+            outcome="candidate_incompatible", completion="complete", status="unverified",
+        )
+    if str(message.get("type") or "").strip().casefold() != "journal-article":
+        return failed(
+            "Crossref direct record is not a journal article",
+            outcome="candidate_incompatible", completion="complete", status="unverified",
+        )
+    direct_title = getattr(crossref, "_crossref_complete_title", lambda _msg: None)(message)
+    if not isinstance(direct_title, str) or not direct_title.strip():
+        return failed(
+            "Crossref direct record has no title to validate",
+            outcome="candidate_incompatible", completion="complete", status="unverified",
+        )
+    direct_profile = crossref._crossref_metadata_match_profile(ref, message)
+    if (
+        direct_profile.get("author_match") is not True
+        or direct_profile.get("year_match") is not True
+        or direct_profile.get("ordinal_conflict") is True
+        or direct_profile.get("metadata_conflict") is True
+        or _metadata_candidate_rejection_reason(
+            ref, direct_title, direct_profile, candidate_type="journal-article",
+        ) is not None
+    ):
+        return failed(
+            "Crossref direct metadata does not support the selected author, year, and article unit",
+            outcome="candidate_incompatible", completion="complete", status="unverified",
+            matched_title=direct_title, metadata_match=direct_profile,
+        )
+
+    publisher_url = _publisher_resource_url(message)
+    requested_host = _public_http_host(publisher_url)
+    if publisher_url is None or requested_host is None:
+        return failed(
+            "Crossref direct record has no single safe public publisher HTML URL",
+            outcome="inconclusive", completion="incomplete", status="unverified",
+            matched_title=direct_title, metadata_match=direct_profile,
+        )
+    try:
+        html_status, html_body, final_url = _get_with_final_url(
+            publisher_url,
+            accept="text/html,application/xhtml+xml",
+        )
+    except Exception as exc:
+        return failed(
+            f"publisher HTML lookup network: {type(exc).__name__}",
+            matched_title=direct_title, metadata_match=direct_profile,
+        )
+    final_host = _public_http_host(final_url)
+    if final_host is None or final_host != requested_host:
+        return failed(
+            "publisher HTML response used an unsafe or foreign redirect target",
+            outcome="inconclusive", completion="incomplete", status="unverified",
+            matched_title=direct_title, metadata_match=direct_profile,
+        )
+    if isinstance(html_body, bytes):
+        try:
+            html_text = html_body.decode("utf-8")
+        except UnicodeDecodeError:
+            return failed("publisher HTML body was not valid UTF-8", matched_title=direct_title)
+    elif isinstance(html_body, str):
+        html_text = html_body
+    else:
+        return failed("publisher HTML response had no decodable body", matched_title=direct_title)
+    html_digest = hashlib.sha256(html_text.encode("utf-8")).hexdigest()
+    if html_status != 200:
+        return failed(
+            f"publisher HTML lookup HTTP {html_status}",
+            outcome="inconclusive", completion="incomplete", status="unverified",
+            matched_title=direct_title, metadata_match=direct_profile,
+        )
+
+    try:
+        from . import user_sources as user_sources_module
+    except ImportError:  # direct execution fallback
+        import user_sources as user_sources_module
+    native = user_sources_module._publisher_citation_metadata(html_text)
+
+    def one(name: str, *, optional: bool = False) -> str | None:
+        values = native.get(name)
+        if values is None:
+            return None if optional else ""
+        if not isinstance(values, list):
+            return ""
+        clean = [value.strip() for value in values if isinstance(value, str) and value.strip()]
+        if not clean:
+            return None if optional else ""
+        if len(set(clean)) != 1:
+            return ""
+        return clean[0]
+
+    native_doi = normalize_doi(one("citation_doi"))
+    native_title = one("citation_title")
+    native_journal = one("citation_journal_title")
+    native_volume = one("citation_volume")
+    native_issue = one("citation_issue", optional=True)
+    native_first = one("citation_firstpage")
+    native_last = one("citation_lastpage")
+    native_date = one("citation_publication_date")
+    native_type = one("citation_article_type")
+    raw_authors = native.get("citation_author")
+    authors: list[dict[str, str]] = []
+    matched_authors: list[str] = []
+    if isinstance(raw_authors, list):
+        for raw_author in raw_authors:
+            if not isinstance(raw_author, str) or raw_author.count(",") != 1:
+                authors = []
+                break
+            family, given = (part.strip() for part in raw_author.split(",", 1))
+            if not family or not given or any(ord(char) < 32 for char in family + given):
+                authors = []
+                break
+            authors.append({"family": family, "given": given})
+            matched_authors.append(f"{given} {family}")
+    year_match = re.fullmatch(
+        r"((?:18|19|20)\d{2})(?:[-/]\d{1,2}(?:[-/]\d{1,2})?)?",
+        native_date or "",
+    )
+    if (
+        not native_doi
+        or native_doi.casefold() != requested_doi.casefold()
+        or not native_title
+        or not native_journal
+        or not native_volume
+        or re.fullmatch(r"[A-Za-z0-9]+", native_volume) is None
+        or native_issue == ""
+        or (
+            native_issue is not None
+            and any(ord(char) < 32 for char in native_issue)
+        )
+        or not native_first
+        or re.fullmatch(r"[A-Za-z0-9]+", native_first) is None
+        or not native_last
+        or re.fullmatch(r"[A-Za-z0-9]+", native_last) is None
+        or not native_type
+        or native_type.strip().casefold() != "article"
+        or not authors
+        or year_match is None
+    ):
+        return failed(
+            "publisher native citation metadata is incomplete, ambiguous, or not a journal article",
+            outcome="inconclusive", completion="incomplete", status="unverified",
+            matched_title=native_title or direct_title,
+            metadata_match=direct_profile,
+        )
+    native_year = int(year_match.group(1))
+    native_page = (
+        native_first if native_first == native_last
+        else f"{native_first}-{native_last}"
+    )
+    native_record = {
+        "DOI": native_doi,
+        "type": "journal-article",
+        "title": [native_title],
+        "author": authors,
+        "published-print": {"date-parts": [[native_year]]},
+        "container-title": [native_journal],
+        "volume": native_volume,
+        "issue": native_issue,
+        "page": native_page,
+    }
+    native_profile = _metadata_match_profile(ref, native_record, native_title)
+    if (
+        native_profile.get("title_overlap") is None
+        or native_profile.get("title_overlap") < 0.90
+        or native_profile.get("author_match") is not True
+        or native_profile.get("year_match") is not True
+        or native_profile.get("ordinal_conflict") is True
+        or native_profile.get("metadata_conflict") is True
+    ):
+        return failed(
+            "publisher native metadata does not meet unchanged title, author, and year gates",
+            outcome="candidate_incompatible", completion="complete", status="unverified",
+            matched_title=native_title, metadata_match=native_profile,
+        )
+    rejection_reason = _metadata_candidate_rejection_reason(
+        ref, native_title, native_profile, candidate_type="journal-article",
+    )
+    if rejection_reason:
+        return failed(
+            rejection_reason,
+            outcome="candidate_incompatible", completion="complete", status="unverified",
+            matched_title=native_title, metadata_match=native_profile,
+        )
+
+    safe_final_url = _audit_url(final_url)
+    reason = (
+        "Crossref-selected DOI corroborated by publisher native citation metadata; "
+        "direct Crossref validation required"
+        f"; query_url={request_url}"
+        f"; final_url={safe_final_url}"
+        f"; decoded_response_sha256={html_digest}"
+        f"; crossref_decoded_response_sha256={crossref_digest}"
+    )
+    return {
+        "status": "resolved",
+        "via": "publisher_native_metadata",
+        "resolution_basis": "metadata_search",
+        "existence_confidence": "medium",
+        "doi": native_doi,
+        "matched_title": native_title,
+        "matched_authors": matched_authors,
+        "matched_year": native_year,
+        "work_type": "journal-article",
+        "metadata_match": native_profile,
+        "retracted": bool(_rw.is_retracted(native_doi)),
+        "reason": reason,
+        "identity_search": {
+            "resolver": "crossref",
+            "query_contract": query_contract,
+            "completion": "complete",
+            "outcome": "compatible_identity",
+        },
+    }
+
+
+def _publisher_declared_elsevier_xml_url(message: dict) -> str | None:
+    content_domain = message.get("content-domain")
+    if not isinstance(content_domain, dict):
+        return None
+    domains = content_domain.get("domain")
+    if isinstance(domains, str):
+        domains = [domains]
+    if not isinstance(domains, list):
+        return None
+    normalized_domains = {
+        item.strip().casefold().rstrip(".")
+        for item in domains
+        if isinstance(item, str) and item.strip()
+    }
+    if "elsevier.com" not in normalized_domains:
+        return None
+    links = message.get("link")
+    if not isinstance(links, list):
+        return None
+    xml_links = []
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        content_type = str(link.get("content-type") or "").split(";", 1)[0]
+        if content_type.strip().casefold() == "text/xml":
+            xml_links.append(link)
+    if len(xml_links) != 1:
+        return None
+    link = xml_links[0]
+    url = link.get("URL")
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.casefold() != "https"
+        or _public_http_host(url) != "api.elsevier.com"
+        or parsed.netloc.casefold() != "api.elsevier.com"
+        or re.fullmatch(r"/content/article/PII:[^/]+", parsed.path) is None
+        or query != [("httpAccept", "text/xml")]
+        or link.get("intended-application") != "text-mining"
+    ):
+        return None
+    return url
+
+
+def _publisher_native_pii_uri_candidate(ref: dict, doi: str) -> dict:
+    """Corroborate one selected DOI through a Crossref-declared Elsevier PII URI."""
+    crossref = _crossref_resolver_module()
+    requested_doi = _normalize_doi_value(doi)
+    source_uri_info = _publisher_literal_article_uri(ref)
+    source_uri = source_uri_info[0] if source_uri_info else None
+    source_host = _public_http_host(source_uri) if source_uri else None
+    source_pii = source_uri_info[2] if source_uri_info else None
+    if source_host is None:
+        source_uri_info = None
+        source_uri = None
+        source_pii = None
+    direct_request_url = None
+    xml_request_url = None
+    final_url = None
+    crossref_digest = None
+    xml_digest = None
+    direct_profile = None
+    direct_title = None
+
+    def failed(
+        reason: str,
+        *,
+        outcome: str = "inconclusive",
+        completion: str = "incomplete",
+        matched_title: str | None = None,
+        metadata_match: dict | None = None,
+    ) -> dict:
+        provenance = []
+        if direct_request_url:
+            provenance.append(f"crossref_query_url={_audit_url(direct_request_url)}")
+        if xml_request_url:
+            # This route accepts a fixed, noncredentialed XML query only.
+            provenance.append(f"query_url={xml_request_url}")
+        if source_uri:
+            provenance.append(f"source_uri={_audit_url(source_uri)}")
+        if source_pii:
+            provenance.append(f"source_pii={source_pii}")
+        if final_url:
+            provenance.append(f"final_url={_audit_url(final_url)}")
+        if xml_digest:
+            provenance.append(f"decoded_response_sha256={xml_digest}")
+        if crossref_digest:
+            provenance.append(f"crossref_decoded_response_sha256={crossref_digest}")
+        attempt = {
+            "status": "unverified",
+            "via": "publisher_native_uri_metadata",
+            "reason": "; ".join([reason, *provenance]),
+            "candidate_identifiers": {"doi": requested_doi} if requested_doi else {},
+            "identity_search": {
+                "resolver": "crossref",
+                "query_contract": _PUBLISHER_NATIVE_URI_QUERY_CONTRACT,
+                "completion": completion,
+                "outcome": outcome,
+            },
+        }
+        if matched_title:
+            attempt["matched_title"] = matched_title
+        if metadata_match is not None:
+            attempt["metadata_match"] = metadata_match
+        return attempt
+
+    if ref.get("doi"):
+        return failed(
+            "publisher URI corroboration applies only to citations without a declared DOI",
+            completion="not_run",
+        )
+    if not requested_doi:
+        return failed("Crossref discovery supplied no usable DOI", completion="not_run")
+    if source_uri_info is None:
+        return failed(
+            "citation has no single literal article URI with a source PII path segment",
+            outcome="candidate_incompatible",
+            completion="complete",
+        )
+    raw_entry = ref.get("raw_entry")
+    if not isinstance(raw_entry, str):
+        return failed("citation source entry is unavailable for proof binding")
+    try:
+        source_entry_sha256 = hashlib.sha256(raw_entry.encode("utf-8")).hexdigest()
+    except UnicodeEncodeError:
+        return failed("citation source entry is not valid UTF-8")
+
+    direct_request_url = (
+        "https://api.crossref.org/works/"
+        + urllib.parse.quote(requested_doi, safe="")
+    )
+    try:
+        direct_status, direct_body = _get(direct_request_url)
+    except Exception as exc:
+        return failed(f"Crossref direct candidate lookup network: {type(exc).__name__}")
+    if isinstance(direct_body, bytes):
+        try:
+            direct_text = direct_body.decode("utf-8")
+        except UnicodeDecodeError:
+            return failed("Crossref direct candidate body was not valid UTF-8")
+    elif isinstance(direct_body, str):
+        direct_text = direct_body
+    else:
+        return failed("Crossref direct candidate returned no decodable response body")
+    crossref_digest = hashlib.sha256(direct_text.encode("utf-8")).hexdigest()
+    if direct_status != 200:
+        return failed(f"Crossref direct candidate lookup HTTP {direct_status}")
+    try:
+        direct_payload = json.loads(direct_text)
+    except (TypeError, ValueError):
+        return failed("Crossref direct candidate returned malformed JSON")
+    message = direct_payload.get("message") if isinstance(direct_payload, dict) else None
+    if not isinstance(message, dict):
+        return failed("Crossref direct candidate response is malformed")
+    direct_doi = _normalize_doi_value(message.get("DOI"))
+    if not direct_doi or direct_doi.casefold() != requested_doi.casefold():
+        return failed(
+            "Crossref direct record did not confirm the selected DOI",
+            outcome="candidate_incompatible",
+            completion="complete",
+        )
+    if str(message.get("type") or "").strip().casefold() != "journal-article":
+        return failed(
+            "Crossref direct record is not a journal article",
+            outcome="candidate_incompatible",
+            completion="complete",
+        )
+    direct_title = getattr(crossref, "_crossref_complete_title", lambda _msg: None)(message)
+    if not isinstance(direct_title, str) or not direct_title.strip():
+        return failed(
+            "Crossref direct record has no title to validate",
+            outcome="candidate_incompatible",
+            completion="complete",
+        )
+    direct_profile = crossref._crossref_metadata_match_profile(ref, message)
+    if (
+        direct_profile.get("author_match") is not True
+        or direct_profile.get("year_match") is not True
+        or direct_profile.get("ordinal_conflict") is True
+        or direct_profile.get("metadata_conflict") is True
+        or _metadata_candidate_rejection_reason(
+            ref, direct_title, direct_profile, candidate_type="journal-article",
+        ) is not None
+    ):
+        return failed(
+            "Crossref direct metadata does not support the cited author, year, and article unit",
+            outcome="candidate_incompatible",
+            completion="complete",
+            matched_title=direct_title,
+            metadata_match=direct_profile,
+        )
+    content_domain = message.get("content-domain")
+    domains = content_domain.get("domain") if isinstance(content_domain, dict) else None
+    if isinstance(domains, str):
+        domains = [domains]
+    declared_domains = {
+        item.strip().casefold().rstrip(".")
+        for item in domains or ()
+        if isinstance(item, str) and item.strip()
+    }
+    if source_host not in declared_domains and not any(
+        source_host == f"www.{domain}" for domain in declared_domains
+    ):
+        return failed(
+            "citation URI host is not owned by the direct Crossref content-domain",
+            outcome="candidate_incompatible",
+            completion="complete",
+            matched_title=direct_title,
+            metadata_match=direct_profile,
+        )
+    xml_request_url = _publisher_declared_elsevier_xml_url(message)
+    if xml_request_url is None:
+        return failed(
+            "direct Crossref record has no unique supported Elsevier article XML link",
+            matched_title=direct_title,
+            metadata_match=direct_profile,
+        )
+
+    try:
+        xml_status, xml_body, final_url = _get_with_final_url(
+            xml_request_url,
+            accept="application/xml,text/xml",
+        )
+    except Exception as exc:
+        return failed(
+            f"publisher native XML lookup network: {type(exc).__name__}",
+            matched_title=direct_title,
+            metadata_match=direct_profile,
+        )
+    if _public_http_host(final_url) != "api.elsevier.com":
+        return failed(
+            "publisher XML response used an unsafe or foreign redirect target",
+            matched_title=direct_title,
+            metadata_match=direct_profile,
+        )
+    if isinstance(xml_body, bytes):
+        try:
+            xml_text = xml_body.decode("utf-8")
+        except UnicodeDecodeError:
+            return failed("publisher native XML body was not valid UTF-8", matched_title=direct_title)
+    elif isinstance(xml_body, str):
+        xml_text = xml_body
+    else:
+        return failed("publisher native XML response had no decodable body", matched_title=direct_title)
+    xml_digest = hashlib.sha256(xml_text.encode("utf-8")).hexdigest()
+    if xml_status != 200:
+        return failed(
+            f"publisher native XML lookup HTTP {xml_status}",
+            matched_title=direct_title,
+            metadata_match=direct_profile,
+        )
+    if "<!DOCTYPE" in xml_text.upper() or "<!ENTITY" in xml_text.upper():
+        return failed("publisher native XML declarations are unsupported", matched_title=direct_title)
+    try:
+        root = ET.fromstring(xml_text)
+    except (ET.ParseError, ValueError):
+        return failed("publisher native XML response was malformed", matched_title=direct_title)
+
+    def local_name(element) -> str:
+        return element.tag.rsplit("}", 1)[-1].casefold() if isinstance(element.tag, str) else ""
+
+    if local_name(root) not in {"full-text-retrieval-response", "fulltextresponse"}:
+        return failed("publisher native XML has an unsupported root element", matched_title=direct_title)
+    coredata_nodes = [element for element in root.iter() if local_name(element) == "coredata"]
+    if len(coredata_nodes) != 1:
+        return failed("publisher native XML has no unique coredata record", matched_title=direct_title)
+    coredata = coredata_nodes[0]
+
+    def one_xml_text(name: str) -> str | None:
+        values = [
+            (element.text or "").strip()
+            for element in coredata.iter()
+            if local_name(element) == name.casefold()
+        ]
+        if len(values) != 1 or not values[0]:
+            return None
+        return values[0]
+
+    native_doi = _normalize_doi_value(one_xml_text("doi"))
+    native_identifier = one_xml_text("identifier")
+    native_pii = one_xml_text("pii")
+    native_title = one_xml_text("title")
+    native_container = one_xml_text("publicationName")
+    native_date = one_xml_text("coverDate")
+    identifier_parts = [part.strip() for part in (native_identifier or "").split(";")]
+    doi_identifiers = [
+        part[len("doi:"):].strip()
+        for part in identifier_parts
+        if part.casefold().startswith("doi:")
+    ]
+    pii_identifiers = [
+        part[len("pii:"):].strip()
+        for part in identifier_parts
+        if part.casefold().startswith("pii:")
+    ]
+    native_year_match = re.match(r"^((?:18|19|20)\d{2})(?:[-/].*)?$", native_date or "")
+    direct_containers = message.get("container-title")
+    if isinstance(direct_containers, str):
+        direct_containers = [direct_containers]
+    direct_container = next((
+        item.strip() for item in direct_containers or ()
+        if isinstance(item, str) and item.strip()
+    ), None)
+    direct_year = direct_profile.get("matched_year")
+    native_container_key = re.sub(r"\s+", " ", native_container or "").casefold()
+    direct_container_key = re.sub(r"\s+", " ", direct_container or "").casefold()
+    if (
+        not native_doi
+        or native_doi.casefold() != requested_doi.casefold()
+        or len(doi_identifiers) != 1
+        or _normalize_doi_value(doi_identifiers[0]).casefold() != requested_doi.casefold()
+        or not native_pii
+        or native_pii != source_pii
+        or (
+            pii_identifiers
+            and (len(pii_identifiers) != 1 or pii_identifiers[0] != source_pii)
+        )
+        or not native_title
+        or native_year_match is None
+        or not isinstance(direct_year, int)
+        or int(native_year_match.group(1)) != direct_year
+        or not native_container_key
+        or native_container_key != direct_container_key
+    ):
+        return failed(
+            "publisher native PII, DOI, year, or container disagrees with the source and direct record",
+            outcome="candidate_incompatible",
+            completion="complete",
+            matched_title=direct_title,
+            metadata_match=direct_profile,
+        )
+
+    crossref_authors = getattr(crossref, "_matched_authors", lambda _msg: [])(message)
+    proof = {
+        "version": 1,
+        "selected_doi": requested_doi,
+        "source_uri": _audit_url(source_uri),
+        "source_pii": source_pii,
+        "source_entry_sha256": source_entry_sha256,
+        "crossref_request_url": _audit_url(direct_request_url),
+        "crossref_http_status": direct_status,
+        "crossref_response_body": direct_text,
+        "crossref_response_sha256": crossref_digest,
+        "publisher_request_url": xml_request_url,
+        "publisher_final_url": _audit_url(final_url),
+        "publisher_http_status": xml_status,
+        "publisher_response_body": xml_text,
+        "publisher_response_sha256": xml_digest,
+    }
+    certified_profile = dict(direct_profile)
+    certified_profile["_publisher_native_uri_proof"] = proof
+    reason = (
+        "Crossref-selected DOI corroborated by exact publisher PII-to-DOI metadata; "
+        "direct Crossref validation required"
+        f"; crossref_query_url={_audit_url(direct_request_url)}"
+        f"; query_url={xml_request_url}"
+        f"; source_uri={_audit_url(source_uri)}"
+        f"; source_pii={source_pii}"
+        f"; source_uri_sha256={hashlib.sha256(source_uri.encode('utf-8')).hexdigest()}"
+        f"; source_pii_sha256={hashlib.sha256(source_pii.encode('utf-8')).hexdigest()}"
+        f"; final_url={_audit_url(final_url)}"
+        f"; decoded_response_sha256={xml_digest}"
+        f"; crossref_decoded_response_sha256={crossref_digest}"
+    )
+    return {
+        "status": "resolved",
+        "via": "publisher_native_uri_metadata",
+        "resolution_basis": "metadata_search",
+        "existence_confidence": "medium",
+        "doi": requested_doi,
+        "matched_title": direct_title,
+        "matched_authors": crossref_authors,
+        "matched_year": direct_year,
+        "work_type": "journal-article",
+        "metadata_match": certified_profile,
+        "retracted": bool(_rw.is_retracted(requested_doi)),
+        "reason": reason,
+        "identity_search": {
+            "resolver": "crossref",
+            "query_contract": _PUBLISHER_NATIVE_URI_QUERY_CONTRACT,
+            "completion": "complete",
+            "outcome": "compatible_identity",
+        },
+    }
+
+
+def _publisher_native_uri_proof_is_valid(
+    ref: dict,
+    result: dict,
+    attempt: dict,
+    selected_doi: str,
+    selected_metadata_match: dict | None,
+) -> bool:
+    """Recompute a retained publisher PII proof from its stored response bodies."""
+    proof_key = "_publisher_native_uri_proof"
+    proof_fields = {
+        "version", "selected_doi", "source_uri", "source_pii",
+        "source_entry_sha256",
+        "crossref_request_url", "crossref_http_status",
+        "crossref_response_body", "crossref_response_sha256",
+        "publisher_request_url", "publisher_final_url", "publisher_http_status",
+        "publisher_response_body", "publisher_response_sha256",
+    }
+    try:
+        proof = (attempt.get("metadata_match") or {}).get(proof_key)
+        if type(proof) is not dict or set(proof) != proof_fields:
+            return False
+        if type(proof["version"]) is not int or proof["version"] != 1:
+            return False
+        source_entry_sha256 = proof["source_entry_sha256"]
+        if (
+            type(source_entry_sha256) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", source_entry_sha256) is None
+        ):
+            return False
+        if (
+            type(proof["crossref_http_status"]) is not int
+            or proof["crossref_http_status"] != 200
+            or type(proof["publisher_http_status"]) is not int
+            or proof["publisher_http_status"] != 200
+        ):
+            return False
+        for body_key, digest_key in (
+            ("crossref_response_body", "crossref_response_sha256"),
+            ("publisher_response_body", "publisher_response_sha256"),
+        ):
+            body = proof[body_key]
+            digest = proof[digest_key]
+            if (
+                type(body) is not str
+                or not body
+                or type(digest) is not str
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                or hashlib.sha256(body.encode("utf-8")).hexdigest() != digest
+            ):
+                return False
+
+        source_uri_info = _publisher_literal_article_uri(ref)
+        if source_uri_info is None:
+            return False
+        source_uri, source_host, source_pii = source_uri_info
+        raw_entry = ref.get("raw_entry")
+        if (
+            not isinstance(raw_entry, str)
+            or hashlib.sha256(raw_entry.encode("utf-8")).hexdigest()
+            != source_entry_sha256
+        ):
+            return False
+        if (
+            proof["source_uri"] != _audit_url(source_uri)
+            or proof["source_pii"] != source_pii
+        ):
+            return False
+
+        doi = _normalize_doi_value(selected_doi)
+        if (
+            not doi
+            or _normalize_doi_value(proof["selected_doi"]).casefold() != doi.casefold()
+            or _normalize_doi_value(attempt.get("doi")).casefold() != doi.casefold()
+        ):
+            return False
+        expected_crossref_url = (
+            "https://api.crossref.org/works/"
+            + urllib.parse.quote(doi, safe="")
+        )
+        if proof["crossref_request_url"] != expected_crossref_url:
+            return False
+
+        direct_payload = json.loads(proof["crossref_response_body"])
+        message = direct_payload.get("message") if isinstance(direct_payload, dict) else None
+        if not isinstance(message, dict):
+            return False
+        crossref = _crossref_resolver_module()
+        direct_doi = _normalize_doi_value(message.get("DOI"))
+        if (
+            not direct_doi
+            or direct_doi.casefold() != doi.casefold()
+            or str(message.get("type") or "").strip().casefold() != "journal-article"
+        ):
+            return False
+        direct_title = getattr(crossref, "_crossref_complete_title", lambda _msg: None)(message)
+        if not isinstance(direct_title, str) or not direct_title.strip():
+            return False
+
+        content_domain = message.get("content-domain")
+        domains = content_domain.get("domain") if isinstance(content_domain, dict) else None
+        if isinstance(domains, str):
+            domains = [domains]
+        declared_domains = {
+            item.strip().casefold().rstrip(".")
+            for item in domains or ()
+            if isinstance(item, str) and item.strip()
+        }
+        if source_host not in declared_domains and not any(
+            source_host == f"www.{domain}" for domain in declared_domains
+        ):
+            return False
+        publisher_request_url = _publisher_declared_elsevier_xml_url(message)
+        if (
+            publisher_request_url is None
+            or proof["publisher_request_url"] != publisher_request_url
+            or not isinstance(proof["publisher_final_url"], str)
+            or _audit_url(proof["publisher_final_url"]) != proof["publisher_final_url"]
+            or _public_http_host(proof["publisher_final_url"]) != "api.elsevier.com"
+        ):
+            return False
+
+        direct_profile = crossref._crossref_metadata_match_profile(ref, message)
+        if (
+            direct_profile.get("author_match") is not True
+            or direct_profile.get("year_match") is not True
+            or direct_profile.get("ordinal_conflict") is True
+            or direct_profile.get("metadata_conflict") is True
+            or _metadata_candidate_rejection_reason(
+                ref, direct_title, direct_profile, candidate_type="journal-article",
+            ) is not None
+        ):
+            return False
+        attempt_profile = attempt.get("metadata_match")
+        if not isinstance(attempt_profile, dict) or {
+            key: value for key, value in attempt_profile.items() if key != proof_key
+        } != direct_profile:
+            return False
+        if isinstance(selected_metadata_match, dict):
+            selected_profile = {
+                key: value for key, value in selected_metadata_match.items()
+                if key != proof_key
+            }
+            if selected_profile != direct_profile:
+                return False
+
+        direct_year = direct_profile.get("matched_year")
+        if (
+            type(direct_year) is not int
+            or attempt.get("matched_title") != direct_title
+            or attempt.get("matched_year") != direct_year
+            or attempt.get("work_type") != "journal-article"
+            or attempt.get("matched_authors")
+            != getattr(crossref, "_matched_authors", lambda _msg: [])(message)
+            or result.get("status") != "resolved"
+            or result.get("via") != "publisher_native_uri_metadata"
+            or result.get("resolution_basis") != "metadata_search"
+            or result.get("matched_title") != direct_title
+            or result.get("work_type") != "journal-article"
+            or (
+                result.get("matched_year") is not None
+                and result.get("matched_year") != direct_year
+            )
+        ):
+            return False
+
+        xml_text = proof["publisher_response_body"]
+        if "<!DOCTYPE" in xml_text.upper() or "<!ENTITY" in xml_text.upper():
+            return False
+        try:
+            root = ET.fromstring(xml_text)
+        except (ET.ParseError, ValueError):
+            return False
+
+        def local_name(element) -> str:
+            return element.tag.rsplit("}", 1)[-1].casefold() if isinstance(element.tag, str) else ""
+
+        if local_name(root) not in {"full-text-retrieval-response", "fulltextresponse"}:
+            return False
+        coredata_nodes = [element for element in root.iter() if local_name(element) == "coredata"]
+        if len(coredata_nodes) != 1:
+            return False
+        coredata = coredata_nodes[0]
+
+        def one_xml_text(name: str) -> str | None:
+            values = [
+                (element.text or "").strip()
+                for element in coredata.iter()
+                if local_name(element) == name.casefold()
+            ]
+            if len(values) != 1 or not values[0]:
+                return None
+            return values[0]
+
+        native_doi = _normalize_doi_value(one_xml_text("doi"))
+        native_identifier = one_xml_text("identifier")
+        native_pii = one_xml_text("pii")
+        native_title = one_xml_text("title")
+        native_container = one_xml_text("publicationName")
+        native_date = one_xml_text("coverDate")
+        identifier_parts = [part.strip() for part in (native_identifier or "").split(";")]
+        doi_identifiers = [
+            part[len("doi:"):].strip()
+            for part in identifier_parts
+            if part.casefold().startswith("doi:")
+        ]
+        pii_identifiers = [
+            part[len("pii:"):].strip()
+            for part in identifier_parts
+            if part.casefold().startswith("pii:")
+        ]
+        native_year_match = re.match(r"^((?:18|19|20)\d{2})(?:[-/].*)?$", native_date or "")
+        direct_containers = message.get("container-title")
+        if isinstance(direct_containers, str):
+            direct_containers = [direct_containers]
+        direct_container = next((
+            item.strip() for item in direct_containers or ()
+            if isinstance(item, str) and item.strip()
+        ), None)
+        normalized_native_container = re.sub(r"\s+", " ", native_container or "").casefold()
+        normalized_direct_container = re.sub(r"\s+", " ", direct_container or "").casefold()
+        return bool(
+            native_doi
+            and native_doi.casefold() == doi.casefold()
+            and len(doi_identifiers) == 1
+            and _normalize_doi_value(doi_identifiers[0]).casefold() == doi.casefold()
+            and native_pii == source_pii
+            and (
+                not pii_identifiers
+                or (len(pii_identifiers) == 1 and pii_identifiers[0] == source_pii)
+            )
+            and native_title
+            and _title_key(native_title) == _title_key(direct_title)
+            and native_year_match is not None
+            and int(native_year_match.group(1)) == direct_year
+            and normalized_native_container
+            and normalized_native_container == normalized_direct_container
+        )
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _audit_url(url: object) -> str:
+    """Remove query credentials from human-readable URL provenance."""
+    if not isinstance(url, str):
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return ""
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
 def _acl_resolver_module():
     return _resolver_registry().get("acl_search")
 
@@ -3207,6 +5083,60 @@ def bind_scholar_archive_circuit_session(session):
     return scholar_archive.bind_circuit_session(session)
 
 
+def _take_candidate_rejections(attempts: list[dict], result: dict | None) -> dict | None:
+    if not isinstance(result, dict):
+        return result
+    candidate_rejections = result.pop("_candidate_rejections", [])
+    if isinstance(candidate_rejections, list):
+        for item in candidate_rejections:
+            if isinstance(item, dict):
+                _strip_untrusted_publisher_uri_marker(item)
+                attempts.append(item)
+    return result
+
+
+def _strip_untrusted_publisher_uri_marker(result: dict | None) -> None:
+    if not isinstance(result, dict):
+        return
+    resolved_identifier = result.get("resolved_identifier")
+    if (
+        isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == _PUBLISHER_NATIVE_URI_VALIDATED_VIA
+    ):
+        result.pop("resolved_identifier", None)
+
+
+def _append_provider_attempt(attempts: list[dict], result: dict | None) -> None:
+    """Append typed resolver attempts while unwrapping private candidate audits."""
+    if not isinstance(result, dict):
+        attempts.append(result)
+        return
+    _strip_untrusted_publisher_uri_marker(result)
+    had_rejections = bool(result.get("_candidate_rejections"))
+    result = _take_candidate_rejections(attempts, result)
+    if had_rejections:
+        # Candidate identifiers remain on the result, while their DOI values are
+        # already retained on the standard rejection-attempt rows.
+        attempt = {
+            key: value for key, value in result.items()
+            if key != "candidate_identifiers"
+        }
+    else:
+        attempt = result
+    metadata_match = attempt.get("metadata_match")
+    if (
+        type(metadata_match) is dict
+        and "matched_venue" in metadata_match
+        and "matched_venue" in attempt
+        and type(attempt["matched_venue"]) is type(metadata_match["matched_venue"])
+        and attempt["matched_venue"] == metadata_match["matched_venue"]
+    ):
+        attempt = dict(attempt)
+        attempt.pop("matched_venue")
+    attempts.append(attempt)
+
+
 def _call_registry_resolver(module, ref: dict) -> dict | None:
     # Route the current mapping-or-null resolver contract through the registry's
     # diagnostic normalizer.
@@ -3221,8 +5151,10 @@ def _try_resolvers_with_fallback(
     attempts: list[dict],
     can_use_title_search: bool = True,
     max_rounds: int = 3,
+    discovery_only: bool = False,
+    publisher_uri_discovered_candidate_selected: bool = False,
 ) -> dict | None:
-    """Try *primary_key* resolver; on 429, cycle through discovered fallback modules."""
+    """Try the primary resolver, falling back on retryable failures or legacy 429s."""
     if not can_use_title_search:
         return None
 
@@ -3242,29 +5174,189 @@ def _try_resolvers_with_fallback(
         and not getattr(registry[name], "LOCAL_ACCELERATOR", False)
     ]
 
-    r: dict | None = None
-    for round_idx in range(max_rounds):
-        r = _call_registry_resolver(primary_module, ref)
-        if r is not None:
-            attempts.append(r)
-        if r is not None and r.get("status") != "unresolved":
-            return r
-        if r is not None and "rate_limited" not in str(r.get("reason") or ""):
-            return r
+    state = {
+        "ref": ref,
+        "result": result,
+        "attempts": attempts,
+        "discovery_only": discovery_only,
+        "publisher_uri_discovered_candidate_selected": (
+            publisher_uri_discovered_candidate_selected
+        ),
+        "primary_module": primary_module,
+        "fallback_modules": [registry[name] for name in fallback_order],
+        "max_rounds": max_rounds,
+        "round_idx": 0,
+        "stage": "primary",
+        "primary_result": None,
+        "blocked_preprint": False,
+        "next_fallback_index": 0,
+        "deferred_fallback_index": -1,
+        "finish_current_round": False,
+    }
+    return _continue_resolver_fallback(state)
 
-        for fallback_name in fallback_order:
-            module = registry.get(fallback_name)
-            if module is None:
+
+_DISCOVERY_FALLBACK_STATE_KEYS = {
+    "ref", "result", "attempts", "discovery_only",
+    "publisher_uri_discovered_candidate_selected", "primary_module",
+    "fallback_modules", "max_rounds", "round_idx", "stage",
+    "primary_result", "blocked_preprint", "next_fallback_index",
+    "deferred_fallback_index", "finish_current_round",
+}
+
+
+def _validate_discovery_fallback_state(state: dict) -> None:
+    """Fail closed on malformed memory-only fallback continuation state."""
+    if (
+        type(state) is not dict
+        or set(state) != _DISCOVERY_FALLBACK_STATE_KEYS
+        or type(state["ref"]) is not dict
+        or state["result"] is not None and type(state["result"]) is not dict
+        or type(state["attempts"]) is not list
+        or any(type(attempt) is not dict for attempt in state["attempts"])
+        or type(state["discovery_only"]) is not bool
+        or type(state["publisher_uri_discovered_candidate_selected"]) is not bool
+        or not callable(getattr(state["primary_module"], "discover", None))
+        or type(state["fallback_modules"]) is not list
+        or any(not callable(getattr(module, "discover", None)) for module in state["fallback_modules"])
+        or type(state["max_rounds"]) is not int
+        or state["max_rounds"] < 1
+        or type(state["round_idx"]) is not int
+        or not 0 <= state["round_idx"] < state["max_rounds"]
+        or type(state["stage"]) is not str
+        or state["stage"] not in {"primary", "fallback", "fallback_resume"}
+        or state["primary_result"] is not None and type(state["primary_result"]) is not dict
+        or type(state["blocked_preprint"]) is not bool
+        or type(state["next_fallback_index"]) is not int
+        or not 0 <= state["next_fallback_index"] <= len(state["fallback_modules"])
+        or type(state["deferred_fallback_index"]) is not int
+        or not -1 <= state["deferred_fallback_index"] < len(state["fallback_modules"])
+        or state["stage"] == "fallback_resume"
+        and (
+            state["deferred_fallback_index"] < 0
+            or state["next_fallback_index"] != state["deferred_fallback_index"] + 1
+        )
+        or state["stage"] != "fallback_resume" and state["deferred_fallback_index"] != -1
+        or type(state["finish_current_round"]) is not bool
+    ):
+        raise ValueError("invalid resolver fallback continuation")
+
+
+def _continue_resolver_fallback(
+    state: dict, *, deferred_work: ProviderDeferredWork | None = None,
+) -> dict | None:
+    """Resume one deterministic primary/fallback suffix without replaying attempts."""
+    _validate_discovery_fallback_state(state)
+    while True:
+        if state["stage"] == "fallback_resume":
+            index = state["deferred_fallback_index"]
+            module = state["fallback_modules"][index]
+            try:
+                fallback_result = _call_registry_resolver(module, state["ref"])
+            except _http.ProviderCooldownDeferred as exc:
+                if deferred_work is not None:
+                    raise
+                raise ProviderDeferredWork(
+                    kind="discovery_fallback", tasks=[(exc, module)], state=state,
+                ) from exc
+            if fallback_result is not None:
+                _append_provider_attempt(state["attempts"], fallback_result)
+            blocked = _is_published_preprint_candidate(
+                state["ref"], fallback_result, state["attempts"],
+            )
+            state["stage"] = "fallback"
+            state["deferred_fallback_index"] = -1
+            if blocked:
                 continue
-            fr = _call_registry_resolver(module, ref)
-            if fr is not None:
-                attempts.append(fr)
-            if fr is not None and fr.get("status") == "resolved":
-                return fr
-            if fr is not None and fr.get("status") == "unverified" and result is None:
-                return fr
+            if fallback_result is not None and fallback_result.get("status") == "resolved":
+                return fallback_result
+            if (
+                fallback_result is not None
+                and fallback_result.get("status") == "unverified"
+                and state["result"] is None
+                and not (
+                    state["primary_result"] is not None
+                    and state["primary_result"].get("status") == "unresolved"
+                    and state["primary_result"].get("retryable") is True
+                )
+            ):
+                return fallback_result
 
-        if round_idx < max_rounds - 1:
-            time.sleep(2.0 * (round_idx + 1))
+        if state["stage"] == "primary":
+            module = state["primary_module"]
+            try:
+                result = _call_registry_resolver(module, state["ref"])
+            except _http.ProviderCooldownDeferred as exc:
+                if deferred_work is not None:
+                    raise
+                raise ProviderDeferredWork(
+                    kind="discovery_fallback", tasks=[(exc, module)], state=state,
+                ) from exc
+            if result is not None:
+                _append_provider_attempt(state["attempts"], result)
+            blocked_preprint = _is_published_preprint_candidate(
+                state["ref"], result, state["attempts"],
+            )
+            if blocked_preprint:
+                result = None
+            state["primary_result"] = result
+            state["blocked_preprint"] = blocked_preprint
+            if result is not None and result.get("status") != "unresolved":
+                return result
+            if (
+                result is not None
+                and "rate_limited" not in str(result.get("reason") or "")
+                and result.get("retryable") is not True
+            ):
+                return result
+            state["stage"] = "fallback"
+            state["next_fallback_index"] = 0
 
-    return r
+        while state["next_fallback_index"] < len(state["fallback_modules"]):
+            index = state["next_fallback_index"]
+            module = state["fallback_modules"][index]
+            try:
+                fallback_result = _call_registry_resolver(module, state["ref"])
+            except _http.ProviderCooldownDeferred as exc:
+                state["stage"] = "fallback_resume"
+                state["deferred_fallback_index"] = index
+                state["next_fallback_index"] = index + 1
+                if deferred_work is not None:
+                    raise
+                raise ProviderDeferredWork(
+                    kind="discovery_fallback", tasks=[(exc, module)], state=state,
+                ) from exc
+            if fallback_result is not None:
+                _append_provider_attempt(state["attempts"], fallback_result)
+            blocked = _is_published_preprint_candidate(
+                state["ref"], fallback_result, state["attempts"],
+            )
+            if blocked:
+                state["next_fallback_index"] += 1
+                continue
+            if fallback_result is not None and fallback_result.get("status") == "resolved":
+                return fallback_result
+            if (
+                fallback_result is not None
+                and fallback_result.get("status") == "unverified"
+                and state["result"] is None
+                and not (
+                    state["primary_result"] is not None
+                    and state["primary_result"].get("status") == "unresolved"
+                    and state["primary_result"].get("retryable") is True
+                )
+            ):
+                return fallback_result
+            state["next_fallback_index"] += 1
+
+        if state["blocked_preprint"] or state["finish_current_round"]:
+            return state["primary_result"]
+        if state["round_idx"] >= state["max_rounds"] - 1:
+            return state["primary_result"]
+        time.sleep(2.0 * (state["round_idx"] + 1))
+        state["round_idx"] += 1
+        state["stage"] = "primary"
+        state["primary_result"] = None
+        state["blocked_preprint"] = False
+        state["next_fallback_index"] = 0
+        state["deferred_fallback_index"] = -1

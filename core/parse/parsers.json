@@ -39,5 +39,21 @@
     "numeric": {
       "enabled": true
     }
+  },
+  "reference_reader_order": [
+    "bluebook",
+    "apa-journal",
+    "vancouver-fields",
+    "semicolon-journal",
+    "dated-book",
+    "generic-text"
+  ],
+  "reference_readers": {
+    "bluebook": { "enabled": true },
+    "apa-journal": { "enabled": true },
+    "vancouver-fields": { "enabled": true },
+    "semicolon-journal": { "enabled": true },
+    "dated-book": { "enabled": true },
+    "generic-text": { "enabled": true }
   }
 }

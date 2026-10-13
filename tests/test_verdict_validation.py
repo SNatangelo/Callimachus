@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Unit tests for core.verdict_validation.note_validation_reason."""
-from ._bootstrap import *  # noqa: F401,F403
+from tests._bootstrap import *  # noqa: F401,F403
 
 from core.verify.verdict_validation import note_validation_reason
 

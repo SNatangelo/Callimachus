@@ -306,8 +306,11 @@ def _docs_library(root: Path) -> dict[str, str]:
         "desktop-packages"), 1))]
     document_paths = {path.name: path for path in guide_paths}
     document_paths.update({
+        "privacy.md": guide / "privacy.md",
+        "privacy-it.md": guide / "privacy-it.md",
         "../deployment/agent-guide.md": root / "docs" / "deployment" / "agent-guide.md",
         "../deployment/administrator-guide.md": root / "docs" / "deployment" / "administrator-guide.md",
+        "../deployment/microsoft-store.md": root / "docs" / "deployment" / "microsoft-store.md",
         "../architecture/artifact-integrity.md": root / "docs" / "architecture" / "artifact-integrity.md",
         "../../DEPLOYMENT.md": root / "DEPLOYMENT.md",
     })

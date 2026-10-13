@@ -11,9 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.app.commands import tasks as task_cli
-from tests._identity_fixtures import (
-    _repo_with_attestation,
-)
+from tests._identity_fixtures import _repo_with_attestation
 
 
 class _CapturingGate:

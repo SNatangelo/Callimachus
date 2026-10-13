@@ -132,8 +132,6 @@ def test_checkpoint_failure_after_mutation_is_left_for_authority_recovery(
     assert [call[0] for call in gate.calls] == ["begin", "commit"]
 
 
-
-
 @pytest.mark.skipif(os.name != "posix", reason="integrity authority requires POSIX")
 def test_authority_recovery_restores_cache_after_paired_checkpoint_failure(
     tmp_path, monkeypatch

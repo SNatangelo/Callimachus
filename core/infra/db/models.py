@@ -99,6 +99,7 @@ class ReferenceRecord:
     indexability: str | None
     source_type_confidence: str | None
     cited_coordinates: tuple[JsonDict, ...] = ()
+    bibliographic_parse: JsonDict | None = None
 
 
 @dataclass(frozen=True)

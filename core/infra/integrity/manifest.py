@@ -20,6 +20,7 @@ from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 from core.shared.typed_canonical import encode as typed_canonical
+from core.shared.filesystem_paths import io_path, logical_path
 
 
 MANIFEST_VERSION = "callimachus.artifact-manifest.v1"
@@ -194,19 +195,23 @@ def _database_projection(
 
 
 def _hash_regular_file(path: str) -> tuple[str, int]:
-    if os.path.islink(path):
-        raise ManifestError(f"artifact path is a symlink: {path}")
+    filesystem_path = io_path(path)
+    logical = str(logical_path(path, resolve=False))
+    if os.path.islink(filesystem_path):
+        raise ManifestError(f"artifact path is a symlink: {logical}")
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(filesystem_path, flags)
     except OSError as exc:
-        raise ManifestError(f"artifact is unreadable: {path}") from exc
+        raise ManifestError(f"artifact is unreadable: {logical}") from exc
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
-            raise ManifestError(f"artifact is not a regular file: {path}")
+            raise ManifestError(f"artifact is not a regular file: {logical}")
         digest = hashlib.sha256()
         byte_count = 0
         while True:
@@ -230,7 +235,7 @@ def _hash_regular_file(path: str) -> tuple[str, int]:
         after.st_size,
         after.st_mtime_ns,
     ) or byte_count != after.st_size:
-        raise ManifestError(f"artifact changed while it was being hashed: {path}")
+        raise ManifestError(f"artifact changed while it was being hashed: {logical}")
     return digest.hexdigest(), byte_count
 
 
@@ -240,19 +245,21 @@ def _file_inventory(
     ignored_relative_paths: frozenset[str],
 ) -> tuple[ArtifactEntry, ...]:
     root = os.path.abspath(artifact_root)
-    if os.path.islink(root) or not os.path.isdir(root):
+    filesystem_root = io_path(root)
+    if os.path.islink(filesystem_root) or not os.path.isdir(filesystem_root):
         raise ManifestError("artifact root must be a real directory")
     entries: list[ArtifactEntry] = []
-    for current, directory_names, file_names in os.walk(root, followlinks=False):
+    for current, directory_names, file_names in os.walk(filesystem_root, followlinks=False):
         directory_names.sort()
         file_names.sort()
         for directory_name in directory_names:
             directory_path = os.path.join(current, directory_name)
-            if os.path.islink(directory_path):
-                raise ManifestError(f"artifact directory is a symlink: {directory_path}")
+            if os.path.islink(io_path(directory_path)):
+                logical_directory = logical_path(directory_path, resolve=False)
+                raise ManifestError(f"artifact directory is a symlink: {logical_directory}")
         for file_name in file_names:
             path = os.path.join(current, file_name)
-            relative = os.path.relpath(path, root).replace(os.sep, "/")
+            relative = os.path.relpath(path, filesystem_root).replace(os.sep, "/")
             if relative in ignored_relative_paths:
                 continue
             sha256, byte_count = _hash_regular_file(path)

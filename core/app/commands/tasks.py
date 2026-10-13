@@ -27,6 +27,7 @@ from core.infra.integrity import AuthorityError, IntegrityGateError, RunIntegrit
 from core.infra.integrity.admission import admit_task_answer_locally
 from core.infra.integrity.execution_assurance import resolve_existing
 from core.invocation import run_command
+from core.shared.filesystem_paths import io_path, logical_path
 
 
 def _repo(run_dir: str) -> RunRepository:
@@ -174,13 +175,17 @@ def store_guided_ocr_artifact(
     if text is not None and status != "done":
         raise ValueError("guided OCR text is only valid for a completed artifact")
     source = Path(scan_path)
-    if not source.is_file() or source.suffix.lower() != ".pdf":
+    source_io = Path(io_path(source))
+    if not source_io.is_file() or source.suffix.lower() != ".pdf":
         raise ValueError("guided OCR source must be an existing PDF")
 
-    run_root = Path(run_dir).resolve()
+    run_root = logical_path(run_dir)
     artifact_dir = run_root / "sources" / "guided_ocr"
     scan_target = artifact_dir / f"{scan_id}.pdf"
     metadata_target = artifact_dir / f"{scan_id}.json"
+    artifact_dir_io = Path(io_path(artifact_dir))
+    scan_target_io = Path(io_path(scan_target))
+    metadata_target_io = Path(io_path(metadata_target))
     source_digest = _file_sha256(scan_path)
     if source_digest != scan_sha256:
         raise ValueError("guided OCR scan changed before it could be stored")
@@ -194,6 +199,7 @@ def store_guided_ocr_artifact(
         artifact_dir / f"{scan_id}-{text_sha256}.txt"
         if text_sha256 is not None else None
     )
+    text_target_io = None if text_target is None else Path(io_path(text_target))
     relative_text_path = (
         text_target.relative_to(run_root).as_posix()
         if text_target is not None else None
@@ -234,42 +240,43 @@ def store_guided_ocr_artifact(
             )
 
         sources_dir = run_root / "sources"
-        if sources_dir.is_symlink():
+        sources_dir_io = Path(io_path(sources_dir))
+        if sources_dir_io.is_symlink():
             raise ValueError("guided OCR sources directory cannot be a symlink")
-        if artifact_dir.is_symlink():
+        if artifact_dir_io.is_symlink():
             raise ValueError("guided OCR artifact directory cannot be a symlink")
-        sources_dir.mkdir(parents=True, exist_ok=True)
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-        if artifact_dir.is_symlink():
+        sources_dir_io.mkdir(parents=True, exist_ok=True)
+        artifact_dir_io.mkdir(parents=True, exist_ok=True)
+        if artifact_dir_io.is_symlink():
             raise ValueError("guided OCR artifact directory cannot be a symlink")
-        if scan_target.is_symlink() or metadata_target.is_symlink():
+        if scan_target_io.is_symlink() or metadata_target_io.is_symlink():
             raise ValueError("guided OCR artifact files cannot be symlinks")
-        if scan_target.exists():
+        if scan_target_io.exists():
             if _file_sha256(scan_target) != scan_sha256:
                 raise ValueError("guided OCR scan_id already names different PDF bytes")
         else:
-            with source.open("rb") as reader, scan_target.open("xb") as writer:
+            with source_io.open("rb") as reader, scan_target_io.open("xb") as writer:
                 shutil.copyfileobj(reader, writer, length=1024 * 1024)
                 writer.flush()
                 os.fsync(writer.fileno())
             if _file_sha256(scan_target) != scan_sha256:
                 raise ValueError("guided OCR copied scan hash does not match source")
 
-        if text_target is not None:
-            if text_target.is_symlink():
+        if text_target is not None and text_target_io is not None:
+            if text_target_io.is_symlink():
                 raise ValueError("guided OCR text artifact cannot be a symlink")
-            if text_target.exists():
+            if text_target_io.exists():
                 if _file_sha256(text_target) != text_sha256:
                     raise ValueError("guided OCR text artifact hash does not match")
             else:
-                with text_target.open("xb") as handle:
+                with text_target_io.open("xb") as handle:
                     handle.write(text.encode("utf-8"))
                     handle.flush()
                     os.fsync(handle.fileno())
 
-        if metadata_target.exists():
+        if metadata_target_io.exists():
             try:
-                previous = json.loads(metadata_target.read_text(encoding="utf-8"))
+                previous = json.loads(metadata_target_io.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
                 raise ValueError("guided OCR artifact metadata is unreadable") from exc
             if (
@@ -280,16 +287,17 @@ def store_guided_ocr_artifact(
             ):
                 raise ValueError("guided OCR artifact identity changed")
         temporary = artifact_dir / f".{scan_id}.{uuid.uuid4().hex}.tmp"
+        temporary_io = Path(io_path(temporary))
         try:
-            with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            with temporary_io.open("x", encoding="utf-8", newline="\n") as handle:
                 json.dump(metadata, handle, ensure_ascii=False, sort_keys=True)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, metadata_target)
+            os.replace(temporary_io, metadata_target_io)
         finally:
             try:
-                temporary.unlink()
+                temporary_io.unlink()
             except FileNotFoundError:
                 pass
         _ensure_guided_ocr_fetch_task(run_dir, ref_id)
@@ -363,7 +371,7 @@ def _ensure_guided_ocr_fetch_task(run_dir: str, ref_id: str) -> None:
 def _file_sha256(path: str | os.PathLike[str]) -> str | None:
     try:
         digest = hashlib.sha256()
-        with open(path, "rb") as handle:
+        with open(io_path(path), "rb") as handle:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
         return digest.hexdigest()

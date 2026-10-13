@@ -2,6 +2,8 @@
   "_comment": "Section-heading words that mark the start of a reference list, matched case-insensitively (a leading section-marker glyph like '■' and a trailing ':' or '.' are tolerated; internal spaces match any whitespace). Single source of truth for the body/bibliography cut, the column-aware re-extraction and the PDF link-layer's bibliography-region detection. Add a heading (any language) to cover a new publisher/locale without touching code.",
   "bibliography_headings": [
     "references",
+    "references cited",
+    "references and notes",
     "reference list",
     "bibliography",
     "works cited",

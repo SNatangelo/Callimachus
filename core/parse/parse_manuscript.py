@@ -74,9 +74,13 @@ try:
         _clean_biblio_line,
         _is_biblio_noise_line,
         _is_biblio_tail_line,
+        _explicit_scope_heading,
         _looks_authoryear_ref_start,
+        _numbered_section_heading,
+        _root_numbered_scope_heading,
         _merge_hyphen_wraps,
         _find_biblio_end_index,
+        _region_has_sustained_bibliography_spine,
         _split_authoryear_references,
         _truncate_bleed,
         _merge_standalone_doi_url,
@@ -98,9 +102,13 @@ except ImportError:
         _clean_biblio_line,
         _is_biblio_noise_line,
         _is_biblio_tail_line,
+        _explicit_scope_heading,
         _looks_authoryear_ref_start,
+        _numbered_section_heading,
+        _root_numbered_scope_heading,
         _merge_hyphen_wraps,
         _find_biblio_end_index,
+        _region_has_sustained_bibliography_spine,
         _split_authoryear_references,
         _truncate_bleed,
         _merge_standalone_doi_url,
@@ -822,6 +830,46 @@ def _attach_external_reference_urls(references: list[dict], links: list[dict] | 
             matches[0]["url_discovered_via"] = "pdf_annotation_exact_title"
 
 
+def _unique_front_matter_doi(title_evidence: object) -> str | None:
+    """Return the sole declared manuscript DOI, never a bibliography DOI."""
+    if not isinstance(title_evidence, dict):
+        return None
+    identifiers = title_evidence.get("identifiers")
+    if not isinstance(identifiers, (list, tuple)):
+        return None
+
+    values = set()
+    found = False
+    doi_re = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+\Z", re.IGNORECASE)
+    for item in identifiers:
+        if (
+            not isinstance(item, dict)
+            or item.get("scheme") != "doi"
+            or item.get("source") != "front_matter_text"
+        ):
+            continue
+        found = True
+        value = item.get("value")
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().rstrip(".,;:)]}").casefold()
+        if not doi_re.fullmatch(normalized):
+            return None
+        values.add(normalized)
+    return next(iter(values)) if found and len(values) == 1 else None
+
+
+def _columnaware_candidate_wins(
+    candidate_count: int, current_count: int, three_column_geometry: bool,
+    sustained_bibliography_spine: bool = False,
+) -> bool:
+    """Use geometry only when the candidate itself has a reference-list spine."""
+    return candidate_count >= 5 and (
+        (three_column_geometry and sustained_bibliography_spine)
+        or candidate_count > current_count * 1.5
+    )
+
+
 def parse(path: str, window: int, citations_mode: str = "auto",
           *, ocr_lang: str = "eng", ocr_notice=None,
           interactive: bool = False, ask=input) -> tuple[dict, str]:
@@ -841,7 +889,19 @@ def parse(path: str, window: int, citations_mode: str = "auto",
     link_layer = extract_meta.pop("pdf_links", None) if isinstance(extract_meta, dict) else None
     external_links = extract_meta.pop("pdf_external_links", None) if isinstance(extract_meta, dict) else None
     family = format_handlers.select(fmt)
+    if (
+        isinstance(extract_meta, dict)
+        and family.split_body_bibliography is _split_body_bibliography
+        and family.parse_references is _parse_references
+    ):
+        extract_meta["_allow_scoped_bibliographies"] = True
     body, biblio, cut_debug, biblio_end_index = family.split_body_bibliography(text, meta=extract_meta)
+    scoped_blocks = (
+        extract_meta.pop("_scoped_bibliography_blocks", None)
+        if isinstance(extract_meta, dict) else None
+    )
+    if isinstance(extract_meta, dict):
+        extract_meta.pop("_allow_scoped_bibliographies", None)
     # The page's own furniture (running head, page number) is printed wherever the page
     # breaks — including through the middle of a citation, which then matches no pattern
     # and is lost without a trace.  Detected on the whole document (a line is furniture
@@ -854,30 +914,135 @@ def parse(path: str, window: int, citations_mode: str = "auto",
     body = boilerplate.strip_page_breaks(body, body_furniture)
     body = boilerplate.strip_interposed_affiliation_blocks(body)
     sentences = family.segment_sentences(body, meta=extract_meta)
-    references = family.parse_references(biblio, meta=extract_meta)
+    scoped_reference_map = None
+    scoped_entry_sources = {}
+    opaque_keyed_bibliography = None
+    references = []
+    if scoped_blocks:
+        scoped_reference_map = {}
+        ambiguous_local_numbers = {}
+        for block in scoped_blocks:
+            block_meta = {"_preserve_numbered_entry_labels": True}
+            block_refs = family.parse_references(block["text"], meta=block_meta)
+            scope = block["scope"]
+            scope_map = scoped_reference_map.setdefault(scope, {})
+            ambiguous = ambiguous_local_numbers.setdefault(scope, set())
+            opaque_block = block_meta.pop("_opaque_keyed_bibliography", None)
+            ambiguous.update(block_meta.get("_scoped_duplicate_local_numbers", []))
+            scoped_entry_sources.update(block_meta.get("_scoped_entry_sources", {}))
+            scoped_entry_sources.update(block_meta.pop("_opaque_entry_sources", {}))
+            for reference in block_refs:
+                local_number = reference.get("ref_number")
+                if type(local_number) is not int or local_number < 1:
+                    continue
+                reference["ref_number"] = len(references) + 1
+                references.append(reference)
+                if opaque_block is not None:
+                    continue
+                if local_number in scope_map:
+                    ambiguous.add(local_number)
+                    scope_map.pop(local_number, None)
+                elif local_number not in ambiguous:
+                    scope_map[local_number] = {
+                        "ref_id": reference["id"],
+                        "ref_number": reference["ref_number"],
+                    }
+        for scope, numbers in ambiguous_local_numbers.items():
+            for number in numbers:
+                scoped_reference_map.get(scope, {}).pop(number, None)
+        scoped_reference_map = {
+            scope: dict(rows) for scope, rows in scoped_reference_map.items()
+        }
+    else:
+        references = family.parse_references(biblio, meta=extract_meta)
+        if isinstance(extract_meta, dict):
+            opaque_keyed_bibliography = extract_meta.pop(
+                "_opaque_keyed_bibliography", None,
+            )
+            scoped_entry_sources.update(
+                extract_meta.pop("_opaque_entry_sources", {})
+            )
+
+    sentence_scopes = None
+    if scoped_reference_map is not None:
+        valid_scopes = set(scoped_reference_map)
+        line_scopes = []
+        active_scope = None
+        for line in body.splitlines():
+            explicit_scope = _explicit_scope_heading(line)
+            if explicit_scope is not None:
+                active_scope = explicit_scope if explicit_scope in valid_scopes else None
+            else:
+                numbered = _numbered_section_heading(line)
+                inferred_scope = None
+                if numbered is not None:
+                    major = numbered[0].split(".", 1)[0]
+                    inferred_scope = (
+                        f"chapter:{int(major)}" if major.isdigit()
+                        else f"appendix:{major.upper()}"
+                    )
+                else:
+                    inferred_scope = _root_numbered_scope_heading(line)
+                if inferred_scope is not None:
+                    active_scope = inferred_scope if inferred_scope in valid_scopes else None
+            line_scopes.append(active_scope)
+        lineage = getattr(sentences, "lineage", None)
+        sentence_scopes = []
+        for index in range(len(sentences)):
+            item = lineage[index] if isinstance(lineage, list) and index < len(lineage) else None
+            if (
+                not isinstance(item, dict)
+                or type(item.get("line_start")) is not int
+                or type(item.get("line_end")) is not int
+            ):
+                sentence_scopes.append(None)
+                continue
+            start = item["line_start"] - 1
+            end = item["line_end"] - 1
+            if start < 0 or end < start or end >= len(line_scopes):
+                sentence_scopes.append(None)
+                continue
+            covered_scopes = set(line_scopes[start:end + 1])
+            sentence_scopes.append(
+                next(iter(covered_scopes))
+                if len(covered_scopes) == 1 and None not in covered_scopes
+                else None
+            )
     manuscript_id = f"ms-{uuid.uuid4().hex[:10]}"
 
     def _assign_keys(refs):
         for r in refs:
             r["manuscript_id"] = manuscript_id
-            sur, yr, suf = authoryear.entry_key(r["raw_entry"])
+            sur, yr, suf = authoryear.entry_key(
+                scoped_entry_sources.get(r["id"], r["raw_entry"])
+            )
             r["ay_surname"], r["ay_year"], r["ay_suffix"] = sur, yr, suf
 
     _assign_keys(references)
 
-    # Column-aware bibliography recovery: some publisher PDFs have a two-column
-    # *back matter* whose default reading order interleaves the reference entries
-    # with a table or an author-contributions block, so the entries barely
-    # segment.  Re-extract the reference pages in column order and adopt them
-    # only when they yield substantially MORE entries — a self-validating guard,
-    # so a correctly-extracted document (which re-extracts to the same count) is
-    # never touched.  The body/sentences keep the default extraction.
-    if fmt == "pdf":
+    # Column-aware bibliography recovery: publisher PDFs can arrange references
+    # in two or more columns, while the default reading order interleaves entries
+    # with material from adjacent columns.  Ordinary recoveries retain the count
+    # improvement gate.  A geometrically verified three-column bibliography can
+    # replace the default when it yields at least five entries, since the default
+    # may have a similar or larger count from merged entries and page furniture.
+    # The body/sentences keep the default extraction.
+    if (
+        fmt == "pdf"
+        and scoped_reference_map is None
+        and opaque_keyed_bibliography is None
+    ):
         try:
             from core.parse.extractors import pdf as _pdfx
         except ImportError:  # pragma: no cover - direct-execution import path
             _pdfx = None
-        ca_text = _pdfx.columnaware_bibliography_text(path) if _pdfx else None
+        ca_candidate = (
+            _pdfx._columnaware_bibliography_candidate(
+                path,
+                declared_document_doi=_unique_front_matter_doi(title_evidence),
+            ) if _pdfx else None
+        )
+        ca_text, three_column_geometry = ca_candidate or (None, False)
         if ca_text:
             ca_text = normalize(ca_text)
             # Reading the pages as blocks keeps what the default extraction leaves
@@ -895,7 +1060,10 @@ def parse(path: str, window: int, citations_mode: str = "auto",
             # inherit the main extraction's footnote_references / page state.
             _, ca_biblio, _, _ = family.split_body_bibliography(ca_text, meta={})
             ca_refs = family.parse_references(ca_biblio, meta={})
-            if len(ca_refs) >= 5 and len(ca_refs) > len(references) * 1.5:
+            if _columnaware_candidate_wins(
+                len(ca_refs), len(references), three_column_geometry,
+                _region_has_sustained_bibliography_spine(ca_biblio.splitlines()),
+            ):
                 references = ca_refs
                 _assign_keys(references)
 
@@ -906,7 +1074,11 @@ def parse(path: str, window: int, citations_mode: str = "auto",
     # references) triggers it, so healthy documents are never touched — and it
     # only supplies reference entries: resolution stays normal, so a fabricated
     # or absent citation still becomes an orphan.
-    if link_layer and len(references) < 5 and len(link_layer.references) >= 5:
+    if (
+        scoped_reference_map is None
+        and opaque_keyed_bibliography is None
+        and link_layer and len(references) < 5 and len(link_layer.references) >= 5
+    ):
         link_refs = _refs_from_link_layer(link_layer)
         if len(link_refs) > len(references):
             references = link_refs
@@ -928,7 +1100,11 @@ def parse(path: str, window: int, citations_mode: str = "auto",
     # nothing.  Text-based, so it also applies to .txt inputs.
     boilerplate_refs = None
     boiler = boilerplate.boilerplate_lines(text)
-    if boiler:
+    if (
+        boiler
+        and scoped_reference_map is None
+        and opaque_keyed_bibliography is None
+    ):
         cleaned_biblio = boilerplate.strip_boilerplate(biblio, boiler)
         if cleaned_biblio != biblio:
             boilerplate_refs = family.parse_references(cleaned_biblio, meta=extract_meta)
@@ -946,9 +1122,23 @@ def parse(path: str, window: int, citations_mode: str = "auto",
         # Number them after any entries a stray bibliography heading produced.
         references = references + selected_scheme.synthesize_references(
             sentences, manuscript_id, start_num=len(references))
+    build_kwargs = {
+        "fmt": fmt,
+        "link_layer": link_layer,
+        "boilerplate_refs": boilerplate_refs,
+    }
+    if scoped_reference_map is not None and selected_scheme.NAME == "numeric":
+        build_kwargs["scoped_context"] = {
+            "sentence_scopes": sentence_scopes,
+            "references_by_scope": scoped_reference_map,
+        }
+    elif opaque_keyed_bibliography is not None and selected_scheme.NAME == "numeric":
+        build_kwargs["scoped_context"] = {
+            "sentence_scopes": [None] * len(sentences),
+            "references_by_scope": {},
+        }
     claims, citations, debug_rows, extra = selected_scheme.build(
-        sentences, references, window, manuscript_id, fmt=fmt, link_layer=link_layer,
-        boilerplate_refs=boilerplate_refs)
+        sentences, references, window, manuscript_id, **build_kwargs)
 
     # The bibliography is only now complete — the author-year scheme recovers
     # entries buried in the body during build — so this is the first point at

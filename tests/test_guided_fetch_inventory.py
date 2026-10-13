@@ -1,30 +1,25 @@
+# tests/test_guided_fetch_inventory.py
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
-
 from __future__ import annotations
 
 import hashlib
-
 import json
-
 from pathlib import Path
 
-from core.app.guided_fetch import build_source_inventory
+import pytest
 
+from core.app.guided_fetch import _load_guided_ocr_artifacts, build_source_inventory
 from core.fetch.admission import provided_fulltext
-
 from core.gui.guided_fetch_viewmodel import GuidedFetchViewModel
-
 from core.infra.db.repository import RunRepository
-
 from core.parse.parsing_common import _make_reference
-
 from core.resolve.matching import _metadata_match_profile
-
 from core.resolve.resolver_coverage import (
     bibliographic_concern,
     bibliographic_review_labels,
 )
+
 
 def _repo(tmp_path) -> RunRepository:
     return RunRepository.create(
@@ -32,6 +27,36 @@ def _repo(tmp_path) -> RunRepository:
         accuracy="standard", style=None, model_id=None, http_profile=None,
         challenge_mode=None, fixture_fingerprint="fixture",
     )
+
+
+@pytest.mark.parametrize("view", ["all", "paged", "focused"])
+def test_source_inventory_projects_structural_fields_into_parsed_panel(tmp_path, view):
+    reference = _make_reference(
+        1, "Smith J, Roe A (2020) A complete article title. Example Journal 12(3): 30-40.",
+    )
+    reference["id"] = "r1"
+    repo = _repo(tmp_path)
+    try:
+        repo.replace_parse_payload(claims=[], references=[reference], citations=[])
+    finally:
+        repo.close()
+    kwargs = {"offset": 0, "limit": 1} if view == "paged" else {}
+    if view == "focused":
+        kwargs["focus_ref_id"] = "r1"
+    inventory = build_source_inventory(str(tmp_path), **kwargs)
+    parsed = inventory["references"][0]["parsed"]
+    assert parsed["raw_entry"] == reference["raw_entry"]
+    assert parsed["bibliographic_parse"] == reference["bibliographic_parse"]
+    rows = dict(GuidedFetchViewModel(inventory).detail_panels("r1")["Parsed"]["rows"])
+    assert rows["Authors"] == "Smith J; Roe A"
+    assert rows["Journal"] == "Example Journal"
+    assert rows["Volume"] == "12"
+    assert rows["Issue"] == "3"
+    assert rows["Pages"] == "30-40"
+    assert rows["Publication year"] == "2020"
+    parsed["authors"].append("Changed display value")
+    assert parsed["bibliographic_parse"]["fields"]["authors"]["value"] == ["Smith J", "Roe A"]
+
 
 def _evidence(profile: dict) -> dict:
     return {
@@ -74,6 +99,7 @@ def _evidence(profile: dict) -> dict:
         },
     }
 
+
 def _store_source(repo: RunRepository, run_dir, source_id: str, tier: str, text: str) -> None:
     path = run_dir / "sources" / f"{source_id}.txt"
     path.parent.mkdir(exist_ok=True)
@@ -92,6 +118,7 @@ def _store_source(repo: RunRepository, run_dir, source_id: str, tier: str, text:
         supplied_via="guided_fetch" if tier == "fulltext" else None,
         extraction_method="fixture",
     )
+
 
 def _write_guided_ocr_artifact(
     run_dir: Path,
@@ -136,6 +163,144 @@ def _write_guided_ocr_artifact(
         json.dumps(metadata), encoding="utf-8",
     )
     return text_path
+
+
+def test_source_inventory_projects_auditable_fetch_state(tmp_path):
+    repo = _repo(tmp_path)
+    try:
+        ref_one = _make_reference(
+            1, "Smith, J. A cited article. Journal of Tests, 12(3), 10-20 (2020).",
+        )
+        ref_two = _make_reference(2, "Doe, J. Missing article. Journal of Tests, 1, 1-2 (2021).")
+        ref_one["id"] = "r1"
+        ref_two["id"] = "r2"
+        repo.replace_parse_payload(claims=[], references=[ref_one, ref_two], citations=[])
+
+        record = {
+            "title": ["A cited article"],
+            "author": [{"family": "Smith"}],
+            "published": {"date-parts": [[2020]]},
+            "container-title": ["Journal of Tests"],
+            "volume": "12",
+            "issue": "3",
+            "page": "10-20",
+        }
+        profile = _metadata_match_profile(ref_one, record, "A cited article")
+        evidence = _evidence(profile)
+        repo.upsert_resolve_result("r1", {
+            "status": "resolved", "via": "fixture", "matched_title": "A cited article",
+            "reference_status_tag": "verified", "fabrication_risk": "low",
+            "attempts": [{"status": "resolved", "via": "fixture", "metadata_match": profile}],
+            "evidence_profile": evidence,
+        })
+        repo.upsert_resolve_result("r2", {
+            "status": "unverified", "via": "fixture",
+            "reference_status_tag": "suspected_fabricated", "fabrication_risk": "high",
+            "tag_reason": "fixture suspicion",
+            "abstract": "Metadata-only abstract",
+            "attempts": [{"status": "unverified", "via": "fixture"}],
+            "evidence_profile": evidence,
+        })
+        _store_source(repo, tmp_path, "abstract", "abstract", "Abstract source")
+        _store_source(repo, tmp_path, "fulltext", "fulltext", "Full text source")
+        repo.store_source_text(
+            source_text_id="escaped", ref_id="r1", identity_key="fixture:r1",
+            tier="fulltext", origin="other", stored_path="sources/../escape.txt",
+            sha256=hashlib.sha256(b"escape").hexdigest(), char_count=6,
+            extraction_method="fixture",
+        )
+        repo.append_fetch_attempt(
+            "r1", method="GET", url="https://example.test/source", kind="fulltext",
+            final_url="https://example.test/source", status_code=200,
+            content_type="text/html", outcome="stored", origin="fixture",
+        )
+
+        result = repo.get_resolve_result("r1")
+        reference = repo.get_reference("r1")
+        repo.create_task(
+            task_id="fetch-r1", slot="fetch", ref_id="r1", task_payload={
+                "kind": "fetch", "status": "pending", "answer": None,
+                "ref_id": "r1", "ref_number": 1,
+                "reference": {
+                    key: getattr(reference, key)
+                    for key in ("ref_number", "raw_entry", "title", "doi", "pmid", "url", "isbn", "year", "source_type", "source_kind", "indexability", "source_type_confidence")
+                },
+                "source_identity": {
+                    "reference_status_tag": result.reference_status_tag,
+                    "fabrication_risk": result.fabrication_risk,
+                    "tag_reason": result.tag_reason,
+                    "matched_title": result.matched_title,
+                    "metadata_match": result.evidence_profile["metadata_match"],
+                },
+                "instructions": "Supply a source.",
+            },
+        )
+        repo.create_task(
+            task_id="browser-group", slot="fetch", task_payload={
+                "kind": "browser_challenge", "status": "pending", "answer": None,
+                "domain": "example.test", "instructions": "Open the browser.",
+                "candidate_urls": ["https://example.test/source"],
+                "references": [
+                    {"ref_id": ref_id, "ref_number": number, "raw_entry": raw, "doi": None,
+                     "url": None, "candidate_urls": ["https://example.test/source"]}
+                    for ref_id, number, raw in (("r1", 1, ref_one["raw_entry"]), ("r2", 2, ref_two["raw_entry"]))
+                ],
+            },
+        )
+        repo.create_source_identity_attestation(
+            task_id="identity-r1",
+            ref_id="r1",
+            source_text_id="fulltext",
+            slot="fetch",
+            instructions="Confirm this exact source identity.",
+        )
+
+        inventory = build_source_inventory(str(tmp_path))
+    finally:
+        repo.close()
+
+    by_ref = {item["ref_id"]: item for item in inventory["references"]}
+    first = by_ref["r1"]
+    resolved_tab = GuidedFetchViewModel(inventory).detail_tabs("r1")["Resolved"]
+    assert inventory["run"]["run_id"] == "guided-inventory"
+    assert first["parsed"]["cited_coordinates"] == ref_one["cited_coordinates"]
+    assert first["resolve"]["journal_authority"] == evidence["journal_authority"]
+    assert first["resolve"]["coordinate_comparisons"] == profile["coordinate_comparisons"]
+    assert (
+        resolved_tab["evidence_profile"]["bibliographic_adjudication"]
+        == evidence["bibliographic_adjudication"]
+    )
+    assert first["fetch"]["tier"] == "fulltext"
+    assert next(source for source in first["fetch"]["sources"] if source["source_text_id"] == "fulltext")["preview_path"] == str(tmp_path / "sources" / "fulltext.txt")
+    escaped = next(source for source in first["fetch"]["sources"] if source["source_text_id"] == "escaped")
+    assert escaped["available"] is False and escaped["preview_path"] is None
+    assert len(first["fetch"]["attempts"]) == 1
+    assert {task["task_id"] for task in first["fetch"]["pending_tasks"]} == {
+        "fetch-r1", "browser-group", "identity-r1",
+    }
+    identity = next(
+        task for task in first["fetch"]["pending_tasks"]
+        if task["task_kind"] == "source_identity_attestation"
+    )
+    assert identity["target_sha256"]
+    assert identity["source_text_id"] == "fulltext"
+    assert "stored_path" not in identity
+    assert "file_path" not in identity
+    assert by_ref["r2"]["fetch"]["sources"] == []
+    assert by_ref["r2"]["fetch"]["tier"] == "abstract"
+    assert by_ref["r2"]["fabrication_suspicion"]["suspected"] is True
+    second_resolve = by_ref["r2"]["resolve"]
+    second_profile = second_resolve["evidence_profile"]
+    assert by_ref["r2"]["bibliographic_concern"] == bibliographic_concern(second_resolve)
+    assert by_ref["r2"]["bibliographic_review_labels"] == bibliographic_review_labels(
+        reference=by_ref["r2"]["parsed"],
+        status=second_resolve["status"],
+        attempts=second_resolve["attempts"],
+        adjudication=second_profile["bibliographic_adjudication"],
+        coverage=second_profile.get("resolver_coverage", {}),
+    )
+    assert [task["task_id"] for task in by_ref["r2"]["fetch"]["pending_tasks"]] == ["browser-group"]
+
 
 def test_source_inventory_previews_only_one_valid_undiscarded_guided_ocr_sidecar(
     tmp_path,
@@ -186,3 +351,31 @@ def test_source_inventory_previews_only_one_valid_undiscarded_guided_ocr_sidecar
         "path" not in item and "text_file_path" not in item
         for item in inventory["ocr_queue"]
     )
+
+
+def test_guided_ocr_loader_rejects_escaped_and_symlinked_artifacts(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    text_path = _write_guided_ocr_artifact(
+        run_dir, "r1", 1, status="done",
+    )
+    assert text_path is not None
+    artifact_dir = run_dir / "sources" / "guided_ocr"
+    metadata_path = next(artifact_dir.glob("*.json"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    scan_path = artifact_dir / f"{metadata['scan_id']}.pdf"
+
+    metadata["text_path"] = f"sources/guided_ocr/../{text_path.name}"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    assert _load_guided_ocr_artifacts(str(run_dir)) == {}
+
+    metadata["text_path"] = text_path.relative_to(run_dir).as_posix()
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    outside = tmp_path / "outside.pdf"
+    outside.write_bytes(scan_path.read_bytes())
+    scan_path.unlink()
+    try:
+        scan_path.symlink_to(outside)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    assert _load_guided_ocr_artifacts(str(run_dir)) == {}

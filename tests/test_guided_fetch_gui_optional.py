@@ -20,6 +20,74 @@ def test_gui_modules_are_importable_without_initializing_qt():
     assert GuidedFetchViewModel({"references": []}).rows() == []
 
 
+def test_source_preflight_rejects_html_without_readable_text(monkeypatch, tmp_path):
+    from core.fetch.extraction import fetch_html
+    from core.gui.guided_fetch import _preflight_source_file
+    from core.parse import extract as parse_extract
+
+    candidate = tmp_path / "empty.html"
+    candidate.write_text("<html><body></body></html>", encoding="utf-8")
+    monkeypatch.setattr(parse_extract, "probe_file", lambda _path: {})
+    monkeypatch.setattr(parse_extract, "extract_text", lambda _path: ("", "html", {}))
+    monkeypatch.setattr(fetch_html, "is_challenge_html", lambda _text: False)
+
+    with pytest.raises(ValueError, match="empty.html contains no readable text"):
+        _preflight_source_file(str(candidate), "fulltext")
+
+
+def test_source_preflight_reports_js_rendered_html_before_proceed(tmp_path):
+    from core.gui.guided_fetch import _preflight_source_file
+
+    candidate = tmp_path / "rendered-shell.html"
+    candidate.write_text(
+        "<!doctype html><html><head><title>Article</title></head>"
+        "<body><div id='app'></div><script>loadArticle()</script></body></html>",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="save the fully-rendered HTML or supply a PDF") as error:
+        _preflight_source_file(str(candidate), "fulltext")
+    assert "\u2014" not in str(error.value)
+
+
+def test_qt_rejected_file_stays_replaceable_before_proceed(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    candidate = tmp_path / "source.html"
+    candidate.write_text("<html></html>", encoding="utf-8")
+    submitted = []
+    errors = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda _parent, _title, message: errors.append(message)
+    )
+    monkeypatch.setattr(
+        "core.gui.guided_fetch._preflight_source_file",
+        lambda *_: (_ for _ in ()).throw(ValueError("HTML has no readable full text")),
+    )
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: submitted.append(True),
+        proceed=lambda: None,
+        inventory_loader=lambda _run: {"references": [{
+            "ref_id": "r1", "ref_number": 1,
+            "parsed": {"title": "Cited work"}, "resolve": {},
+            "fetch": {"tier": None, "pending_tasks": [{"task_kind": "fetch"}]},
+        }]},
+    )
+    window._set_file(str(candidate))
+
+    assert submitted == []
+    assert errors == ["HTML has no readable full text"]
+    assert window._selected_file is None
+    assert window.file_label.text() == "File rejected. Choose another file."
+    assert window._queued_sources == {}
+    assert window.proceed_button.isEnabled()
+    window.close()
+    assert app is not None
+
+
 def test_qt_window_smoke_when_optional_extra_is_installed(monkeypatch, tmp_path):
     pytest.importorskip("PySide6")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -100,30 +168,18 @@ def test_qt_window_smoke_when_optional_extra_is_installed(monkeypatch, tmp_path)
     assert app is not None
 
 
-def test_qt_identity_review_requires_confirmation_before_proceed(
+def test_qt_identity_review_submits_closed_decision_and_blocks_proceed(
     monkeypatch, tmp_path,
 ):
     pytest.importorskip("PySide6")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtCore import QPoint, QRect, Qt
+    from PySide6.QtWidgets import QApplication
     from core.gui.guided_fetch import create_guided_fetch_window
 
     app = QApplication.instance() or QApplication([])
     state = {"pending": True}
     submitted = []
-    proceeded = []
-    questions = []
-    errors = []
-
-    def refuse_pending_review(_parent, title, message, *_args):
-        questions.append((title, message))
-        return QMessageBox.StandardButton.No
-
-    monkeypatch.setattr(QMessageBox, "question", refuse_pending_review)
-    monkeypatch.setattr(
-        QMessageBox, "critical",
-        lambda _parent, title, message: errors.append((title, message)),
-    )
 
     def inventory(_run):
         pending = []
@@ -162,7 +218,7 @@ def test_qt_identity_review_requires_confirmation_before_proceed(
     window = create_guided_fetch_window(
         str(tmp_path),
         submit_source=lambda *_: None,
-        proceed=lambda: proceeded.append(True),
+        proceed=lambda: None,
         submit_identity_review=submit_identity,
         identity_review_allowed=True,
         inventory_loader=inventory,
@@ -174,15 +230,31 @@ def test_qt_identity_review_requires_confirmation_before_proceed(
     assert "Cited work" in window.identity_review_facts.text()
     assert "Resolved work" in window.identity_review_facts.text()
     assert "a" * 64 in window.identity_review_facts.text()
-
-    window.proceed_button.click()
+    assert window.tabs.currentIndex() == window._identity_review_tab
+    assert window.tabs.isTabEnabled(window._identity_review_tab)
+    assert all(
+        window.table.item(0, column).background().color().name() == "#fff4d1"
+        for column in range(window.table.columnCount())
+    )
+    assert "selection-background-color: #fff4d1" in window.table.styleSheet()
+    assert not window.tabs.tabIcon(window._identity_review_tab).isNull()
+    assert window.tabs.tabBar().tabTextColor(window._identity_review_tab).name() == "#9a6700"
+    assert "#identityReviewPanel { background:" not in window.styleSheet()
+    window.theme_toggle.click()
+    assert all(
+        window.table.item(0, column).background().color().name() == "#3d331c"
+        for column in range(window.table.columnCount())
+    )
+    assert "selection-background-color: #3d331c" in window.table.styleSheet()
+    assert window.tabs.tabBar().tabTextColor(window._identity_review_tab).name() == "#ffd166"
+    window.theme_toggle.click()
+    window.resize(900, 680)
+    window.show()
     app.processEvents()
-    assert len(questions) == 1
-    assert questions[0][0] == "Proceed"
-    assert "identity unverified" in questions[0][1]
-    assert submitted == []
-    assert proceeded == []
-    assert errors == []
+    for button in (window.attest_identity_button, window.keep_unverified_button):
+        button_rect = QRect(button.mapTo(window.tabs, QPoint(0, 0)), button.size())
+        assert button.isVisible()
+        assert window.tabs.rect().contains(button_rect)
 
     window.identity_review_reason.setText("Title, author, and venue match.")
     window.attest_identity_button.click()
@@ -193,6 +265,14 @@ def test_qt_identity_review_requires_confirmation_before_proceed(
         "Title, author, and venue match.",
     )]
     assert window.identity_review_panel.isHidden()
+    assert not window.tabs.isTabEnabled(window._identity_review_tab)
+    assert window.tabs.tabIcon(window._identity_review_tab).isNull()
+    assert not window.tabs.tabBar().tabTextColor(window._identity_review_tab).isValid()
+    assert all(
+        window.table.item(0, column).background().style() == Qt.BrushStyle.NoBrush
+        for column in range(window.table.columnCount())
+    )
+    assert window.table.styleSheet() == ""
     assert window.proceed_button.isEnabled() is True
     window.close()
 
@@ -230,7 +310,291 @@ def test_qt_identity_review_requires_confirmation_before_proceed(
     assert agent_window.identity_review_reason.isEnabled() is False
     assert agent_window.proceed_button.isEnabled() is False
     assert "separately authenticated human operator" in agent_window.identity_review_facts.text()
+    assert "separately authenticated human operator" in agent_window.proceed_guidance.text()
     agent_window.close()
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_note"),
+    [
+        ("attest_identity", "Operator confirmed the cited-work identity"),
+        ("keep_unverified", "Operator kept the source identity unverified"),
+    ],
+)
+def test_qt_identity_review_note_is_optional_for_operator_actions(
+    monkeypatch, tmp_path, action, expected_note,
+):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    pending = [True]
+    submitted = []
+
+    def inventory(_run):
+        tasks = ([{
+            "task_id": "identity:r1",
+            "task_kind": "source_identity_attestation",
+            "target_sha256": "a" * 64,
+            "reference": {"title": "Cited work"},
+        }] if pending[0] else [])
+        return {"references": [{
+            "ref_id": "r1", "ref_number": 1,
+            "parsed": {"title": "Cited work"}, "resolve": {},
+            "fetch": {"tier": "fulltext", "pending_tasks": tasks},
+        }]}
+
+    def submit(ref_id, selected_action, target, reason):
+        submitted.append((ref_id, selected_action, target, reason))
+        pending[0] = False
+
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *_: pytest.fail("note must be optional")
+    )
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
+        submit_identity_review=submit, inventory_loader=inventory,
+    )
+    assert "Optional note" in window.identity_review_reason.placeholderText()
+    assert not window.identity_review_reason.text()
+    button = (
+        window.attest_identity_button if action == "attest_identity"
+        else window.keep_unverified_button
+    )
+    button.click()
+    app.processEvents()
+
+    assert len(submitted) == 1
+    assert submitted[0][:3] == ("r1", action, "a" * 64)
+    assert expected_note in submitted[0][3]
+    assert "without an additional note" in submitted[0][3]
+    assert window.identity_review_panel.isHidden()
+    window.close()
+
+
+def test_qt_proceed_confirms_and_records_pending_identity_skips(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    pending = {"r1", "r2"}
+    decisions = []
+    proceeded = []
+    questions = []
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+
+    def inventory(_run):
+        references = []
+        for number, ref_id in ((1, "r1"), (2, "r2")):
+            tasks = [{"task_kind": "fetch"}]
+            if ref_id in pending:
+                tasks.append({
+                    "task_kind": "source_identity_attestation",
+                    "task_id": f"identity:{ref_id}",
+                    "target_sha256": str(number) * 64,
+                    "reference": {"title": f"Work {number}"},
+                })
+            references.append({
+                "ref_id": ref_id, "ref_number": number,
+                "parsed": {"title": f"Work {number}"}, "resolve": {},
+                "fetch": {"tier": None, "pending_tasks": tasks},
+            })
+        return {"references": references}
+
+    def submit(ref_id, action, target, reason):
+        decisions.append((ref_id, action, target, reason))
+        pending.remove(ref_id)
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda _parent, _title, message: questions.append(message) or answers.pop(0),
+    )
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None,
+        proceed=lambda: proceeded.append(True),
+        submit_identity_review=submit, identity_review_allowed=True,
+        inventory_loader=inventory,
+    )
+    assert window.proceed_button.isEnabled()
+    assert "[1], [2] still need an identity decision" in window.proceed_guidance.text()
+    window.proceed_button.click()
+    app.processEvents()
+    assert decisions == []
+    assert proceeded == []
+    window.proceed_button.click()
+    app.processEvents()
+
+    assert len(questions) == 2
+    assert "[1]" in questions[1] and "[2]" in questions[1]
+    assert "identity unverified" in questions[1]
+    assert [item[:2] for item in decisions] == [
+        ("r1", "keep_unverified"), ("r2", "keep_unverified"),
+    ]
+    assert all("remains unverified" in item[3] for item in decisions)
+    assert proceeded == [True]
+    window.close()
+
+
+def test_qt_proceed_skips_confirmation_when_manual_fetch_work_is_resolved(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui import guided_fetch
+
+    app = QApplication.instance() or QApplication([])
+    source_file = tmp_path / "answer.txt"
+    source_file.write_text("Exact cited work text", encoding="utf-8")
+    submitted = []
+    proceeded = []
+    questions = []
+    monkeypatch.setattr(guided_fetch, "_preflight_source_file", lambda *_: "readable")
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda _parent, title, message: questions.append((title, message))
+        or QMessageBox.StandardButton.Yes,
+    )
+    window = guided_fetch.create_guided_fetch_window(
+        str(tmp_path),
+        submit_source=lambda ref_id, payload: submitted.append((ref_id, payload)),
+        proceed=lambda: proceeded.append(True),
+        inventory_loader=lambda _run: {"references": [
+            {
+                "ref_id": "r1", "ref_number": 1, "parsed": {"title": "Work 1"},
+                "resolve": {}, "fetch": {"tier": None, "pending_tasks": [{
+                    "task_kind": "fetch", "task_id": "fetch:r1",
+                }]},
+            },
+            {
+                "ref_id": "r2", "ref_number": 2, "parsed": {"title": "Work 2"},
+                "resolve": {}, "fetch": {"tier": None, "pending_tasks": []},
+            },
+        ]},
+    )
+    window._set_file(str(source_file))
+    window._submit_file()
+    assert submitted and submitted[0][0] == "r1"
+    assert window._queued_sources.keys() == {"r1"}
+
+    window.proceed_button.click()
+    app.processEvents()
+
+    assert len(questions) == 1
+    assert questions[0][0] == "Confirm source"
+    assert proceeded == [True]
+    window.close()
+
+
+def test_qt_proceed_still_confirms_unresolved_fetch_work(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    questions = []
+    proceeded = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda _parent, title, message: questions.append((title, message))
+        or QMessageBox.StandardButton.No,
+    )
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None,
+        proceed=lambda: proceeded.append(True),
+        inventory_loader=lambda _run: {"references": [{
+            "ref_id": "r1", "ref_number": 1, "parsed": {"title": "Work 1"},
+            "resolve": {}, "fetch": {"tier": None, "pending_tasks": [{
+                "task_kind": "fetch", "task_id": "fetch:r1",
+            }]},
+        }]},
+    )
+    window.proceed_button.click()
+    app.processEvents()
+
+    assert len(questions) == 1
+    assert questions[0][0] == "Proceed"
+    assert "skip every remaining retrieval" in questions[0][1]
+    assert proceeded == []
+    window.close()
+
+
+def test_qt_proceed_blocks_stale_recorded_identity_decision(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    questions = []
+    errors = []
+    proceeded = []
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *_: questions.append(True)
+        or QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        QMessageBox, "critical", lambda _parent, title, message: errors.append((title, message))
+    )
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None,
+        proceed=lambda: proceeded.append(True),
+        submit_identity_review=lambda *_: None,
+        inventory_loader=lambda _run: {"references": [{
+            "ref_id": "r1", "ref_number": 1, "parsed": {"title": "Work 1"},
+            "resolve": {}, "fetch": {"tier": None, "pending_tasks": [{
+                "task_kind": "source_identity_attestation",
+                "task_id": "identity:r1", "target_sha256": "a" * 64,
+                "reference": {"title": "Work 1"},
+            }]},
+        }]},
+    )
+    window._recorded_identity_refs.add("r1")
+    window._proceed_clicked()
+
+    assert questions == []
+    assert proceeded == []
+    assert errors and errors[0][0] == "Identity decision recorded; refresh failed"
+    window.close()
+
+
+def test_qt_proceed_does_not_continue_when_identity_skip_fails(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    proceeded = []
+    errors = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "critical", lambda _parent, title, message: errors.append((title, message)))
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None,
+        proceed=lambda: proceeded.append(True),
+        submit_identity_review=lambda *_: (_ for _ in ()).throw(ValueError("admission failed")),
+        identity_review_allowed=True,
+        inventory_loader=lambda _run: {"references": [{
+            "ref_id": "r5", "ref_number": 5,
+            "parsed": {"title": "Work 5"}, "resolve": {},
+            "fetch": {"tier": None, "pending_tasks": [{
+                "task_kind": "source_identity_attestation",
+                "task_id": "identity:r5", "target_sha256": "5" * 64,
+                "reference": {"title": "Work 5"},
+            }]},
+        }]},
+    )
+    window.proceed_button.click()
+    app.processEvents()
+    assert proceeded == []
+    assert errors and errors[0][0] == "Unable to record identity decision"
+    window.close()
 
 
 def test_qt_identity_review_does_not_retry_after_successful_admission_refresh_failure(
@@ -290,6 +654,7 @@ def test_qt_identity_review_does_not_retry_after_successful_admission_refresh_fa
 def test_qt_theme_toggle_and_task_kind_enable_file_controls(monkeypatch, tmp_path):
     pytest.importorskip("PySide6")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QLabel
     from core.gui.guided_fetch import create_guided_fetch_window
 
@@ -360,6 +725,43 @@ def test_qt_theme_toggle_and_task_kind_enable_file_controls(monkeypatch, tmp_pat
     assert availability.foreground().color().name() == "#7dd3fc"
     assert window.table.item(0, 4).foreground().color().name() == "#ff8787"
     assert window.table.item(0, 5).foreground().color().name() == "#ffd166"
+    window.close()
+    assert app is not None
+
+
+def test_qt_file_drop_area_opens_picker_by_mouse_and_keyboard(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QFileDialog
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
+        inventory_loader=lambda _run: {"references": [{
+            "ref_id": "r1", "parsed": {"title": "Cited work"},
+            "resolve": {"status": "resolved"},
+            "fetch": {"tier": None, "pending_tasks": [{"task_kind": "fetch"}]},
+        }]},
+    )
+    calls = []
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileName",
+        lambda *args: (calls.append(args) or ("", "")),
+    )
+    window.show()
+    app.processEvents()
+    assert window.file_label.x() < window.choose_file.x()
+    assert window.file_label.focusPolicy() == Qt.FocusPolicy.StrongFocus
+
+    QTest.mouseClick(window.file_label, Qt.MouseButton.LeftButton)
+    window.file_label.setFocus()
+    for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+        QTest.keyClick(window.file_label, key)
+
+    assert len(calls) == 4
     window.close()
     assert app is not None
 
@@ -444,6 +846,401 @@ def test_qt_window_marks_retracted_resolved_source(monkeypatch, tmp_path):
     assert "recorded as retracted" in window.selection_guidance.text()
     window.close()
     assert app is not None
+
+
+def test_qt_pending_ocr_shows_pdf_and_row_progress_without_leaving_fetch(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    import threading
+    import time
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    release = threading.Event()
+    calls = []
+    proceeded = []
+    questions = []
+
+    def run_ocr(jobs, progress):
+        calls.extend(jobs)
+        progress({"ref_id": "r1", "scan_id": "scan-1", "status": "running"})
+        release.wait(3)
+        progress({"ref_id": "r1", "scan_id": "scan-1", "status": "done"})
+        return [{"ref_id": "r1", "scan_id": "scan-1", "status": "done"}]
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda _parent, title, message: questions.append((title, message))
+        or QMessageBox.StandardButton.No,
+    )
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None,
+        proceed=lambda: proceeded.append(True), run_ocr=run_ocr,
+        inventory_loader=lambda _run: {
+            "references": [{"ref_id": "r1", "ref_number": 1,
+                            "parsed": {"title": "Scanned work"}, "resolve": {},
+                            "fetch": {"tier": None, "pending_tasks": []}}],
+            "ocr_queue": [{"ref_id": "r1", "ref_number": 1, "scan_id": "scan-1",
+                           "display_name": "paper.pdf", "status": "pending",
+                           "reason": "PDF has no text layer"}],
+        },
+    )
+    try:
+        assert not window.table.item(0, 3).icon().isNull()
+        assert window.ocr_button.text() == "Run OCR · 1 PDF"
+        assert "OCR" in window.proceed_button.text()
+        window.proceed_button.click()
+        assert proceeded == []
+        assert "1 PDF" in questions[0][1]
+
+        window.ocr_button.click()
+        deadline = time.monotonic() + 3
+        while window.table.cellWidget(0, 3) is None and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.01)
+        assert window.table.cellWidget(0, 3) is not None
+        assert window.proceed_button.isEnabled() is False
+        assert calls == [{"ref_id": "r1", "scan_id": "scan-1"}]
+    finally:
+        release.set()
+        deadline = time.monotonic() + 3
+        while window._ocr_thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.01)
+        assert window._ocr_thread is None
+        assert "Text extracted" in window.table.item(0, 3).text()
+        assert window.proceed_button.isEnabled()
+        window.close()
+
+
+def test_qt_ocr_labels_follow_desktop_language(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from core.gui.desktop import load_translations
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
+        run_ocr=lambda *_: [], ocr_text=load_translations("it"),
+        inventory_loader=lambda _run: {
+            "references": [{"ref_id": "r1", "ref_number": 1,
+                            "parsed": {"title": "Scansione"}, "resolve": {},
+                            "fetch": {"tier": None, "pending_tasks": []}}],
+            "ocr_queue": [{"ref_id": "r1", "scan_id": "scan-1", "status": "pending"}],
+        },
+    )
+    assert window.ocr_button.text() == "Esegui OCR · 1 PDF"
+    assert "PDF da elaborare" in window.table.item(0, 3).text()
+    assert window.proceed_button.text() == "Procedi / salta Fetch e OCR"
+    window.close()
+    assert app is not None
+
+
+def test_qt_reopened_completed_ocr_is_visible_without_requeue(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
+        run_ocr=lambda *_: [],
+        inventory_loader=lambda _run: {
+            "references": [{"ref_id": "r1", "ref_number": 1,
+                            "parsed": {"title": "Scanned work"}, "resolve": {},
+                            "fetch": {"tier": None, "pending_tasks": []}}],
+            "ocr_queue": [{"ref_id": "r1", "scan_id": "scan-1", "status": "done"}],
+        },
+    )
+    assert "Text extracted" in window.table.item(0, 3).text()
+    assert not window.table.item(0, 3).icon().isNull()
+    assert not window.ocr_button.isVisible()
+    window.close()
+    assert app is not None
+
+
+def test_qt_reopened_failed_ocr_can_be_retried(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
+        run_ocr=lambda *_: [],
+        inventory_loader=lambda _run: {
+            "references": [{"ref_id": "r1", "ref_number": 1,
+                            "parsed": {"title": "Scanned work"}, "resolve": {},
+                            "fetch": {"tier": None, "pending_tasks": []}}],
+            "ocr_queue": [{"ref_id": "r1", "scan_id": "scan-1", "status": "failed",
+                           "reason": "OCR backend unavailable"}],
+        },
+    )
+    assert "OCR failed" in window.table.item(0, 3).text()
+    assert window.ocr_button.isEnabled()
+    assert window.ocr_button.text() == "Run OCR · 1 PDF"
+    assert "OCR" in window.proceed_button.text()
+    window.close()
+    assert app is not None
+
+
+def test_qt_selected_scan_starts_ocr_only_after_source_confirmation(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    import time
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui import guided_fetch
+
+    app = QApplication.instance() or QApplication([])
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(guided_fetch, "_preflight_source_file", lambda *_: "ocr_pending")
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    staged = []
+    jobs_seen = []
+
+    def run_ocr(jobs, progress):
+        jobs_seen.extend(jobs)
+        progress({"ref_id": "r1", "status": "done"})
+        return [{"ref_id": "r1", "scan_id": None, "status": "done"}]
+
+    window = guided_fetch.create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda ref_id, payload: staged.append((ref_id, payload)),
+        proceed=lambda: None, run_ocr=run_ocr,
+        inventory_loader=lambda _run: {"references": [{
+            "ref_id": "r1", "ref_number": 1,
+            "parsed": {"title": "Scanned work"}, "resolve": {},
+            "fetch": {"tier": None, "pending_tasks": [{"task_kind": "fetch", "task_id": "fetch:r1"}]},
+        }]},
+    )
+    window._set_file(str(pdf))
+    assert jobs_seen == []
+    assert window.submit.text() == "Confirm and run OCR"
+    window._submit_file()
+    deadline = time.monotonic() + 3
+    while window._ocr_thread is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(.01)
+    assert staged and staged[0][0] == "r1"
+    assert jobs_seen == [{"ref_id": "r1", "scan_id": None}]
+    assert "Text extracted" in window.table.item(0, 3).text()
+    window.close()
+
+
+def test_qt_confirmed_scanned_file_is_one_shot_and_replacements_bind_to_ref(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    import time
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui import guided_fetch
+
+    app = QApplication.instance() or QApplication([])
+    files = [tmp_path / name for name in ("first.pdf", "replacement.pdf", "second.pdf")]
+    for candidate in files:
+        candidate.write_bytes(b"%PDF-1.4\n")
+    staged = []
+    jobs_seen = []
+    questions = []
+    monkeypatch.setattr(guided_fetch, "_preflight_source_file", lambda *_: "ocr_pending")
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda _parent, title, message: questions.append((title, message))
+        or QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+
+    def run_ocr(jobs, progress):
+        jobs_seen.extend(jobs)
+        for job in jobs:
+            progress({**job, "status": "done"})
+        return [{**job, "status": "done"} for job in jobs]
+
+    def inventory(_run):
+        return {"references": [{
+            "ref_id": ref_id, "ref_number": number,
+            "parsed": {"title": f"Work {number}"}, "resolve": {},
+            "fetch": {"tier": None, "pending_tasks": [{
+                "task_kind": "fetch", "task_id": f"fetch:{ref_id}",
+            }]},
+        } for number, ref_id in ((1, "r1"), (2, "r2"))]}
+
+    window = guided_fetch.create_guided_fetch_window(
+        str(tmp_path),
+        submit_source=lambda ref_id, payload: staged.append((ref_id, payload)),
+        proceed=lambda: None,
+        run_ocr=run_ocr,
+        inventory_loader=inventory,
+    )
+
+    def wait_for_ocr():
+        deadline = time.monotonic() + 3
+        while window._ocr_thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.01)
+        app.processEvents()
+        assert window._ocr_thread is None
+
+    def select_ref(ref_id):
+        for index in range(window.table.rowCount()):
+            item = window.table.item(index, 0)
+            if item.data(Qt.ItemDataRole.UserRole) == ref_id:
+                window.table.selectRow(index)
+                app.processEvents()
+                return
+        pytest.fail(f"missing table row for {ref_id}")
+
+    try:
+        assert window._current_ref_id == "r1"
+        window._set_file(str(files[0]))
+        assert window.submit.text() == "Confirm and run OCR"
+        window._submit_file()
+        wait_for_ocr()
+
+        assert staged[0][0] == "r1"
+        assert jobs_seen == [{"ref_id": "r1", "scan_id": None}]
+        assert "Text extracted" in window.table.item(0, 3).text()
+        assert window.submit.isEnabled() is False
+        assert window.submit.text() != "Confirm and run OCR"
+        assert window.choose_file.isEnabled()
+        assert window.file_label.isEnabled()
+
+        window._submit_file()
+        assert len(staged) == 1
+        assert len(jobs_seen) == 1
+        assert len(questions) == 1
+
+        window._set_file(str(files[1]))
+        assert window.submit.isEnabled()
+        window._submit_file()
+        wait_for_ocr()
+        assert [ref_id for ref_id, _payload in staged] == ["r1", "r1"]
+        assert jobs_seen == [
+            {"ref_id": "r1", "scan_id": None},
+            {"ref_id": "r1", "scan_id": None},
+        ]
+
+        select_ref("r2")
+        assert window.submit.isEnabled() is False
+        assert window.choose_file.isEnabled()
+        window._set_file(str(files[2]))
+        assert window.submit.isEnabled()
+        window._submit_file()
+        wait_for_ocr()
+        assert [ref_id for ref_id, _payload in staged] == ["r1", "r1", "r2"]
+        assert [job["ref_id"] for job in jobs_seen] == ["r1", "r1", "r2"]
+    finally:
+        window.close()
+
+
+def test_qt_ocr_completion_for_another_ref_preserves_current_file_selection(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    import threading
+    import time
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from core.gui import guided_fetch
+
+    app = QApplication.instance() or QApplication([])
+    source_file = tmp_path / "other-ref.txt"
+    source_file.write_text("Exact source", encoding="utf-8")
+    started = threading.Event()
+    release = threading.Event()
+    jobs_seen = []
+    staged = []
+    monkeypatch.setattr(guided_fetch, "_preflight_source_file", lambda *_: "readable")
+    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+
+    def run_ocr(jobs, progress):
+        jobs_seen.extend(jobs)
+        for job in jobs:
+            progress({**job, "status": "running"})
+        started.set()
+        release.wait(5)
+        for job in jobs:
+            progress({**job, "status": "done"})
+        return [{**job, "status": "done"} for job in jobs]
+
+    window = guided_fetch.create_guided_fetch_window(
+        str(tmp_path),
+        submit_source=lambda ref_id, payload: staged.append((ref_id, payload)),
+        proceed=lambda: None,
+        run_ocr=run_ocr,
+        inventory_loader=lambda _run: {
+            "references": [
+                {
+                    "ref_id": "r1", "ref_number": 1, "parsed": {"title": "Scanned"},
+                    "resolve": {}, "fetch": {"tier": None, "pending_tasks": []},
+                },
+                {
+                    "ref_id": "r2", "ref_number": 2, "parsed": {"title": "Other"},
+                    "resolve": {}, "fetch": {"tier": None, "pending_tasks": [{
+                        "task_kind": "fetch", "task_id": "fetch:r2",
+                    }]},
+                },
+            ],
+            "ocr_queue": [{
+                "ref_id": "r1", "ref_number": 1, "scan_id": "scan-1",
+                "display_name": "scanned.pdf", "status": "pending",
+            }],
+        },
+    )
+    try:
+        window.table.selectRow(1)
+        app.processEvents()
+        assert window._current_ref_id == "r2"
+        window._set_file(str(source_file))
+        assert window.submit.isEnabled()
+
+        window.ocr_button.click()
+        deadline = time.monotonic() + 3
+        while not started.is_set() and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.01)
+        assert started.is_set()
+
+        window.table.selectRow(0)
+        app.processEvents()
+        assert window._current_ref_id == "r1"
+        window.table.selectRow(1)
+        app.processEvents()
+        assert window._current_ref_id == "r2"
+
+        release.set()
+        deadline = time.monotonic() + 3
+        while window._ocr_thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.01)
+        app.processEvents()
+
+        assert window._ocr_thread is None
+        assert jobs_seen == [{"ref_id": "r1", "scan_id": "scan-1"}]
+        assert window._selected_file == str(source_file)
+        assert window._selected_file_ref_id == "r2"
+        assert window.submit.isEnabled()
+        assert window.choose_file.isEnabled()
+        window._submit_file()
+        assert [ref_id for ref_id, _payload in staged] == ["r2"]
+    finally:
+        release.set()
+        deadline = time.monotonic() + 3
+        while window._ocr_thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.01)
+        window.close()
 
 
 def test_qt_browser_capture_stays_bound_to_opened_reference_after_selection_changes(
@@ -645,6 +1442,43 @@ def test_qt_browser_navigation_shows_per_reference_search_error(monkeypatch, tmp
     assert app is not None
 
 
+def test_qt_browser_buttons_open_resolved_doi_instead_of_api(monkeypatch, tmp_path):
+    pytest.importorskip("PySide6")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6 import QtGui
+    from PySide6.QtWidgets import QApplication
+    from core.gui.guided_fetch import create_guided_fetch_window
+
+    app = QApplication.instance() or QApplication([])
+    window = create_guided_fetch_window(
+        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
+        inventory_loader=lambda _run: {"references": [{
+            "ref_id": "r1", "ref_number": 1,
+            "parsed": {"title": "Cited work"},
+            "resolve": {
+                "doi": "10.1000/resolved",
+                "fulltext_links": [{
+                    "url": "https://api.publisher.test/article?httpAccept=text/xml",
+                    "content_type": "text/xml",
+                }],
+            },
+            "fetch": {"tier": None, "pending_tasks": [{"task_kind": "fetch"}]},
+        }]},
+    )
+    system_urls = []
+    assisted_urls = []
+    monkeypatch.setattr(QtGui.QDesktopServices, "openUrl", lambda url: system_urls.append(url.toString()))
+    window._browser_worker = object()
+    window.browser_open.connect(assisted_urls.append)
+    try:
+        window._open_link()
+        window._open_controlled_browser()
+        assert system_urls == assisted_urls == ["https://doi.org/10.1000/resolved"]
+    finally:
+        window.close()
+    assert app is not None
+
+
 def test_qt_browser_launch_failure_shows_preserved_detail(monkeypatch, tmp_path):
     pytest.importorskip("PySide6")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -821,218 +1655,57 @@ def test_optional_dependency_install_uses_active_interpreter_and_never_browser_i
     ]
     assert "playwright install" not in " ".join(calls[0][0])
 
-def test_qt_pending_ocr_shows_pdf_and_row_progress_without_leaving_fetch(monkeypatch, tmp_path):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    import threading
-    import time
-    from PySide6.QtWidgets import QApplication, QMessageBox
-    from core.gui.guided_fetch import create_guided_fetch_window
 
-    app = QApplication.instance() or QApplication([])
-    release = threading.Event()
-    calls = []
-    proceeded = []
-    questions = []
-
-    def run_ocr(jobs, progress):
-        calls.extend(jobs)
-        progress({"ref_id": "r1", "scan_id": "scan-1", "status": "running"})
-        release.wait(3)
-        progress({"ref_id": "r1", "scan_id": "scan-1", "status": "done"})
-        return [{"ref_id": "r1", "scan_id": "scan-1", "status": "done"}]
-
-    monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda _parent, title, message: questions.append((title, message))
-        or QMessageBox.StandardButton.No,
-    )
-    window = create_guided_fetch_window(
-        str(tmp_path), submit_source=lambda *_: None,
-        proceed=lambda: proceeded.append(True), run_ocr=run_ocr,
-        inventory_loader=lambda _run: {
-            "references": [{"ref_id": "r1", "ref_number": 1,
-                            "parsed": {"title": "Scanned work"}, "resolve": {},
-                            "fetch": {"tier": None, "pending_tasks": []}}],
-            "ocr_queue": [{"ref_id": "r1", "ref_number": 1, "scan_id": "scan-1",
-                           "display_name": "paper.pdf", "status": "pending",
-                           "reason": "PDF has no text layer"}],
-        },
-    )
-    try:
-        assert not window.table.item(0, 3).icon().isNull()
-        assert window.ocr_button.text() == "Run OCR · 1 PDF"
-        assert "OCR" in window.proceed_button.text()
-        window.proceed_button.click()
-        assert proceeded == []
-        assert "1 PDF" in questions[0][1]
-
-        window.ocr_button.click()
-        deadline = time.monotonic() + 3
-        while window.table.cellWidget(0, 3) is None and time.monotonic() < deadline:
-            app.processEvents()
-            time.sleep(.01)
-        assert window.table.cellWidget(0, 3) is not None
-        assert window.proceed_button.isEnabled() is False
-        assert calls == [{"ref_id": "r1", "scan_id": "scan-1"}]
-    finally:
-        release.set()
-        deadline = time.monotonic() + 3
-        while window._ocr_thread is not None and time.monotonic() < deadline:
-            app.processEvents()
-            time.sleep(.01)
-        assert window._ocr_thread is None
-        assert "Text extracted" in window.table.item(0, 3).text()
-        assert window.proceed_button.isEnabled()
-        window.close()
-
-def test_qt_reopened_completed_ocr_is_visible_without_requeue(monkeypatch, tmp_path):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-    from core.gui.guided_fetch import create_guided_fetch_window
-
-    app = QApplication.instance() or QApplication([])
-    window = create_guided_fetch_window(
-        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
-        run_ocr=lambda *_: [],
-        inventory_loader=lambda _run: {
-            "references": [{"ref_id": "r1", "ref_number": 1,
-                            "parsed": {"title": "Scanned work"}, "resolve": {},
-                            "fetch": {"tier": None, "pending_tasks": []}}],
-            "ocr_queue": [{"ref_id": "r1", "scan_id": "scan-1", "status": "done"}],
-        },
-    )
-    assert "Text extracted" in window.table.item(0, 3).text()
-    assert not window.table.item(0, 3).icon().isNull()
-    assert not window.ocr_button.isVisible()
-    window.close()
-    assert app is not None
-
-def test_qt_reopened_failed_ocr_can_be_retried(monkeypatch, tmp_path):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication
-    from core.gui.guided_fetch import create_guided_fetch_window
-
-    app = QApplication.instance() or QApplication([])
-    window = create_guided_fetch_window(
-        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
-        run_ocr=lambda *_: [],
-        inventory_loader=lambda _run: {
-            "references": [{"ref_id": "r1", "ref_number": 1,
-                            "parsed": {"title": "Scanned work"}, "resolve": {},
-                            "fetch": {"tier": None, "pending_tasks": []}}],
-            "ocr_queue": [{"ref_id": "r1", "scan_id": "scan-1", "status": "failed",
-                           "reason": "OCR backend unavailable"}],
-        },
-    )
-    assert "OCR failed" in window.table.item(0, 3).text()
-    assert window.ocr_button.isEnabled()
-    assert window.ocr_button.text() == "Run OCR · 1 PDF"
-    assert "OCR" in window.proceed_button.text()
-    window.close()
-    assert app is not None
-
-def test_qt_selected_scan_starts_ocr_only_after_source_confirmation(monkeypatch, tmp_path):
-    pytest.importorskip("PySide6")
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    import time
-    from PySide6.QtWidgets import QApplication, QMessageBox
-    from core.gui import guided_fetch
-
-    app = QApplication.instance() or QApplication([])
-    pdf = tmp_path / "scan.pdf"
-    pdf.write_bytes(b"%PDF-1.4\n")
-    monkeypatch.setattr(guided_fetch, "_preflight_source_file", lambda *_: "ocr_pending")
-    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
-    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
-    staged = []
-    jobs_seen = []
-
-    def run_ocr(jobs, progress):
-        jobs_seen.extend(jobs)
-        progress({"ref_id": "r1", "status": "done"})
-        return [{"ref_id": "r1", "scan_id": None, "status": "done"}]
-
-    window = guided_fetch.create_guided_fetch_window(
-        str(tmp_path), submit_source=lambda ref_id, payload: staged.append((ref_id, payload)),
-        proceed=lambda: None, run_ocr=run_ocr,
-        inventory_loader=lambda _run: {"references": [{
-            "ref_id": "r1", "ref_number": 1,
-            "parsed": {"title": "Scanned work"}, "resolve": {},
-            "fetch": {"tier": None, "pending_tasks": [{"task_kind": "fetch", "task_id": "fetch:r1"}]},
-        }]},
-    )
-    window._set_file(str(pdf))
-    assert jobs_seen == []
-    assert window.submit.text() == "Confirm and run OCR"
-    window._submit_file()
-    deadline = time.monotonic() + 3
-    while window._ocr_thread is not None and time.monotonic() < deadline:
-        app.processEvents()
-        time.sleep(.01)
-    assert staged and staged[0][0] == "r1"
-    assert jobs_seen == [{"ref_id": "r1", "scan_id": None}]
-    assert "Text extracted" in window.table.item(0, 3).text()
-    window.close()
-
-def test_qt_confirmed_scanned_file_is_one_shot_and_replacements_bind_to_ref(
+def test_qt_selected_source_preview_is_lazy_cleared_and_reports_missing_text(
     monkeypatch, tmp_path
 ):
     pytest.importorskip("PySide6")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     import time
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QApplication
     from core.gui import guided_fetch
 
     app = QApplication.instance() or QApplication([])
-    files = [tmp_path / name for name in ("first.pdf", "replacement.pdf", "second.pdf")]
-    for candidate in files:
-        candidate.write_bytes(b"%PDF-1.4\n")
-    staged = []
-    jobs_seen = []
-    questions = []
-    monkeypatch.setattr(guided_fetch, "_preflight_source_file", lambda *_: "ocr_pending")
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda _parent, title, message: questions.append((title, message))
-        or QMessageBox.StandardButton.Yes,
-    )
-    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    source_path = tmp_path / "selected-source.txt"
+    source_path.write_text("Extracted text from the selected source.", encoding="utf-8")
+    missing_path = tmp_path / "disappeared-source.txt"
+    missing_path.write_text("This file will be removed before preview.", encoding="utf-8")
+    read_calls = []
+    original_read = guided_fetch._read_preview
 
-    def run_ocr(jobs, progress):
-        jobs_seen.extend(jobs)
-        for job in jobs:
-            progress({**job, "status": "done"})
-        return [{**job, "status": "done"} for job in jobs]
+    def read_preview(path):
+        read_calls.append(path)
+        return original_read(path)
 
-    def inventory(_run):
-        return {"references": [{
-            "ref_id": ref_id, "ref_number": number,
-            "parsed": {"title": f"Work {number}"}, "resolve": {},
-            "fetch": {"tier": None, "pending_tasks": [{
-                "task_kind": "fetch", "task_id": f"fetch:{ref_id}",
-            }]},
-        } for number, ref_id in ((1, "r1"), (2, "r2"))]}
-
+    monkeypatch.setattr(guided_fetch, "_read_preview", read_preview)
     window = guided_fetch.create_guided_fetch_window(
-        str(tmp_path),
-        submit_source=lambda ref_id, payload: staged.append((ref_id, payload)),
-        proceed=lambda: None,
-        run_ocr=run_ocr,
-        inventory_loader=inventory,
+        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
+        inventory_loader=lambda _run: {"references": [
+            {
+                "ref_id": "r1", "ref_number": 1, "parsed": {"title": "Selected"},
+                "resolve": {}, "fetch": {"tier": None, "pending_tasks": [],
+                                           "preview_path": str(source_path)},
+            },
+            {
+                "ref_id": "r2", "ref_number": 2, "parsed": {"title": "No source"},
+                "resolve": {}, "fetch": {"tier": None, "pending_tasks": []},
+            },
+            {
+                "ref_id": "r3", "ref_number": 3, "parsed": {"title": "Unavailable"},
+                "resolve": {}, "fetch": {"tier": None, "pending_tasks": [],
+                                           "preview_path": str(missing_path)},
+            },
+        ]},
     )
 
-    def wait_for_ocr():
-        deadline = time.monotonic() + 3
-        while window._ocr_thread is not None and time.monotonic() < deadline:
+    def pump_until(predicate, timeout=3):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
             app.processEvents()
-            time.sleep(.01)
+            time.sleep(.005)
         app.processEvents()
-        assert window._ocr_thread is None
+        return predicate()
 
     def select_ref(ref_id):
         for index in range(window.table.rowCount()):
@@ -1044,146 +1717,143 @@ def test_qt_confirmed_scanned_file_is_one_shot_and_replacements_bind_to_ref(
         pytest.fail(f"missing table row for {ref_id}")
 
     try:
-        assert window._current_ref_id == "r1"
-        window._set_file(str(files[0]))
-        assert window.submit.text() == "Confirm and run OCR"
-        window._submit_file()
-        wait_for_ocr()
+        view = window._detail_views["Preview"]
+        assert read_calls == []
+        assert view["preview"].toPlainText() == ""
+        assert view["headline"].text() == "Extracted text from selected source"
 
-        assert staged[0][0] == "r1"
-        assert jobs_seen == [{"ref_id": "r1", "scan_id": None}]
-        assert "Text extracted" in window.table.item(0, 3).text()
-        assert window.submit.isEnabled() is False
-        assert window.submit.text() != "Confirm and run OCR"
-        assert window.choose_file.isEnabled()
-        assert window.file_label.isEnabled()
+        window.tabs.setCurrentWidget(window._preview_tab_widget)
+        assert pump_until(lambda: view["preview"].toPlainText().startswith("Extracted text"))
+        assert view["preview"].toPlainText() == "Extracted text from the selected source."
+        assert read_calls == [str(source_path)]
 
-        window._submit_file()
-        assert len(staged) == 1
-        assert len(jobs_seen) == 1
-        assert len(questions) == 1
-
-        window._set_file(str(files[1]))
-        assert window.submit.isEnabled()
-        window._submit_file()
-        wait_for_ocr()
-        assert [ref_id for ref_id, _payload in staged] == ["r1", "r1"]
-        assert jobs_seen == [
-            {"ref_id": "r1", "scan_id": None},
-            {"ref_id": "r1", "scan_id": None},
-        ]
-
+        window.tabs.setCurrentIndex(0)
+        app.processEvents()
+        assert view["preview"].toPlainText() == ""
         select_ref("r2")
-        assert window.submit.isEnabled() is False
-        assert window.choose_file.isEnabled()
-        window._set_file(str(files[2]))
-        assert window.submit.isEnabled()
-        window._submit_file()
-        wait_for_ocr()
-        assert [ref_id for ref_id, _payload in staged] == ["r1", "r1", "r2"]
-        assert [job["ref_id"] for job in jobs_seen] == ["r1", "r1", "r2"]
+        window.tabs.setCurrentWidget(window._preview_tab_widget)
+        assert view["preview"].toPlainText() == "No preview available."
+        assert read_calls == [str(source_path)]
+
+        window.tabs.setCurrentIndex(0)
+        select_ref("r3")
+        missing_path.unlink()
+        window.tabs.setCurrentWidget(window._preview_tab_widget)
+        assert pump_until(lambda: view["preview"].toPlainText() == "Preview unavailable.")
+        assert read_calls == [str(source_path), str(missing_path)]
     finally:
+        deadline = time.monotonic() + 3
+        while window._preview_thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.005)
         window.close()
 
-def test_qt_ocr_completion_for_another_ref_preserves_current_file_selection(
+
+def test_qt_source_preview_uses_pulsing_skeleton_and_ignores_stale_reads(
     monkeypatch, tmp_path
 ):
     pytest.importorskip("PySide6")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     import threading
     import time
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtCore import Qt, QAbstractAnimation
+    from PySide6.QtWidgets import QApplication, QFrame
     from core.gui import guided_fetch
 
     app = QApplication.instance() or QApplication([])
-    source_file = tmp_path / "other-ref.txt"
-    source_file.write_text("Exact source", encoding="utf-8")
-    started = threading.Event()
-    release = threading.Event()
-    jobs_seen = []
-    staged = []
-    monkeypatch.setattr(guided_fetch, "_preflight_source_file", lambda *_: "readable")
-    monkeypatch.setattr(QMessageBox, "question", lambda *_: QMessageBox.StandardButton.Yes)
-    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    first_path = tmp_path / "first-source.txt"
+    second_path = tmp_path / "second-source.txt"
+    first_path.write_text("First source", encoding="utf-8")
+    second_path.write_text("Second source", encoding="utf-8")
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = []
 
-    def run_ocr(jobs, progress):
-        jobs_seen.extend(jobs)
-        for job in jobs:
-            progress({**job, "status": "running"})
-        started.set()
-        release.wait(5)
-        for job in jobs:
-            progress({**job, "status": "done"})
-        return [{**job, "status": "done"} for job in jobs]
+    def read_preview(path):
+        calls.append(path)
+        if path == str(first_path):
+            first_started.set()
+            release_first.wait(5)
+            return "Stale first source text"
+        return "Current second source text"
 
+    monkeypatch.setattr(guided_fetch, "_read_preview", read_preview)
     window = guided_fetch.create_guided_fetch_window(
-        str(tmp_path),
-        submit_source=lambda ref_id, payload: staged.append((ref_id, payload)),
-        proceed=lambda: None,
-        run_ocr=run_ocr,
-        inventory_loader=lambda _run: {
-            "references": [
-                {
-                    "ref_id": "r1", "ref_number": 1, "parsed": {"title": "Scanned"},
-                    "resolve": {}, "fetch": {"tier": None, "pending_tasks": []},
-                },
-                {
-                    "ref_id": "r2", "ref_number": 2, "parsed": {"title": "Other"},
-                    "resolve": {}, "fetch": {"tier": None, "pending_tasks": [{
-                        "task_kind": "fetch", "task_id": "fetch:r2",
-                    }]},
-                },
-            ],
-            "ocr_queue": [{
-                "ref_id": "r1", "ref_number": 1, "scan_id": "scan-1",
-                "display_name": "scanned.pdf", "status": "pending",
-            }],
-        },
+        str(tmp_path), submit_source=lambda *_: None, proceed=lambda: None,
+        inventory_loader=lambda _run: {"references": [
+            {
+                "ref_id": "r1", "ref_number": 1, "parsed": {"title": "First"},
+                "resolve": {}, "fetch": {"tier": None, "pending_tasks": [],
+                                           "preview_path": str(first_path)},
+            },
+            {
+                "ref_id": "r2", "ref_number": 2, "parsed": {"title": "Second"},
+                "resolve": {}, "fetch": {"tier": None, "pending_tasks": [],
+                                           "preview_path": str(second_path)},
+            },
+        ]},
     )
+
+    def pump_until(predicate, timeout=3):
+        deadline = time.monotonic() + timeout
+        while not predicate() and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(.005)
+        app.processEvents()
+        return predicate()
+
     try:
+        window.show()
+        app.processEvents()
+        window.tabs.setCurrentWidget(window._preview_tab_widget)
+        assert pump_until(first_started.is_set)
+
+        view = window._detail_views["Preview"]
+        assert view["preview_stack"].currentWidget() is view["preview_loader"]
+        bars = view["preview_loader"].findChildren(QFrame, "previewSkeletonBar")
+        assert len(bars) == 6
+        assert all(
+            animation.state() == QAbstractAnimation.State.Running
+            for animation in view["preview_animations"]
+        )
+
         window.table.selectRow(1)
         app.processEvents()
         assert window._current_ref_id == "r2"
-        window._set_file(str(source_file))
-        assert window.submit.isEnabled()
+        assert view["preview"].toPlainText() == ""
+        release_first.set()
+        assert pump_until(lambda: view["preview"].toPlainText() == "Current second source text")
+        assert calls == [str(first_path), str(second_path)]
+        assert view["preview"].toPlainText() != "Stale first source text"
 
-        window.ocr_button.click()
-        deadline = time.monotonic() + 3
-        while not started.is_set() and time.monotonic() < deadline:
-            app.processEvents()
-            time.sleep(.01)
-        assert started.is_set()
-
-        window.table.selectRow(0)
+        window.tabs.setCurrentIndex(0)
         app.processEvents()
-        assert window._current_ref_id == "r1"
-        window.table.selectRow(1)
-        app.processEvents()
-        assert window._current_ref_id == "r2"
-
-        release.set()
-        deadline = time.monotonic() + 3
-        while window._ocr_thread is not None and time.monotonic() < deadline:
-            app.processEvents()
-            time.sleep(.01)
-        app.processEvents()
-
-        assert window._ocr_thread is None
-        assert jobs_seen == [{"ref_id": "r1", "scan_id": "scan-1"}]
-        assert window._selected_file == str(source_file)
-        assert window._selected_file_ref_id == "r2"
-        assert window.submit.isEnabled()
-        assert window.choose_file.isEnabled()
-        window._submit_file()
-        assert [ref_id for ref_id, _payload in staged] == ["r2"]
+        assert view["preview"].toPlainText() == ""
+        assert all(
+            animation.state() == QAbstractAnimation.State.Stopped
+            for animation in view["preview_animations"]
+        )
+        window.tabs.setCurrentWidget(window._preview_tab_widget)
+        assert pump_until(lambda: view["preview"].toPlainText() == "Current second source text")
+        assert calls == [str(first_path), str(second_path), str(second_path)]
     finally:
-        release.set()
+        release_first.set()
         deadline = time.monotonic() + 3
-        while window._ocr_thread is not None and time.monotonic() < deadline:
+        while window._preview_thread is not None and time.monotonic() < deadline:
             app.processEvents()
-            time.sleep(.01)
+            time.sleep(.005)
         window.close()
+
+
+def test_preview_reader_keeps_the_existing_100k_character_limit(tmp_path):
+    from core.gui.guided_fetch import _read_preview
+
+    source_path = tmp_path / "long-source.txt"
+    expected = "x" * 100_000
+    source_path.write_text(expected + "trailing text", encoding="utf-8")
+
+    assert _read_preview(str(source_path)) == expected
+
 
 def test_qt_guided_ocr_completion_refreshes_the_selected_staged_preview(
     monkeypatch, tmp_path,

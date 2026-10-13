@@ -354,7 +354,13 @@ def _phrase_text(s: str) -> str:
 
 
 def _title_key(text: str | None) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+    # ``matching`` imports this module, so defer the formatting-only comparison
+    # helper until a title key is actually requested. It removes only supported
+    # complete style wrappers and leaves their visible title words intact.
+    from .matching import _comparison_text_with_valid_inline_styles
+
+    visible_text, _ = _comparison_text_with_valid_inline_styles(str(text or ""))
+    return " ".join(re.findall(r"[a-z0-9]+", visible_text.lower()))
 
 
 _CITATION_TITLE_TOKEN_RE = re.compile(
@@ -435,19 +441,27 @@ def _expected_probe_title_info(
     resolve_result: dict | None = None,
     candidate_context: dict | None = None,
 ) -> tuple[str, str]:
-    parsed = str((ref or {}).get("title") or "").strip()
-    matched = str(((resolve_result or {}).get("matched_title")) or "").strip()
-    candidate = str(((candidate_context or {}).get("title")) or "").strip()
+    try:
+        from . import matching as _matching
+    except ImportError:  # direct execution fallback
+        from resolve import matching as _matching
+
+    def visible_probe_title(value: str | None) -> str:
+        return _matching._comparison_text_with_valid_inline_styles(value)[0]
+
+    parsed = visible_probe_title(str((ref or {}).get("title") or "").strip())
+    matched = visible_probe_title(
+        str(((resolve_result or {}).get("matched_title")) or "").strip()
+    )
+    candidate = visible_probe_title(
+        str(((candidate_context or {}).get("title")) or "").strip()
+    )
     parsed_tokens = len(_tokens(parsed))
     matched_tokens = len(_tokens(matched))
     raw_entry_key = _title_key((ref or {}).get("raw_entry"))
     matched_key = _title_key(matched)
     parsed_key = _title_key(parsed)
-    try:
-        from . import matching as _matching
-    except ImportError:  # direct execution fallback
-        from resolve import matching as _matching
-    recovered = _matching.quoted_title((ref or {}).get("raw_entry"))
+    recovered = visible_probe_title(_matching.quoted_title((ref or {}).get("raw_entry")))
     recovered_key = _title_key(recovered)
     repaired_page_range_title = (
         _strip_leading_parenthesized_page_range(parsed)
@@ -494,7 +508,7 @@ def _expected_probe_title_info(
             (ref or {}).get("raw_entry"), candidate
         )
         if candidate_span:
-            return candidate_span, "citation_raw_entry"
+            return visible_probe_title(candidate_span), "citation_raw_entry"
     if parsed and matched:
         parsed_key = _title_key(parsed)
         matched_key = _title_key(matched)

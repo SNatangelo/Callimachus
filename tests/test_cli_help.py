@@ -24,12 +24,6 @@ from core.invocation import run_command, run_prefix
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.fixture(autouse=True)
-def _child_processes_use_utf8(monkeypatch):
-    """Keep child CLI output deterministic on Windows console code pages."""
-    monkeypatch.setenv("PYTHONIOENCODING", "utf-8")
-
-
 def _shell_quote(value):
     if sys.platform.startswith("win"):
         return subprocess.list2cmdline([value])
@@ -460,6 +454,16 @@ def test_keyboard_interrupt_after_run_start_prints_resume_command(monkeypatch, c
     assert closed == [(run_dir, "session-1", "interrupted")]
     assert pipeline_run._ACTIVE_DRIVER_SESSION is None
     assert pipeline_run._ACTIVE_HEARTBEAT_STOP is None
+
+
+def test_desktop_control_reader_accepts_only_the_explicit_stop_line():
+    from io import StringIO
+    from core.app.run import _desktop_control_reader
+
+    interrupted = []
+    _desktop_control_reader(StringIO("IGNORE\nSTOP\r\n"), lambda: interrupted.append(True))
+
+    assert interrupted == [True]
 
 
 @pytest.mark.parametrize(

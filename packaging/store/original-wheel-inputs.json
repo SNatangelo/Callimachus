@@ -1,0 +1,18 @@
+[
+  {
+    "name": "omegaconf",
+    "version": "2.0.6",
+    "filename": "omegaconf-2.0.6-py3-none-any.whl",
+    "url": "https://files.pythonhosted.org/packages/d0/eb/9d63ce09dd8aa85767c65668d5414958ea29648a0eec80a4a7d311ec2684/omegaconf-2.0.6-py3-none-any.whl",
+    "sha256": "9e349fd76819b95b47aa628edea1ff83fed5b25108608abdd6c7fdca188e302a",
+    "metadata_url": "https://pypi.org/pypi/omegaconf/2.0.6/json"
+  },
+  {
+    "name": "pymupdf",
+    "version": "1.28.0",
+    "filename": "pymupdf-1.28.0-cp310-abi3-win_amd64.whl",
+    "url": "https://files.pythonhosted.org/packages/2e/5d/1a03f53eb0449900469335fcfc742ca28e3ba159b7d650e0921d50b8b308/pymupdf-1.28.0-cp310-abi3-win_amd64.whl",
+    "sha256": "e01e90fd86abfeb37ceb921eddb951f988a11d45ff6ce6b7664f2039849068ec",
+    "metadata_url": "https://pypi.org/pypi/pymupdf/1.28.0/json"
+  }
+]

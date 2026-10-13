@@ -78,7 +78,7 @@ def _query_params(ref: dict) -> dict[str, str]:
         "doi": resolve_mod._normalize_doi_value(ref.get("doi")),
         "pmid": ref.get("pmid"),
         "atitle": title,
-        "firstAuthor": resolve_mod._first_author_key(raw),
+        "firstAuthor": ref.get("first_author") or resolve_mod._first_author_key(raw),
         "jtitle": ref.get("journal") or ref.get("venue"),
         "volume": ref.get("volume"),
         "firstPage": ref.get("first_page") or ref.get("page"),

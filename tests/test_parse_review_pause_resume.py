@@ -1,6 +1,6 @@
+# tests/test_parse_review_pause_resume.py
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
-
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -8,12 +8,10 @@ from types import SimpleNamespace
 import pytest
 
 from core.app.parse_review import ParseReviewController
-
 from core.app.phases import parse as parse_phase
-
 from core.infra.db.repository import RunRepository
-
 from core.infra.db.run_setting_storage import normalize_setting
+
 
 def _repo(tmp_path):
     repo = RunRepository.create(
@@ -37,6 +35,71 @@ def _repo(tmp_path):
         footnote_note_parents=[{"note_id": "note-1", "ref_id": "ref-1"}],
     )
     return repo
+
+
+def test_manual_parse_review_resume_applies_without_reparsing(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    st = {
+        "run_dir": str(tmp_path), "phase": "parse", "manual_review": True,
+        "parse_review_paused": True, "manual_review_ref_numbers": [1],
+    }
+    try:
+        assert parse_phase._emit_manual_parse_review_tasks(st, repo, {
+            "footnote_notes": [{"note_id": "note-1", "extraction_status": "ambiguous"}],
+        }) == 2
+        assert parse_phase._emit_manual_parse_review_tasks(st, repo, {
+            "footnote_notes": [{"note_id": "note-1", "extraction_status": "ambiguous"}],
+        }) == 2
+        for task in repo.list_tasks(slot="parse_review"):
+            target_hash = task.task_payload["target_sha256"]
+            answer = {"target_sha256": target_hash, "reason": "reviewed"}
+            if task.task_payload["review_kind"] == "footnote_source_review":
+                answer["action"] = "no_sources"
+            else:
+                answer.update(action="correct_identity", title="Correct title", doi=None)
+            repo.submit_task_answer(task_id=task.task_id, actor_type="user", raw_payload=answer)
+    finally:
+        repo.close()
+
+    def fail_if_reparsed(*_args, **_kwargs):
+        raise AssertionError("paused Parse review must not rerun parser")
+
+    monkeypatch.setattr(parse_phase.parse_manuscript, "parse", fail_if_reparsed)
+    saved = []
+    result = parse_phase.phase_parse(
+        st, _progress=lambda _message: None, _configure_debug_mode=lambda _st: None,
+        _repo_open=RunRepository.open, _save_state=lambda state: saved.append(dict(state)),
+    )
+    assert result == "resolve"
+    assert st["parse_review_paused"] is False
+    assert saved
+    repo = RunRepository.open(str(tmp_path))
+    try:
+        assert {task.status for task in repo.list_tasks(slot="parse_review")} == {"applied"}
+        assert repo.effective_footnote_sources("note-1") == []
+        assert repo.effective_reference_identity("ref-1")["title"] == "Correct title"
+    finally:
+        repo.close()
+
+
+def test_manual_parse_review_pending_remains_paused(tmp_path):
+    repo = _repo(tmp_path)
+    st = {"run_dir": str(tmp_path), "phase": "parse", "parse_review_paused": True,
+          "manual_review_ref_numbers": [1]}
+    try:
+        repo.create_manual_parse_review(
+            task_id="review-pending", review_kind="footnote_source_review",
+            target_id="note-1", instructions="review",
+        )
+    finally:
+        repo.close()
+    saved = []
+    assert parse_phase.phase_parse(
+        st, _progress=lambda _message: None, _configure_debug_mode=lambda _st: None,
+        _repo_open=RunRepository.open, _save_state=lambda state: saved.append(dict(state)),
+    ) == parse_phase.ACTION_REQUIRED
+    assert saved[-1]["manual_review_ref_numbers"] == [1]
+
 
 def test_skipped_manual_parse_reviews_resume_without_effective_overlay(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
@@ -102,6 +165,7 @@ def test_skipped_manual_parse_reviews_resume_without_effective_overlay(tmp_path,
     finally:
         repo.close()
 
+
 def test_manual_parse_review_without_tasks_continues_to_resolve(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     repo.close()
@@ -131,3 +195,25 @@ def test_manual_parse_review_without_tasks_continues_to_resolve(tmp_path, monkey
         assert repo.list_tasks(slot="parse_review") == []
     finally:
         repo.close()
+
+
+def test_manual_review_ref_numbers_are_closed_and_canonical():
+    assert normalize_setting("manual_review_ref_numbers", [3, 1, 3]) == [1, 3]
+    with pytest.raises(ValueError):
+        normalize_setting("manual_review_ref_numbers", [0])
+
+
+def test_manual_review_settings_round_trip(tmp_path):
+    repo = _repo(tmp_path)
+    try:
+        repo.update_run_settings({
+            "manual_review": True,
+            "parse_review_paused": True,
+            "manual_review_ref_numbers": [3, 1, 3],
+        })
+        settings = repo.list_run_settings()
+    finally:
+        repo.close()
+    assert settings["manual_review"] is True
+    assert settings["parse_review_paused"] is True
+    assert settings["manual_review_ref_numbers"] == [1, 3]

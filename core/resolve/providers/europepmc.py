@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -944,12 +945,23 @@ def _prefer_richest_epmc_record(results: list[dict], title: str | None, resolve_
 
     Europe PMC federates several sources (MED, PMC, AGR, PPR, …) and can rank a
     bare bibliographic record (e.g. AGRICOLA — no DOI, no PMCID, no OA link) ahead
-    of the open-access PMC record for the same paper. Among the results whose
-    title matches the citation, prefer the one carrying a PMCID / open-access /
-    DOI signal so the full text stays reachable.
+    of the open-access PMC record for the same paper. Prefer a normalized exact
+    title before using PMCID / open-access / DOI richness to break ties; otherwise
+    a Reply or Commentary containing the cited title can win on richness.
     """
     scorer = getattr(resolve_mod, "_title_match_score", lambda _a, _b: None)
-    matching = [r for r in results if (scorer(title, r.get("title")) or 0) >= 0.90]
+    title_key = getattr(resolve_mod, "_title_key", None)
+    if not callable(title_key):
+        title_key = lambda value: " ".join(str(value or "").casefold().split())
+    cited_key = title_key(title)
+    exact = [
+        record for record in results
+        if cited_key and title_key(record.get("title")) == cited_key
+    ]
+    matching = exact or [
+        record for record in results
+        if (scorer(title, record.get("title")) or 0) >= 0.90
+    ]
     return max(matching or results[:1], key=_epmc_record_richness)
 
 
@@ -1087,6 +1099,302 @@ def _europepmc(
         return {"status": "unresolved", "via": "europepmc", "reason": f"HTTP {exc.code}"}
     except Exception as exc:
         return {"status": "unresolved", "via": "europepmc", "reason": f"network: {type(exc).__name__}"}
+
+
+def _discovered_doi_metadata_candidate(ref: dict, doi: str) -> dict:
+    """Build a metadata-search candidate from one exact Europe PMC DOI record.
+
+    The DOI is only a retrieval lead here. Identity admission still requires the
+    native record's full title/author/year/unit profile and a later direct
+    Crossref validation in the discovered-identifier promotion path.
+    """
+    resolve_mod = _resolve_module()
+    try:
+        from .. import matching as matching_mod
+    except ImportError:  # direct execution fallback
+        from resolve import matching as matching_mod
+
+    normalize_doi = getattr(
+        resolve_mod, "_normalize_doi_value", lambda value: str(value or "").strip(),
+    )
+    requested_doi = normalize_doi(doi)
+    query_contract = "Europe PMC exact DOI core-record candidate lookup"
+    request_url: str | None = None
+    decoded_response_sha256: str | None = None
+
+    def failed(
+        reason: str,
+        *,
+        status: str = "unverified",
+        completion: str = "complete",
+        outcome: str = "candidate_incompatible",
+        matched_title: str | None = None,
+        metadata_match: dict | None = None,
+    ) -> dict:
+        provenance = ""
+        if request_url:
+            provenance += f"; query_url={request_url}"
+        if decoded_response_sha256:
+            provenance += f"; decoded_response_sha256={decoded_response_sha256}"
+        result = {
+            "status": status,
+            "via": NAME,
+            "reason": f"{reason}{provenance}",
+            "candidate_identifiers": {"doi": requested_doi} if requested_doi else {},
+            "identity_search": {
+                "resolver": NAME,
+                "query_contract": query_contract,
+                "completion": completion,
+                "outcome": outcome,
+            },
+        }
+        if matched_title:
+            result["matched_title"] = matched_title
+        if metadata_match is not None:
+            result["metadata_match"] = metadata_match
+        return result
+
+    if ref.get("doi"):
+        return failed(
+            "discovered-DOI corroboration is only for citations without a declared DOI",
+            completion="not_run",
+            outcome="inconclusive",
+        )
+    if not isinstance(requested_doi, str) or not requested_doi.strip():
+        return failed("Crossref candidate has no usable DOI", completion="not_run", outcome="inconclusive")
+
+    query = f'DOI:"{requested_doi}"'
+    params = urllib.parse.urlencode({
+        "query": query,
+        "format": "json",
+        "resultType": "core",
+        "pageSize": "1",
+    })
+    url = f"{SEARCH_URL}?{params}"
+    request_url = url
+    try:
+        status, body = resolve_mod._get(url)
+    except urllib.error.HTTPError as exc:
+        return failed(
+            f"Europe PMC candidate lookup HTTP {exc.code}",
+            status="unresolved",
+            completion="incomplete",
+            outcome="inconclusive",
+        )
+    except Exception as exc:
+        return failed(
+            f"Europe PMC candidate lookup network: {type(exc).__name__}",
+            status="unresolved",
+            completion="incomplete",
+            outcome="inconclusive",
+        )
+    if isinstance(body, bytes):
+        try:
+            decoded_body = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return failed(
+                "Europe PMC candidate lookup body was not valid UTF-8",
+                status="unresolved",
+                completion="incomplete",
+                outcome="inconclusive",
+            )
+    elif isinstance(body, str):
+        decoded_body = body
+    else:
+        return failed(
+            "Europe PMC candidate lookup returned no decodable response body",
+            status="unresolved",
+            completion="incomplete",
+            outcome="inconclusive",
+        )
+    decoded_response_sha256 = hashlib.sha256(decoded_body.encode("utf-8")).hexdigest()
+    if status != 200:
+        return failed(
+            f"Europe PMC candidate lookup HTTP {status}",
+            status="unresolved",
+            completion="incomplete",
+            outcome="inconclusive",
+        )
+    try:
+        payload = json.loads(decoded_body)
+    except (TypeError, ValueError):
+        return failed(
+            "Europe PMC candidate lookup returned malformed JSON",
+            status="unresolved",
+            completion="incomplete",
+            outcome="inconclusive",
+        )
+    result_list = payload.get("resultList") if isinstance(payload, dict) else None
+    records = result_list.get("result") if isinstance(result_list, dict) else None
+    hit_count = payload.get("hitCount") if isinstance(payload, dict) else None
+    if not isinstance(result_list, dict) or not isinstance(records, list):
+        return failed(
+            "Europe PMC candidate lookup response is malformed",
+            status="unresolved",
+            completion="incomplete",
+            outcome="inconclusive",
+        )
+    if hit_count == 0 and not records:
+        return failed(
+            "Europe PMC found no record for the Crossref DOI candidate",
+            outcome="no_compatible_identity",
+        )
+    if type(hit_count) is not int or hit_count != 1 or len(records) != 1 or not isinstance(records[0], dict):
+        return failed(
+            "Europe PMC DOI candidate lookup was not a complete unique-record result",
+            status="unresolved",
+            completion="incomplete",
+            outcome="inconclusive",
+        )
+
+    rec = records[0]
+    rec_doi = normalize_doi(rec.get("doi"))
+    if not rec_doi or rec_doi.casefold() != requested_doi.casefold():
+        return failed("Europe PMC record did not confirm the candidate DOI")
+
+    matched_title = rec.get("title")
+    if not isinstance(matched_title, str) or not matched_title.strip():
+        return failed("Europe PMC record has no native title")
+    matched_title = matched_title.strip()
+
+    author_list = rec.get("authorList")
+    raw_authors = author_list.get("author") if isinstance(author_list, dict) else None
+    if not isinstance(raw_authors, list) or not raw_authors:
+        return failed("Europe PMC record has no structured author list", matched_title=matched_title)
+    author_rows: list[dict] = []
+    matched_authors: list[str] = []
+    for author in raw_authors:
+        if not isinstance(author, dict):
+            return failed("Europe PMC record has an incomplete author list", matched_title=matched_title)
+        family = str(author.get("lastName") or author.get("collectiveName") or "").strip()
+        given = str(author.get("firstName") or author.get("initials") or "").strip()
+        if not family:
+            return failed("Europe PMC record has an incomplete author list", matched_title=matched_title)
+        author_rows.append({"family": family, "given": given})
+        full_name = str(author.get("fullName") or "").strip()
+        matched_authors.append(full_name or " ".join(part for part in (given, family) if part))
+
+    year_value = rec.get("pubYear")
+    year_text = str(year_value or "").strip()
+    if re.fullmatch(r"(?:18|19|20)\d{2}", year_text) is None:
+        return failed("Europe PMC record has no usable publication year", matched_title=matched_title)
+    matched_year = int(year_text)
+
+    journal_info = rec.get("journalInfo")
+    journal = journal_info.get("journal") if isinstance(journal_info, dict) else None
+    venue = journal.get("title") if isinstance(journal, dict) else None
+    volume = journal_info.get("volume") if isinstance(journal_info, dict) else None
+    issue = journal_info.get("issue") if isinstance(journal_info, dict) else None
+    page = rec.get("pageInfo")
+    issns = []
+    if isinstance(journal, dict):
+        issns = [
+            str(journal.get(key) or "").strip()
+            for key in ("issn", "essn")
+            if str(journal.get(key) or "").strip()
+        ]
+    if not isinstance(venue, str) or not venue.strip():
+        return failed("Europe PMC record has no native journal title", matched_title=matched_title)
+    if not isinstance(volume, (str, int)) or not str(volume).strip():
+        return failed("Europe PMC record has no native journal volume", matched_title=matched_title)
+    if not isinstance(page, str) or not page.strip():
+        return failed("Europe PMC record has no native article locator", matched_title=matched_title)
+    if not issns:
+        return failed("Europe PMC record has no native journal ISSN", matched_title=matched_title)
+
+    pub_type_list = rec.get("pubTypeList")
+    pub_types = pub_type_list.get("pubType") if isinstance(pub_type_list, dict) else None
+    if not isinstance(pub_types, list) or not pub_types:
+        return failed("Europe PMC record has no native publication type", matched_title=matched_title)
+    if any(not isinstance(pub_type, str) for pub_type in pub_types):
+        return failed("Europe PMC record has malformed publication types", matched_title=matched_title)
+    work_type = re.sub(r"[\s_]+", "-", str(pub_types[0] or "").strip().casefold())
+    if work_type != "journal-article":
+        return failed(
+            "Europe PMC record is not identified as a journal article",
+            matched_title=matched_title,
+        )
+
+    crossref_shaped = {
+        "title": [matched_title],
+        "author": author_rows,
+        "published-print": {"date-parts": [[matched_year]]},
+        "container-title": [venue.strip()],
+        "volume": str(volume).strip(),
+        "issue": str(issue).strip() if issue not in (None, "") else None,
+        "page": page.strip(),
+        "type": work_type,
+    }
+    profile = resolve_mod._metadata_match_profile(ref, crossref_shaped, matched_title)
+    if (
+        profile.get("title_overlap") is None
+        or profile.get("title_overlap") < 0.90
+        or profile.get("author_match") is not True
+        or profile.get("year_match") is not True
+        or profile.get("ordinal_conflict") is True
+        or profile.get("metadata_conflict") is True
+    ):
+        return failed(
+            "Europe PMC native metadata does not meet the unchanged title, author, and year gates",
+            matched_title=matched_title,
+            metadata_match=profile,
+        )
+    rejection_reason = matching_mod._metadata_candidate_rejection_reason(
+        ref, matched_title, profile, candidate_type=work_type,
+    )
+    if rejection_reason:
+        return failed(
+            rejection_reason,
+            matched_title=matched_title,
+            metadata_match=profile,
+        )
+    fulltext_block = rec.get("fullTextUrlList", {})
+    if fulltext_block is None:
+        fulltext_block = {}
+    fulltext_rows = fulltext_block.get("fullTextUrl") if isinstance(fulltext_block, dict) else None
+    if (
+        not isinstance(fulltext_block, dict)
+        or (fulltext_rows is not None and (
+            not isinstance(fulltext_rows, list)
+            or any(not isinstance(item, dict) for item in fulltext_rows)
+        ))
+    ):
+        return failed("Europe PMC record has malformed full-text metadata", matched_title=matched_title)
+    fulltext_record = dict(rec)
+    fulltext_record["fullTextUrlList"] = fulltext_block
+    try:
+        fulltext = _epmc_fulltext_meta(fulltext_record)
+    except (AttributeError, TypeError, ValueError):
+        return failed("Europe PMC record has malformed full-text metadata", matched_title=matched_title)
+    retracted = bool(matched_title.lower().startswith("retracted"))
+    if not retracted:
+        retracted = resolve_mod._rw.is_retracted(rec_doi)
+    result = {
+        "status": "resolved",
+        "via": NAME,
+        "resolution_basis": "metadata_search",
+        "existence_confidence": "medium",
+        "doi": rec_doi,
+        "matched_title": matched_title,
+        "matched_authors": matched_authors,
+        "matched_year": matched_year,
+        "metadata_match": profile,
+        "abstract": rec.get("abstractText"),
+        "retracted": retracted,
+        "reason": (
+            "Europe PMC native DOI metadata candidate; Crossref validation required"
+            f"; query_url={request_url}"
+            f"; decoded_response_sha256={decoded_response_sha256}"
+        ),
+        "identity_search": {
+            "resolver": NAME,
+            "query_contract": query_contract,
+            "completion": "complete",
+            "outcome": "compatible_identity",
+        },
+        **fulltext,
+    }
+    return result
 
 
 def pubmed_exists(pmid: str) -> str:
