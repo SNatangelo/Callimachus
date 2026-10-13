@@ -530,6 +530,8 @@ _PACKAGE_SELF_TEST_RESOURCES = (
     "docs/guide/10-keys-and-credentials.md",
     "docs/guide/11-environment-reference.md",
     "docs/guide/12-desktop-packages.md",
+    "docs/guide/privacy.md",
+    "docs/guide/privacy-it.md",
     "docs/deployment/agent-guide.md",
     "docs/deployment/administrator-guide.md",
     "docs/architecture/artifact-integrity.md",

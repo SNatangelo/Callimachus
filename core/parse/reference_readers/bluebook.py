@@ -35,6 +35,8 @@ NAME = "bluebook"
 # Ahead of any reader keying on weaker evidence: an author block plus a
 # reporter-or-date anchor is the strongest positional structure a footnote offers.
 ORDER = 10
+VERSION = "1"
+STRUCTURAL = True
 
 # A conference-proceedings reporter name routinely runs past the plain journal
 # cap of 6 tokens ("Int'l Conf. on Software Sec. & Assurance" is 7), so the
@@ -172,6 +174,12 @@ _DATE_PAREN_RE = re.compile(
 _AUTHOR_LIST_RE = re.compile(
     rf"(?:{_NAME_RE}(?:\s*,\s*{_NAME_RE})*\s*(?:&|,\s*and)\s*{_NAME_RE}"
     rf"|{_NAME_RE}(?:\s+et\s+al\.?)?),\s*")
+# A comma-only list is used by many compact bibliographies, but is not a
+# closed Bluebook author block. Its prefix can also be indistinguishable from
+# a corporate author followed by a short capitalized title, so title extraction
+# abstains whenever this prefix occurs.
+_COMMA_ONLY_AUTHOR_PREFIX_RE = re.compile(
+    rf"\s*{_NAME_RE}\s*,\s*{_NAME_RE}(?:\s*,\s*{_NAME_RE})*\s*(?:,|$)")
 # Vancouver writes an author as surname-then-bare-initials — "Chan AW",
 # "Scholten-Peeters WGM" — and separates authors with plain commas.  The author
 # regex above then matches the FIRST author only, and everything after it reads as
@@ -192,9 +200,13 @@ _BARE_INITIAL_RE = re.compile(r"(?:^|\s)[A-Z]\.(?:\s|$)")
 # Trailing pinpoint of a book citation: "… Non-State Actors 193-95 (2010)".
 _TRAILING_PINPOINT_RE = re.compile(
     r"[\s,]*(?:at\s+)?[\dxivl]+(?:\s*[–‐-]\s*[\dxivl]+)?$", re.I)
+_COMPACT_JOURNAL_TUPLE_RE = re.compile(
+    r"\b(?:Phys\.\s*Rev\.\s*[A-Z]|J\.\s*[A-Z][A-Za-z.]*|"
+    r"FEMS\s+[A-Z][A-Za-z.]+)\s+\d{1,4},\s*\d{4,6}"
+    r"(?:\s*[–—-]\s*\d{1,6})?\s*$", re.I)
 
 
-def date_anchored_title(text: str) -> str | None:
+def date_anchored_title(text: str, *, _allow_comma_author_prefix: bool = False) -> str | None:
     """Title of a Bluebook citation anchored on a date rather than a reporter."""
     if _TREATY_OR_CASE_RE.search(text):
         return None
@@ -202,10 +214,21 @@ def date_anchored_title(text: str) -> str | None:
     if anchor is None:
         return None
     head = text[:anchor.start()]
+    # Modern compact journal citations put the journal before volume and page,
+    # unlike Bluebook's volume-reporter-page order. Do not treat that tuple as
+    # part of a date-anchored book/news title.
+    if _COMPACT_JOURNAL_TUPLE_RE.search(head.rstrip(" .,;")):
+        return None
     signals = [s.end() for s in _SIGNAL_RE.finditer(head)]
     segment = head[signals[-1] if signals else 0:]
     authors = _AUTHOR_LIST_RE.match(segment)
     if not authors:
+        return None
+    # A comma-only author list is not a closed Bluebook author block. The
+    # Bluebook regex can otherwise match its first name and promote the rest to
+    # the dated title ("A, B, C (2022), Article title").
+    if (_COMMA_ONLY_AUTHOR_PREFIX_RE.fullmatch(segment)
+            and not _allow_comma_author_prefix):
         return None
     if _VANCOUVER_AUTHOR_RE.search(authors.group(0)):
         return None
@@ -216,7 +239,8 @@ def date_anchored_title(text: str) -> str | None:
     # of a title, and stripping it truncated the title mid-list.
     if "," in rest:
         body, tail = rest[:rest.rfind(",")], rest[rest.rfind(",") + 1:].strip()
-        if tail[:1].isupper() and len(tail.split()) <= 6:
+        if (tail[:1].isupper() and len(tail.split()) <= 6
+                and not re.search(r"\b(?:and|or)\b", tail, re.I)):
             rest = body
     title = re.sub(r"\s+", " ", _TRAILING_PINPOINT_RE.sub("", rest)
                    .replace("- ", "")).strip(" ,.")
@@ -336,7 +360,12 @@ def personal_book_route(entry: str) -> dict | None:
     author_block = authors.group(0).strip(" ,")
     if _ORGANISATION_AUTHOR_RE.search(author_block):
         return None
-    title = date_anchored_title(entry)
+    comma_author_prefix = _COMMA_ONLY_AUTHOR_PREFIX_RE.match(segment)
+    if comma_author_prefix is not None and comma_author_prefix.end() > authors.end():
+        # A personal author prefix followed by another comma-separated name is
+        # still an open author list, not a proven title boundary.
+        return None
+    title = date_anchored_title(entry, _allow_comma_author_prefix=True)
     if not title:
         return None
     # Keep the exact text between author and date; it may only be the title and
@@ -368,8 +397,8 @@ def _date_anchor_is_book_shaped(entry: str) -> bool:
     return bool(anchor and anchor.group("edition")) or personal_book_route(entry) is not None
 
 
-def read(entry: str) -> dict | None:
-    """The work a Bluebook entry names, or None if the entry is not Bluebook.
+def _read_anchor(entry: str) -> dict | None:
+    """Internal Bluebook anchor analysis used by the canonical field parser.
 
     The reporter anchor is tried first: it is the more discriminating of the two,
     and a journal citation also carries a parenthesised year that the dated reader
@@ -394,4 +423,84 @@ def read(entry: str) -> dict | None:
             if classification:
                 record["classification"] = dict(classification)
             return record
+    # An explicit edition marker independently proves a book-shaped source and
+    # its year, even when a comma-only name/title prefix makes the title
+    # boundary unsafe (for example, a corporate author versus two authors).
+    dates = list(_DATE_PAREN_RE.finditer(entry))
+    if len(dates) > 1 and any(d.group("edition") for d in dates):
+        head = entry[:dates[0].start()]
+        signals = [s.end() for s in _SIGNAL_RE.finditer(head)]
+        segment = head[signals[-1] if signals else 0:]
+        if _COMMA_ONLY_AUTHOR_PREFIX_RE.fullmatch(segment):
+            return {"reader": NAME, "status": "ambiguous",
+                    "conflicts": [{"field": "year", "reason": "multiple_edition_dates"}]}
+    date = dates[0] if len(dates) == 1 else None
+    if date is not None and date.group("edition"):
+        head = entry[:date.start()]
+        signals = [s.end() for s in _SIGNAL_RE.finditer(head)]
+        segment = head[signals[-1] if signals else 0:]
+        if _COMMA_ONLY_AUTHOR_PREFIX_RE.fullmatch(segment):
+            return {"reader": NAME, "title": None, "anchor": "date",
+                    "classification": dict(_BOOK_SHAPED_DATE_CLASSIFICATION)}
     return None
+
+
+def parse_fields(entry: str) -> dict | None:
+    """Expose Bluebook's anchored title/year as source-validated fields."""
+    record = _read_anchor(entry)
+    if record is None:
+        return None
+    if record.get("status") == "ambiguous":
+        return {"reader": NAME, "version": VERSION, "status": "ambiguous",
+                "fields": {}, "conflicts": list(record["conflicts"])}
+    fields = {}
+    title = record.get("title")
+    if title:
+        start = entry.find(title)
+        if start < 0 or entry.find(title, start + 1) >= 0:
+            return {"reader": NAME, "version": VERSION, "status": "ambiguous",
+                    "fields": {}, "conflicts": [{"field": "title", "reason": "non_unique_span"}]}
+        fields["title"] = {"value": title, "spans": [{"start": start,
+            "end": start + len(title), "raw_value": title}], "rule": record["anchor"]}
+    year_span = None
+    year_value = None
+    if record.get("anchor") == "reporter":
+        reporter = _VOL_REPORTER_RE.search(entry)
+        if reporter is not None:
+            candidate = _DATE_PAREN_RE.search(entry, reporter.end())
+            interstitial = (entry[reporter.end():candidate.start()]
+                            if candidate is not None else "")
+            # Pinpoints may follow the reporter's opening page before the
+            # publication year, including footnote locators; arbitrary prose
+            # between the reporter spine and date is not an anchor.
+            if (candidate is not None and re.fullmatch(
+                    r"\s*(?:,\s*\d{1,5}(?:\s*[-–—]\s*\d{1,5})?"
+                    r"(?:\s*&\s*nn?\.?\s*\d+(?:\s*[-–—]\s*\d+)?)?\s*)?",
+                    interstitial)):
+                match = re.search(r"(?:18|19|20)\d{2}", candidate.group(0))
+                if match is not None:
+                    year_span = (candidate.start() + match.start(), candidate.start() + match.end())
+                    year_value = match.group(0)
+            # Some law journals use the publication year as the volume token:
+            # `2024 J. Free Speech L. 299`. This is a year only when the
+            # four-digit token is part of the closed reporter/locator match.
+            if (year_span is None and reporter.group("vol")
+                    and re.fullmatch(r"(?:18|19|20)\d{2}", reporter.group("vol"))):
+                year_span = reporter.span("vol")
+                year_value = reporter.group("vol")
+    elif record.get("anchor") == "date":
+        candidate = _DATE_PAREN_RE.search(entry)
+        if candidate is not None:
+            match = re.search(r"(?:18|19|20)\d{2}", candidate.group(0))
+            if match is not None:
+                year_span = (candidate.start() + match.start(), candidate.start() + match.end())
+                year_value = match.group(0)
+    if year_span is not None:
+        fields["year"] = {"value": int(year_value), "spans": [{
+            "start": year_span[0], "end": year_span[1],
+            "raw_value": year_value}], "rule": record["anchor"] + ":year"}
+    result = {"reader": NAME, "version": VERSION, "status": "parsed",
+              "fields": fields, "conflicts": []}
+    if record.get("classification"):
+        result["classification"] = dict(record["classification"])
+    return result

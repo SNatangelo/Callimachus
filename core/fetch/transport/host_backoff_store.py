@@ -4,6 +4,7 @@
 """SQLite persistence for learned backoff and explicit suite cooldown state."""
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import sqlite3
@@ -143,10 +144,11 @@ def _is_transient_lock(exc: sqlite3.OperationalError) -> bool:
 def load(environ: dict[str, str] | None = None) -> dict:
     """Return persisted learning, or no state when its dedicated DB is unavailable."""
     try:
-        with _connect(environ) as conn:
-            rows = conn.execute(
-                "SELECT host, learned_seconds, updated_at FROM host_backoff"
-            ).fetchall()
+        with contextlib.closing(_connect(environ)) as conn:
+            with conn:
+                rows = conn.execute(
+                    "SELECT host, learned_seconds, updated_at FROM host_backoff"
+                ).fetchall()
     except (OSError, sqlite3.Error):
         return {}
     return {
@@ -183,14 +185,15 @@ def save(mapping: dict, environ: dict[str, str] | None = None) -> None:
     if not rows and not deleted_hosts:
         return
     try:
-        with _connect(environ) as conn:
-            conn.executemany("DELETE FROM host_backoff WHERE host = ?", deleted_hosts)
-            conn.executemany(
-                "INSERT INTO host_backoff(host, learned_seconds, updated_at) VALUES (?, ?, ?) "
-                "ON CONFLICT(host) DO UPDATE SET "
-                "learned_seconds = excluded.learned_seconds, updated_at = excluded.updated_at",
-                rows,
-            )
+        with contextlib.closing(_connect(environ)) as conn:
+            with conn:
+                conn.executemany("DELETE FROM host_backoff WHERE host = ?", deleted_hosts)
+                conn.executemany(
+                    "INSERT INTO host_backoff(host, learned_seconds, updated_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(host) DO UPDATE SET "
+                    "learned_seconds = excluded.learned_seconds, updated_at = excluded.updated_at",
+                    rows,
+                )
     except (OSError, sqlite3.Error):
         return
 
@@ -201,19 +204,20 @@ def load_cooldowns(environ: dict[str, str] | None = None) -> dict:
     if path is None:
         return {}
     try:
-        with _connect_path(path) as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS host_cooldown ("
-                "host TEXT PRIMARY KEY, cooldown_until REAL NOT NULL, "
-                "last_applied_seconds REAL NOT NULL, in_cooldown INTEGER NOT NULL, "
-                "post_cooldown_successes INTEGER NOT NULL, learned_seconds REAL NOT NULL, "
-                "learned_updated_at REAL NOT NULL)"
-            )
-            rows = conn.execute(
-                "SELECT host, cooldown_until, last_applied_seconds, in_cooldown, "
-                "post_cooldown_successes, learned_seconds, learned_updated_at "
-                "FROM host_cooldown"
-            ).fetchall()
+        with contextlib.closing(_connect_path(path)) as conn:
+            with conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS host_cooldown ("
+                    "host TEXT PRIMARY KEY, cooldown_until REAL NOT NULL, "
+                    "last_applied_seconds REAL NOT NULL, in_cooldown INTEGER NOT NULL, "
+                    "post_cooldown_successes INTEGER NOT NULL, learned_seconds REAL NOT NULL, "
+                    "learned_updated_at REAL NOT NULL)"
+                )
+                rows = conn.execute(
+                    "SELECT host, cooldown_until, last_applied_seconds, in_cooldown, "
+                    "post_cooldown_successes, learned_seconds, learned_updated_at "
+                    "FROM host_cooldown"
+                ).fetchall()
     except (OSError, sqlite3.Error) as exc:
         raise HostCooldownStoreError("explicit host cooldown store is unavailable") from exc
     return dict(_validate_cooldown_row(row) for row in rows)
@@ -235,26 +239,27 @@ def save_cooldown(host: str, record: dict, environ: dict[str, str] | None = None
     )
     _validate_cooldown_row(values)
     try:
-        with _connect_path(path) as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS host_cooldown ("
-                "host TEXT PRIMARY KEY, cooldown_until REAL NOT NULL, "
-                "last_applied_seconds REAL NOT NULL, in_cooldown INTEGER NOT NULL, "
-                "post_cooldown_successes INTEGER NOT NULL, learned_seconds REAL NOT NULL, "
-                "learned_updated_at REAL NOT NULL)"
-            )
-            conn.execute(
-                "INSERT INTO host_cooldown("
-                "host, cooldown_until, last_applied_seconds, in_cooldown, "
-                "post_cooldown_successes, learned_seconds, learned_updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(host) DO UPDATE SET "
-                "cooldown_until = excluded.cooldown_until, "
-                "last_applied_seconds = excluded.last_applied_seconds, "
-                "in_cooldown = excluded.in_cooldown, "
-                "post_cooldown_successes = excluded.post_cooldown_successes, "
-                "learned_seconds = excluded.learned_seconds, "
-                "learned_updated_at = excluded.learned_updated_at",
-                values,
-            )
+        with contextlib.closing(_connect_path(path)) as conn:
+            with conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS host_cooldown ("
+                    "host TEXT PRIMARY KEY, cooldown_until REAL NOT NULL, "
+                    "last_applied_seconds REAL NOT NULL, in_cooldown INTEGER NOT NULL, "
+                    "post_cooldown_successes INTEGER NOT NULL, learned_seconds REAL NOT NULL, "
+                    "learned_updated_at REAL NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT INTO host_cooldown("
+                    "host, cooldown_until, last_applied_seconds, in_cooldown, "
+                    "post_cooldown_successes, learned_seconds, learned_updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(host) DO UPDATE SET "
+                    "cooldown_until = excluded.cooldown_until, "
+                    "last_applied_seconds = excluded.last_applied_seconds, "
+                    "in_cooldown = excluded.in_cooldown, "
+                    "post_cooldown_successes = excluded.post_cooldown_successes, "
+                    "learned_seconds = excluded.learned_seconds, "
+                    "learned_updated_at = excluded.learned_updated_at",
+                    values,
+                )
     except (OSError, sqlite3.Error) as exc:
         raise HostCooldownStoreError("explicit host cooldown store is unavailable") from exc

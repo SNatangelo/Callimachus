@@ -63,6 +63,8 @@ jobs:
           tests/test_guided_fetch_viewmodel.py
           tests/test_guided_fetch_controller.py
           tests/test_guided_fetch_gui_optional.py
+          tests/test_gui_browser_worker.py
+          tests/test_store_disclosures.py
           -q
 
   fast:

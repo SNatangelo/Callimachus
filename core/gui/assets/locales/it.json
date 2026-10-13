@@ -335,5 +335,10 @@
   "resume_latest_no_history": "Non c'è una run precedente da riprendere.",
   "resume_latest_unavailable": "L'ultima run non è disponibile e non può essere ripresa.",
   "resume_latest_active": "L'ultima run è già attiva e non può essere ripresa.",
-  "resume_latest_completed": "L'ultima run è già completata e non può essere ripresa."
+  "resume_latest_completed": "L'ultima run è già completata e non può essere ripresa.",
+  "online_use_notice": "Avvia o Riprendi autorizza le ricerche bibliografiche online e invia affermazioni e passaggi ai provider IA selezionati.",
+  "online_use_details": "I servizi ricevono query bibliografiche e metadati, incluso IP ed eventuale email di contatto. I provider IA selezionati ricevono prompt; si applicano le loro condizioni e tariffe. Stop interrompe il lavoro successivo. Leggi Privacy prima di avviare.",
+  "privacy_policy": "Privacy e IA",
+  "report_ai_content": "Segnala contenuti IA",
+  "report_ai_content_tip": "Apre un modulo di issue pubblico su GitHub. Nulla viene inviato automaticamente. Non includere chiavi o documenti privati."
 }

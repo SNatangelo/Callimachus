@@ -1,0 +1,27 @@
+{
+  "comparison": "sha256 per in-scope regular archive member vs extracted file",
+  "sources": [
+    {
+      "source": "qt",
+      "scope": "Qt archive root files + qtbase + qtsvg",
+      "archive": ".worktrees\\microsoft-store\\build\\desktop\\artifacts\\store-submission\\sources\\qt-everywhere-src-6.11.2.tar.xz",
+      "archive_sha256": "6dcfbca271d76a6502741a2c0dc6fc98ef7dd0b7b4cfd0abcebb285a86a26f33",
+      "regular_files_compared": 23512,
+      "missing_count": 0,
+      "modified_count": 0,
+      "missing_paths": [],
+      "modified_paths": []
+    },
+    {
+      "source": "pyside",
+      "scope": "all regular PySide archive members",
+      "archive": ".worktrees\\microsoft-store\\build\\desktop\\artifacts\\store-submission\\sources\\pyside-setup-everywhere-src-6.11.2.tar.xz",
+      "archive_sha256": "cba47efbaad1bedd529725cbc14e21f156c7a19366f07b3edfbb076ffd7afdf8",
+      "regular_files_compared": 4602,
+      "missing_count": 0,
+      "modified_count": 0,
+      "missing_paths": [],
+      "modified_paths": []
+    }
+  ]
+}

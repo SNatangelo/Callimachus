@@ -63,6 +63,16 @@ _NOTE_START_RELAXED_RE = re.compile(r"^(\d{1,3})[.)]?\s*(.*)$")
 _APPARATUS_SIGNAL_RE = re.compile(
     r"\bsupra\b|\bibid\b|\bid\.|\(n\s*\d|\bv\.\s|§|\bat\s+\d|\bparas?\b|\bart\b|\bcf\b"
     r"|\breprinted\b|,\s*\d{1,4}\s*\(", re.I)
+# Text-only author-year notes need more than a parenthesised year: require an
+# author-initial lead and a publication/volume/year tail. This admits journal
+# references whose sparse fields are not recognized by the shared classifier.
+_TEXT_AUTHOR_JOURNAL_RE = re.compile(
+    r"^\s*[A-ZÀ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]+,\s+[A-Z]\."
+    r".+\.\s+[A-Z][A-Za-zÀ-ÖØ-öø-ÿ&.'’/-]*"
+    r"(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ&.'’/-]+){0,6}\s+"
+    r"\d{1,4}(?:,\s*\d{1,5}(?:[-–]\d{1,5})?)?\s+"
+    r"\((?:19|20)\d{2}[a-z]?\)",
+)
 _APPARATUS_MIN_FRACTION = 0.4
 
 
@@ -73,13 +83,33 @@ def _resolve_parsing_common():
         return importlib.import_module("parsing_common")
 
 
+def _text_note_has_citation_evidence(text: str, parsing_common) -> bool:
+    """Return whether one text-derived note has positive source structure.
+
+    A year alone is common in ordinary prose. Keep the established legal-note
+    signals, and otherwise require the shared reference parser to identify a
+    source-like type with evidence or an explicit external identifier.
+    """
+    if _APPARATUS_SIGNAL_RE.search(text) or _TEXT_AUTHOR_JOURNAL_RE.search(text):
+        return True
+    ref = parsing_common._make_reference(1, text)
+    if any(ref.get(field) for field in ("doi", "isbn", "issn", "url")):
+        return True
+    return (
+        ref.get("source_kind") in {"article_like", "book_like"}
+        and ref.get("source_type_confidence") in {"medium", "high"}
+        and bool(ref.get("source_type_evidence"))
+    )
+
+
 def extract_footnote_references(text: str) -> dict[int, str] | None:
     """Recover numbered footnotes from ``\\f``-delimited page text.
 
-    Returns ``{n: citation_text}`` for a sequential run starting at 1, or
-    ``None`` when no such apparatus is present.  Continuation lines (a wrapped
-    footnote) are joined; the current note is closed at each page boundary so it
-    can never absorb the next page's body text."""
+    Returns ``{n: citation_text}`` for a sequential run starting at 1 only when
+    enough notes show positive citation/source evidence.  Continuation lines (a
+    wrapped footnote) are joined; the current note is closed at each page boundary
+    so it can never absorb the next page's body text.  This evidence gate keeps
+    numbered prose with years or section numbers from becoming a note apparatus."""
     if PAGE_BREAK not in text:
         return None
     notes: dict[int, str] = {}
@@ -100,6 +130,13 @@ def extract_footnote_references(text: str) -> dict[int, str] | None:
             notes[cur[0]] = cur[1].strip()
             cur = None
     if len(notes) < _MIN_NOTES:
+        return None
+    parsing_common = _resolve_parsing_common()
+    apparatus = sum(
+        1 for note_text in notes.values()
+        if _text_note_has_citation_evidence(note_text, parsing_common)
+    )
+    if apparatus < _APPARATUS_MIN_FRACTION * len(notes):
         return None
     return notes
 
@@ -377,8 +414,17 @@ def _single_embedded_source_span(text: str) -> tuple[int, int] | None:
 
 
 def _note_year(text: str) -> int | None:
-    """The *last* parenthesised year — the publication year — not the first,
-    which may be a title date range ("Scopus 1900–2020 … (2022)")."""
+    """Prefer the year anchored by the structural reader for recognized entries."""
+    structured = reference_readers.parse_entry(text, include_generic=False)
+    if structured.get("status") == "ambiguous":
+        return None
+    if structured.get("status") == "parsed":
+        year = structured.get("fields", {}).get("year", {}).get("value")
+        return year if isinstance(year, int) else None
+
+    # Unrecognized notes retain the narrow historical parenthesized-year rule.
+    if not reference_readers._generic_text_enabled():
+        return None
     years = _PAREN_YEAR_RE.findall(text)  # findall returns the "19"/"20" groups
     if not years:
         return None
@@ -415,6 +461,13 @@ def _note_title(text: str, pc) -> str | None:
     # a Bluebook footnote returns whatever fragment it can find — "tampered" for
     # "A Global Assessment of Third-Party Connection Tampering".  35 references in
     # one paper were named by such a fragment.
+    record = reference_readers.parse_entry(text, include_generic=False)
+    if record.get("status") == "parsed":
+        return (record.get("fields", {}).get("title") or {}).get("value")
+    if record.get("status") == "ambiguous":
+        return None
+    if not reference_readers._generic_text_enabled():
+        return None
     oscola = _OSCOLA_QUOTED_TITLE_RE.search(text)
     if oscola:
         return oscola.group(1).strip().rstrip(".,")
@@ -423,9 +476,6 @@ def _note_title(text: str, pc) -> str | None:
         book_title = book.group("title").strip().rstrip(".,")
         if not _LEGAL_REPORTER_TAIL_IN_TITLE_RE.search(book_title):
             return book_title
-    record = reference_readers.read(text)
-    if record:
-        return record["title"]
     institutional_title = _institutional_note_title(text)
     if institutional_title:
         return institutional_title
@@ -557,6 +607,89 @@ def _match_end_bib(ref: dict, note_text: str, entries: list[dict]) -> dict | Non
         if e["year"] == yr and re.search(r"\b" + re.escape(sur) + r"\b", e["raw"], re.I):
             return e
     return None
+
+
+def _complete_page_interval(value: object) -> tuple[int, int] | None:
+    match = re.fullmatch(r"\s*(\d+)\s*[-‐‑‒–—−]\s*(\d+)\s*", str(value or ""))
+    if match is None:
+        return None
+    first, last = int(match[1]), int(match[2])
+    return (first, last) if first < last else None
+
+
+def _is_literal_title_extension(short: str | None, full: str | None) -> bool:
+    if not short or not full:
+        return False
+    short_key = " ".join(short.split()).casefold()
+    full_key = " ".join(full.split()).casefold()
+    if not full_key.startswith(short_key) or len(full_key) <= len(short_key):
+        return False
+    return full_key[len(short_key)] in ",:;–—-"
+
+
+def _container_extension_key(value: object) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return " ".join(re.sub(r"[^\w]+", " ", text).split())
+
+
+def _end_bib_extension_matches_publication(
+    ref: dict, note_text: str, entry: dict,
+) -> bool:
+    """Require DOI or a complete matching author/year/volume/page tuple."""
+    surname = _first_surname(note_text)
+    year = ref.get("year")
+    if not surname or entry.get("surname") != surname or entry.get("year") != year:
+        return False
+    cited_doi = (ref.get("doi") or "").strip().casefold()
+    entry_doi = (entry.get("doi") or "").strip().casefold()
+    if cited_doi and entry_doi and cited_doi != entry_doi:
+        return False
+
+    pc = _resolve_parsing_common()
+    cited = {
+        item.get("kind"): item.get("normalized_value")
+        for item in ref.get("cited_coordinates") or ()
+        if isinstance(item, dict)
+    }
+    published = {
+        item.get("kind"): item.get("normalized_value")
+        for item in pc.extract_cited_coordinates(entry["raw"], entry.get("title"))
+        if isinstance(item, dict)
+    }
+    for kind in ("volume", "article_page_range", "issue"):
+        if cited.get(kind) and published.get(kind) and cited[kind] != published[kind]:
+            return False
+
+    if cited_doi and entry_doi and cited_doi == entry_doi:
+        return True
+    cited_container = _container_extension_key(cited.get("container"))
+    published_container = _container_extension_key(published.get("container"))
+    if not cited_container or cited_container != published_container:
+        return False
+    if not cited.get("volume") or not published.get("volume"):
+        return False
+    if not cited.get("article_page_range") or not published.get("article_page_range"):
+        return False
+    if not re.fullmatch(r"\d+", str(cited["volume"])) or not re.fullmatch(
+        r"\d+", str(published["volume"])
+    ):
+        return False
+    if int(cited["volume"]) != int(published["volume"]):
+        return False
+    cited_pages = _complete_page_interval(cited["article_page_range"])
+    published_pages = _complete_page_interval(published["article_page_range"])
+    return cited_pages is not None and cited_pages == published_pages
+
+
+def _unique_end_bib_title_extension(
+    ref: dict, note_text: str, entries: list[dict],
+) -> dict | None:
+    matches = [
+        entry for entry in entries
+        if _is_literal_title_extension(ref.get("title"), entry.get("title"))
+        and _end_bib_extension_matches_publication(ref, note_text, entry)
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _compare_source_has_independent_citation_form(text: str) -> bool:
@@ -839,8 +972,9 @@ def build_note_references(notes: dict[int, str], end_bibliography: str = "") -> 
 
     The abbreviated Nature-style footnotes often have no clean title, but the
     separate alphabetical end bibliography lists the same sources in fuller
-    Chicago form with quoted titles and DOIs.  When supplied, it is used to
-    *fill* (never overwrite) a missing title or DOI on the matched entry."""
+    Chicago form with quoted titles and DOIs. When supplied, it fills missing
+    metadata; a short title is extended only for one literal-prefix entry with
+    independent same-publication evidence."""
     pc = _resolve_parsing_common()
     bib_entries = _parse_end_bibliography(end_bibliography)
     refs: list[dict] = []
@@ -856,14 +990,23 @@ def build_note_references(notes: dict[int, str], end_bibliography: str = "") -> 
         # the end-bibliography enrichment below can fill it.
         ref["title"] = _note_title(source_text, pc)
         ref["provenance"] = "footnote"
+        extension_entry = None
+        if bib_entries and ref.get("title"):
+            extension_entry = _unique_end_bib_title_extension(
+                ref, source_text, bib_entries
+            )
+            if extension_entry:
+                ref["title"] = extension_entry["title"]
+                ref["title_source"] = "end_bibliography"
         if bib_entries and (not ref.get("title") or not ref.get("doi")):
-            match = _match_end_bib(ref, source_text, bib_entries)
+            match = extension_entry or _match_end_bib(ref, source_text, bib_entries)
             if match:
                 if not ref.get("title") and match["title"]:
                     ref["title"] = match["title"]
                     ref["title_source"] = "end_bibliography"
                 if not ref.get("doi") and match["doi"]:
                     ref["doi"] = match["doi"]
+        pc._align_bibliographic_parse(ref)
         return ref
 
     for n in sorted(notes):

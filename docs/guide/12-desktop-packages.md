@@ -1,5 +1,9 @@
 # Desktop packages
 
+Microsoft Store packaging has a separate
+[submission and test contract](../deployment/microsoft-store.md).
+Read [Privacy and AI](privacy.md) before starting online operations.
+
 Callimachus can run from source with `python run.py app`, from the Windows
 installer, or from a standalone archive produced by GitHub Actions. The native
 package includes Python, the desktop interface, the pipeline, the optional OCR

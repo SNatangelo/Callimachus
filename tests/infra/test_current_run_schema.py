@@ -35,7 +35,7 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 def test_fresh_current_schema_omits_removed_verification_objects(tmp_path):
     repo = _repo(tmp_path)
     try:
-        assert SCHEMA_VERSION == 109
+        assert SCHEMA_VERSION == 115
         assert "identity_attested" in {
             row[1] for row in repo._conn.execute("PRAGMA table_info(task_fetch_answers)")
         }
@@ -45,6 +45,20 @@ def test_fresh_current_schema_omits_removed_verification_objects(tmp_path):
         assert _table_exists(repo._conn, "cited_bibliographic_coordinates")
         assert _table_exists(repo._conn, "cited_bibliographic_coordinate_spans")
         assert _table_exists(repo._conn, "resolve_attempt_metadata_coordinate_comparisons")
+        resolve_match_columns = {
+            row[1] for row in repo._conn.execute(
+                "PRAGMA table_info(resolve_attempt_metadata_matches)"
+            )
+        }
+        assert "generic_article_locator_certificate_json" in resolve_match_columns
+        assert "titleless_native_venue_composition_json" in resolve_match_columns
+        provider_columns = {
+            row[1] for row in repo._conn.execute(
+                "PRAGMA table_info(resolve_attempt_provider_details)"
+            )
+        }
+        assert "crossref_native_work_proof_json" in provider_columns
+        assert "datacite_native_doi_proof_json" in provider_columns
         assert _table_exists(repo._conn, "resolve_evidence_metadata_coordinate_comparisons")
         assert _table_exists(repo._conn, "resolve_evidence_issue_attestations")
         assert _table_exists(repo._conn, "resolve_evidence_issue_attestation_members")

@@ -105,7 +105,7 @@ def test_windows_identity_uses_complete_sid_and_rid(monkeypatch):
     )
 
 
-@pytest.mark.parametrize("sid", [None, "test-operator", "S-1-5-21-4294967296", "S-1-5-21-1\n"])
+@pytest.mark.parametrize("sid", [None, "stena", "S-1-5-21-4294967296", "S-1-5-21-1\n"])
 def test_windows_identity_rejects_invalid_sid(monkeypatch, sid):
     monkeypatch.setattr(local_identity, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(local_identity, "_windows_process_sid", lambda: sid)

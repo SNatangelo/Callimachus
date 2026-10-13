@@ -41,6 +41,68 @@ _STORAGE_PROVENANCE_FIELDS = frozenset({
     "library_item_id",
 })
 _DOI_IN_TEXT_RE = re.compile(r"\b10\.\d{4,9}/\S+", re.IGNORECASE)
+_PREPRINT_CONTENT_HOSTS = frozenset({
+    "biorxiv.org", "www.biorxiv.org", "medrxiv.org", "www.medrxiv.org",
+})
+_PREPRINT_CONTENT_PATH_RE = re.compile(
+    r"/content/(?P<doi>10\.1101/[A-Z0-9._()/:+-]+)v(?P<version>[1-9]\d*)"
+    r"(?:\.full\.pdf)?/?\Z",
+    re.IGNORECASE | re.ASCII,
+)
+
+
+def _preprint_content_identity(url: str | None) -> tuple[str, int] | None:
+    """Parse only numbered bioRxiv/medRxiv public content URLs."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(url.strip())
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or parsed.hostname not in _PREPRINT_CONTENT_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+    ):
+        return None
+    match = _PREPRINT_CONTENT_PATH_RE.fullmatch(parsed.path)
+    if match is None:
+        return None
+    return match.group("doi").lower(), int(match.group("version"))
+
+
+def _explicit_preprint_revision_rejection(
+    ref: dict, source_ref: str, *, identity_attested: bool,
+) -> dict | None:
+    """Require an explicit cited preprint revision to be proven before storage."""
+    cited = _preprint_content_identity(ref.get("url"))
+    if cited is None:
+        return None
+    candidate = _preprint_content_identity(source_ref)
+    if candidate is None:
+        if identity_attested:
+            return None
+        return {
+            "status": "identity_inconclusive",
+            "reason": "candidate route does not prove the explicitly cited preprint revision",
+            "reason_code": "preprint_revision_unproven",
+        }
+    if candidate[0] != cited[0]:
+        return {
+            "status": "identity_mismatch",
+            "reason": "candidate preprint route identifies a different DOI than the cited route",
+            "reason_code": "preprint_route_doi_mismatch",
+        }
+    if candidate[1] != cited[1]:
+        return {
+            "status": "identity_mismatch",
+            "reason": "candidate preprint revision differs from the explicitly cited revision",
+            "reason_code": "preprint_revision_mismatch",
+        }
+    return None
 
 
 def _validated_storage_provenance(value: dict | None) -> dict:
@@ -1132,6 +1194,11 @@ def try_store_fulltext(
         and str(storage_provenance.get("supplied_via") or "").startswith("controlled_task_answer:")
     ):
         raise ValueError("identity attestation requires authenticated controlled task provenance")
+    revision_rejection = _explicit_preprint_revision_rejection(
+        ref, source_ref, identity_attested=identity_attested,
+    )
+    if revision_rejection is not None:
+        return {"method": method, **revision_rejection}
     # Identity checks below deliberately use the native extraction, including
     # front matter and references.  The text persisted for verify is prepared
     # separately: it is source prose, not a bibliography for the LLM to read.

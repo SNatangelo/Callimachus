@@ -3,7 +3,7 @@
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Run-state, report, and verification-gate tests."""
-from ._bootstrap import *  # noqa: F401,F403
+from tests._bootstrap import *  # noqa: F401,F403
 from core.invocation import run_prefix
 
 

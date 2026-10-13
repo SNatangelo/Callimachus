@@ -2,52 +2,23 @@
 # core/parse/reference_readers/__init__.py
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Registry for reference-entry readers, discovered by file drop.
+"""Discoverable structural readers for individual bibliographic entries.
 
-This is the other half of `core/parse/citation_schemes/`.  A citation scheme reads
-the MARKERS a manuscript puts in its prose — "(Smith 2020)", "[14]", "(Morrison 42)"
-— and answers "which reference does this sentence point at".  A reference reader
-answers the opposite question: given ONE entry, what work does it name?
-
-They are separate registries because they take different inputs (a whole body of
-sentences versus a single entry) and because a manuscript pairs them freely: a
-law-review paper carries numeric markers in the text and Bluebook entries in the
-footnotes, and neither half implies the other.
-
-## Contract
-
-Every reader module defines:
-
-- `NAME` — the reader's name, recorded on what it reads.
-- `read(entry) -> dict | None` — the fields, or None when the entry is not in
-  this reader's format.
-
-`read` returning None IS the detection: a reader that cannot recognise an entry
-declines it, and the dispatcher tries the next.  There is deliberately no separate
-`detect()` — a confidence score nothing consumes would be scaffolding, and the
-readers here are built to decline rather than guess.
-
-The returned dict carries at least:
-
-- `reader` — which reader produced this.
-- `title` — the work's title.
-- `anchor` — what positional evidence identified it. The anchor is the reader's
-  main asset: it says WHERE in the entry the title was delimited, which is what a
-  bare title string cannot say. A gloss lifted from an explanatory parenthetical
-  and a genuine two-word title are the same string; only the anchor tells them
-  apart.
-
-## Ordering
-
-`ORDER` (default 100, ties broken by name) fixes the sequence the dispatcher
-tries. Readers demanding the most positional evidence go first, so a reader that
-matches on strong structure is never pre-empted by one that matches on less.
+Readers implement ``parse_fields(entry)`` and return field values with spans in
+the NFC-normalized source entry. The dispatcher validates each record, merges
+compatible readings, and abstains on conflicting field interpretations.
 """
 
 from __future__ import annotations
 
 import importlib
 import pkgutil
+import unicodedata
+
+try:
+    from core.parse import parser_config
+except ImportError:
+    import parser_config
 
 _REGISTRY_CACHE: list | None = None
 
@@ -57,8 +28,25 @@ def _discover() -> list:
     for info in pkgutil.iter_modules(__path__):
         if info.name.startswith("_"):
             continue
-        modules.append(importlib.import_module(f"{__name__}.{info.name}"))
-    return sorted(modules, key=lambda m: (getattr(m, "ORDER", 100), getattr(m, "NAME", "")))
+        module = importlib.import_module(f"{__name__}.{info.name}")
+        if callable(getattr(module, "parse_fields", None)):
+            modules.append(module)
+    names = [getattr(m, "NAME", None) or getattr(m, "__name__", "unknown").rsplit(".", 1)[-1]
+             for m in modules]
+    if len(names) != len(set(names)):
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        raise ValueError("duplicate reference reader name: " + ", ".join(duplicates))
+    config = parser_config.load()
+    enabled = config.get("reference_readers", {})
+    order = parser_config.merge_order(
+        names,
+        config.get("reference_reader_order"), label="reference reader",
+    )
+    by_name = {getattr(m, "NAME", None) or getattr(m, "__name__", "unknown").rsplit(".", 1)[-1]: m
+               for m in modules}
+    return [by_name[name] for name in order
+            if not isinstance(enabled, dict)
+            or bool((enabled.get(name) or {}).get("enabled", True))]
 
 
 def get_registry() -> list:
@@ -68,52 +56,175 @@ def get_registry() -> list:
     return list(_REGISTRY_CACHE)
 
 
-def read(entry: str, readers=None) -> dict | None:
-    """The first reader that recognises `entry`, or None if none does.
-
-    `readers` restricts the attempt to the readers a manuscript elected. Passing
-    none of them reads nothing: a reader is offered an entry only where the whole
-    reference list showed it was written in that reader's format.
-    """
-    for module in (get_registry() if readers is None else readers):
-        record = module.read(entry)
-        if record:
-            return record
-    return None
+def _generic_text_enabled() -> bool:
+    """Whether the shipped generic-text reader is enabled in the registry."""
+    return any(
+        getattr(module, "NAME", None) == "generic-text"
+        for module in get_registry()
+    )
 
 
-# A reference list must be this fraction Bluebook before its Bluebook reader is
-# believed.  The law-review paper claims 19.9% of its 418 entries and every other
-# paper in the corpus claims 0.0% of its 990, so anything inside that gap
-# separates them; 5% is placed near the bottom because the true rate is diluted by
-# entries that are not works at all — 84 of that paper's notes are back-references
-# ("Id. at 96.") which no reader can or should claim.
-#
-# The floor exists for the case a per-entry guard misses: a reader that misreads a
-# stray entry or two in a foreign list cannot, on that evidence, take over the
-# list.
-_MIN_COVERAGE = 0.05
-
-
-def elect(entries) -> list:
-    """The readers a manuscript's reference list supports, strongest first.
-
-    Election is by aggregate agreement rather than by a separate style heuristic:
-    a reader that recognises a real share of the list has already demonstrated the
-    format, and asking it directly cannot drift from what it will actually read.
-
-    This is the structural half of keeping a reader off the papers it was not
-    written for. The other half is the reader's own refusal to claim an entry it
-    does not recognise, and neither replaces the other: election limits exposure,
-    refusal makes the reader correct. A reader safe only because of who calls it
-    is one new caller away from being wrong.
-    """
-    candidates = [e for e in entries if e]
-    if not candidates:
-        return []
-    elected = []
+def entry_start_readers(line: str) -> tuple[str, ...]:
+    """Names of enabled readers that recognize a physical line as an entry start."""
+    claimed = []
     for module in get_registry():
-        claimed = sum(1 for entry in candidates if module.read(entry))
-        if claimed / len(candidates) >= _MIN_COVERAGE:
-            elected.append((claimed, module))
-    return [module for _, module in sorted(elected, key=lambda p: -p[0])]
+        starts_entry = getattr(module, "starts_entry", None)
+        if callable(starts_entry) and starts_entry(line):
+            claimed.append(getattr(module, "NAME", None) or getattr(
+                module, "__name__", "unknown").rsplit(".", 1)[-1])
+    return tuple(sorted(set(claimed)))
+
+
+def _validated_record(entry: str, module, record: dict) -> dict:
+    """Validate reader output against the exact entry before it can be trusted."""
+    if not isinstance(record, dict):
+        raise ValueError(f"reference reader {getattr(module, 'NAME', '?')} returned invalid record")
+    module_name = getattr(module, "NAME", None) or getattr(module, "__name__", "unknown").rsplit(".", 1)[-1]
+    record.setdefault("reader", module_name)
+    record.setdefault("version", getattr(module, "VERSION", "1"))
+    if not validate_parse(record, entry):
+        raise ValueError(f"reference reader {record.get('reader', '?')} returned invalid record")
+    return record
+
+
+def _parse_structural(entry: str, *, readers=None) -> dict:
+    """Parse all safe structural readings; conflicting claims abstain.
+
+    ORDER controls deterministic presentation only. It never resolves a conflict.
+    A recognized ambiguous result prevents a weaker generic reader from claiming
+    the entry.
+    """
+    modules = [m for m in (get_registry() if readers is None else list(readers))
+               if getattr(m, "STRUCTURAL", True)]
+    claims = []
+    ambiguities = []
+    for module in modules:
+        parse = getattr(module, "parse_fields", None)
+        if not callable(parse):
+            continue
+        record = parse(entry)
+        if record is None:
+            continue
+        record = _validated_record(entry, module, record)
+        status = record.get("status")
+        if status == "ambiguous":
+            ambiguities.append(record)
+        elif status == "parsed":
+            claims.append(record)
+        else:
+            raise ValueError(f"reference reader returned unsupported status: {status!r}")
+    if ambiguities:
+        return {"reader": "+".join(r["reader"] for r in ambiguities),
+                "version": "1", "status": "ambiguous", "fields": {},
+                "conflicts": [c for r in ambiguities for c in r.get("conflicts", [])]}
+    if not claims:
+        return {"reader": "none", "version": "1", "status": "unrecognized",
+                "fields": {}, "conflicts": []}
+    merged_fields = {}
+    for claim in claims:
+        for name, item in claim["fields"].items():
+            previous = merged_fields.get(name)
+            if previous is None:
+                merged_fields[name] = dict(item)
+            elif previous["value"] != item["value"]:
+                return {"reader": "+".join(sorted(c["reader"] for c in claims)),
+                        "version": "1", "status": "ambiguous", "fields": {},
+                        "conflicts": [{"field": name, "reason": "conflicting_values",
+                                       "readers": sorted(c["reader"] for c in claims)}]}
+            else:
+                previous_spans = {(span["start"], span["end"]) for span in previous["spans"]}
+                next_spans = {(span["start"], span["end"]) for span in item["spans"]}
+                if previous_spans != next_spans:
+                    return {"reader": "+".join(sorted(c["reader"] for c in claims)),
+                            "version": "1", "status": "ambiguous", "fields": {},
+                            "conflicts": [{"field": name, "reason": "competing_source_spans",
+                                           "readers": sorted(c["reader"] for c in claims)}]}
+                previous["spans"] += [span for span in item["spans"] if span not in previous["spans"]]
+    classifications = [c["classification"] for c in claims if c.get("classification")]
+    if classifications and any(value != classifications[0] for value in classifications[1:]):
+        return {"reader": "+".join(sorted(c["reader"] for c in claims)),
+                "version": "1", "status": "ambiguous", "fields": {},
+                "conflicts": [{"field": "classification", "reason": "conflicting_values"}]}
+    result = {"reader": "+".join(sorted(c["reader"] for c in claims)), "version": "1",
+              "status": "parsed", "fields": merged_fields,
+              "conflicts": [conflict for claim in claims
+                            for conflict in claim.get("conflicts", [])]}
+    if classifications:
+        result["classification"] = classifications[0]
+    return result
+
+
+def parse_entry(entry: str, *, chicago_hanging: bool = False,
+                include_generic: bool = True) -> dict:
+    """Return the unique safe structural result, or an explicit generic reading."""
+    entry = unicodedata.normalize("NFC", entry)
+    record = _parse_structural(entry)
+    if record["status"] != "unrecognized" or not include_generic:
+        return record
+    for module in get_registry():
+        if not getattr(module, "GENERIC", False):
+            continue
+        parsed = module.parse_fields(entry, chicago_hanging=chicago_hanging)
+        if parsed is not None:
+            return _validated_record(entry, module, parsed)
+    return record
+
+
+def validate_parse(record: dict, raw_entry: str) -> bool:
+    """Strict public validation for parse payloads before storage or matching."""
+    raw_entry = unicodedata.normalize("NFC", raw_entry)
+    if not isinstance(record, dict) or record.get("status") not in {"parsed", "ambiguous", "unrecognized"}:
+        return False
+    if not isinstance(record.get("reader"), str) or not record["reader"]:
+        return False
+    if not isinstance(record.get("version"), str) or not record["version"]:
+        return False
+    if not isinstance(record.get("fields"), dict) or not isinstance(record.get("conflicts", []), list):
+        return False
+    if record["status"] != "parsed":
+        return (not record["fields"] and isinstance(record.get("conflicts", []), list)
+                and (record["status"] != "ambiguous" or bool(record.get("conflicts"))))
+    types = {"authors": list, "title": str, "journal": str, "year": int,
+             "volume": str, "issue": str, "pages": str, "publisher": str,
+             "place": str, "editors": list, "doi": str, "url": str, "first_author": str}
+    try:
+        for name, item in record["fields"].items():
+            if name not in types or not isinstance(item, dict):
+                return False
+            value = item.get("value")
+            if not isinstance(value, types[name]) or (name == "year" and isinstance(value, bool)):
+                return False
+            if isinstance(value, str) and not value.strip():
+                return False
+            if name == "authors" and not all(isinstance(author, str) for author in value):
+                return False
+            if name == "authors" and (not value or not all(author.strip() for author in value)):
+                return False
+            if name == "editors" and (not value or not all(isinstance(editor, str) and editor.strip() for editor in value)):
+                return False
+            rule = item.get("rule")
+            spans = item.get("spans")
+            if not isinstance(rule, str) or not rule.strip() or not isinstance(spans, list) or not spans:
+                return False
+            if name in {"authors", "editors"} and len(spans) != len(value):
+                return False
+            for span in spans:
+                if not isinstance(span, dict):
+                    return False
+                start, end, raw_value = span.get("start"), span.get("end"), span.get("raw_value")
+                if (not isinstance(start, int) or isinstance(start, bool)
+                        or not isinstance(end, int) or isinstance(end, bool)
+                        or not isinstance(raw_value, str)
+                        or not 0 <= start < end <= len(raw_entry)
+                        or raw_entry[start:end] != raw_value):
+                    return False
+        if record.get("classification") is not None and not isinstance(record["classification"], dict):
+            return False
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def reset_for_tests() -> None:
+    global _REGISTRY_CACHE
+    _REGISTRY_CACHE = None

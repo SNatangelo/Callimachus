@@ -27,7 +27,7 @@ from .credential_observation_storage import (
 )
 from .verify_setting_storage import VERIFY_SETTING_DDL
 
-SCHEMA_VERSION = 109
+SCHEMA_VERSION = 115
 
 
 SCHEMA_SQL = """
@@ -322,7 +322,11 @@ CREATE TABLE IF NOT EXISTS reference_entries (
   source_type TEXT,
   source_kind TEXT,
   indexability TEXT,
-  source_type_confidence TEXT
+  source_type_confidence TEXT,
+  bibliographic_parse_json TEXT CHECK(
+    bibliographic_parse_json IS NULL OR
+    (json_valid(bibliographic_parse_json) AND json_type(bibliographic_parse_json)='object')
+  )
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_reference_entries_ref_number
@@ -340,7 +344,7 @@ CREATE TABLE IF NOT EXISTS cited_bibliographic_coordinates (
   raw_value TEXT NOT NULL CHECK(length(raw_value)>0 AND instr(raw_value,char(0))=0),
   normalized_value TEXT NOT NULL CHECK(length(normalized_value)>0 AND instr(normalized_value,char(0))=0),
   rule_id TEXT NOT NULL CHECK(length(rule_id)>0 AND instr(rule_id,char(0))=0),
-  extractor_version TEXT NOT NULL CHECK(extractor_version='cited-coordinates/v1'),
+  extractor_version TEXT NOT NULL CHECK(extractor_version='cited-coordinates/v2'),
   UNIQUE(ref_id, coordinate_kind)
 );
 CREATE TABLE IF NOT EXISTS cited_bibliographic_coordinate_spans (

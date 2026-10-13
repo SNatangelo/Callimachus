@@ -444,12 +444,41 @@ def _is_table_row(sentence: str, markers: list, fmt: str | None = None) -> bool:
 
 
 def build(sentences, references, window, manuscript_id, fmt=None, link_layer=None,
-          boilerplate_refs=None):
+          boilerplate_refs=None, scoped_context=None):
     # link_layer / boilerplate_refs are accepted for a uniform scheme interface;
     # numeric citations resolve by number and use neither.
     del link_layer, boilerplate_refs
     parse_mod = _resolve_parse_module()
     refnum_to_id = {r["ref_number"]: r["id"] for r in references}
+    sentence_scopes = (
+        scoped_context.get("sentence_scopes")
+        if isinstance(scoped_context, dict) else None
+    )
+    references_by_scope = (
+        scoped_context.get("references_by_scope")
+        if isinstance(scoped_context, dict) else None
+    )
+
+    def _scoped_target(sentence_index: int, local_number: int):
+        if not isinstance(sentence_scopes, list) or not isinstance(references_by_scope, dict):
+            return None
+        if sentence_index >= len(sentence_scopes):
+            return None
+        scope = sentence_scopes[sentence_index]
+        if not isinstance(scope, str):
+            return None
+        rows = references_by_scope.get(scope)
+        if not isinstance(rows, dict):
+            return None
+        target = rows.get(local_number)
+        return target if isinstance(target, dict) else None
+
+    def _target(sentence_index: int, local_number: int):
+        if scoped_context is not None:
+            return _scoped_target(sentence_index, local_number)
+        ref_id = refnum_to_id.get(local_number)
+        return {"ref_id": ref_id, "ref_number": local_number} if ref_id else None
+
     formula_suppressed: list = []
     # Leading author/affiliation block: present only when a "*" corresponding-author
     # marker sits near the top.  PDF sentence-splitting can break the author list
@@ -514,7 +543,11 @@ def build(sentences, references, window, manuscript_id, fmt=None, link_layer=Non
             suppressed.extend(
                 {"marker_raw": parse_mod._display(mk.raw), "sentence_index": idx + 1,
                  "reason": "table_row",
-                 "ref_numbers": [n for n in mk.nums if n in refnum_to_id],
+                 "ref_numbers": [
+                     target["ref_number"]
+                     for n in mk.nums
+                     if (target := _target(idx, n)) is not None
+                 ],
                  "structural_ambiguity": (
                      STRUCTURAL_AMBIGUOUS_TABLE_SENTINEL in sent
                  )}
@@ -537,7 +570,7 @@ def build(sentences, references, window, manuscript_id, fmt=None, link_layer=Non
         for group_index, (group, frag) in enumerate(zip(groups, frags)):
             nums = sorted({n for mk in group for n in mk.nums})
             marker_raw = " ".join(parse_mod._display(mk.raw) for mk in group)
-            resolved = [n for n in nums if n in refnum_to_id]
+            resolved = [n for n in nums if _target(idx, n) is not None]
             claim = parse_mod._new_claim(
                 manuscript_id, sentences, idx, window, marker_raw,
                 nums, len(resolved) > 1,
@@ -553,13 +586,14 @@ def build(sentences, references, window, manuscript_id, fmt=None, link_layer=Non
             # when cited together in one marker group.  Deduplication is
             # handled downstream by the task_id guard in run.py.
             for n in nums:
-                ref_id = refnum_to_id.get(n)
-                if ref_id is None:
+                target = _target(idx, n)
+                if target is None:
                     orphans.append({"marker_raw": f"[{n}]", "ref_number": n,
                                     "claim_id": claim["id"]})
                 else:
                     citations.append({"claim_id": claim["id"],
-                                      "ref_id": ref_id, "ref_number": n})
+                                      "ref_id": target["ref_id"],
+                                      "ref_number": target["ref_number"]})
     extra = {"orphans": orphans}
     if suppressed:
         extra["suppressed_markers"] = suppressed

@@ -121,6 +121,26 @@ class TestPublicHtmlRedaction(unittest.TestCase):
                 hashlib.sha256(RESOLVER_BODY.encode()).hexdigest().encode(), b"0" * 64,
             ))
 
+    def test_nullable_title_identity_attempts_is_valid(self):
+        data_open = b'<script id="cv-data" type="application/json">'
+        before, encoded = _report().split(data_open, 1)
+        payload, after = encoded.split(b"</script>", 1)
+        data = json.loads(payload)
+        data["projection"]["manuscript"]["title_identity"]["attempts"] = None
+        nullable = before + data_open + json.dumps(data).encode() + b"</script>" + after
+        public, _ = redact_html(nullable)
+        self.assertNotIn(SECRET.encode(), public)
+
+    def test_nullable_resolver_attempts_is_valid(self):
+        data_open = b'<script id="cv-data" type="application/json">'
+        before, encoded = _report().split(data_open, 1)
+        payload, after = encoded.split(b"</script>", 1)
+        data = json.loads(payload)
+        data["projection"]["sources"][0]["resolve"]["attempts"] = None
+        nullable = before + data_open + json.dumps(data).encode() + b"</script>" + after
+        public, _ = redact_html(nullable)
+        self.assertNotIn(SECRET.encode(), public)
+
     def test_cli_writes_new_html_and_matching_manifest_without_overwrite(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
             original = Path(directory) / "original.html"
@@ -131,3 +151,7 @@ class TestPublicHtmlRedaction(unittest.TestCase):
             self.assertEqual(manifest["public_html_sha256"], hashlib.sha256(public.read_bytes()).hexdigest())
             self.assertEqual(main([str(original), "--output", str(public)]), 1)
             self.assertEqual(original.read_bytes(), _report())
+
+
+if __name__ == "__main__":
+    unittest.main()

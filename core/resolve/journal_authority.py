@@ -329,6 +329,63 @@ def _lookup_alias(
         conn.close()
 
 
+@lru_cache(maxsize=4)
+def _all_registered_venue_pairs(
+    catalog_path: str, size: int, mtime_ns: int, inode: int,
+) -> tuple[tuple[str, str, str, tuple[str, ...]], ...]:
+    """Return every canonical-title/alias pair and its entity ISSNs in stable order."""
+    del size, mtime_ns, inode
+    conn = _open_catalog(catalog_path)
+    try:
+        issns_by_record: dict[str, list[str]] = {}
+        for row in conn.execute(
+            "SELECT record_id,issn FROM journal_issns ORDER BY record_id,issn"
+        ):
+            issns_by_record.setdefault(row["record_id"], []).append(row["issn"])
+        return tuple(
+            (
+                row["record_id"], row["canonical_title"], row["alias"],
+                tuple(issns_by_record.get(row["record_id"], ())),
+            )
+            for row in conn.execute(
+                "SELECT j.record_id,j.canonical_title,a.alias "
+                "FROM journals AS j JOIN journal_aliases AS a "
+                "ON a.record_id=j.record_id ORDER BY j.record_id,a.alias"
+            )
+        )
+    except sqlite3.Error as exc:
+        raise RuntimeError("configured journal authority catalog is invalid") from exc
+    finally:
+        conn.close()
+
+
+def _ordered_registered_venue_composition(
+    source_value: str, canonical_title: str, registered_alias: str,
+) -> bool:
+    """Match ordered literal tokens from one same-entity canonical/alias pair."""
+    source_tokens = _text_key(source_value).split()
+    canonical_tokens = _text_key(canonical_title).split()
+    alias_tokens = _text_key(registered_alias).split()
+    if (
+        len(source_tokens) < 2
+        or len(source_tokens) != len(canonical_tokens)
+        or len(source_tokens) != len(alias_tokens)
+    ):
+        return False
+    canonical_contribution = False
+    alias_contribution = False
+    for source, canonical, alias in zip(
+        source_tokens, canonical_tokens, alias_tokens,
+    ):
+        if source != canonical and source != alias:
+            return False
+        if source == canonical and canonical != alias:
+            canonical_contribution = True
+        if source == alias and canonical != alias:
+            alias_contribution = True
+    return canonical_contribution and alias_contribution
+
+
 def _one_edit_keys(value: str) -> tuple[str, ...]:
     """Return the finite, indexed exact-lookup neighbourhood of ``value``."""
     alphabet = " abcdefghijklmnopqrstuvwxyz0123456789"
@@ -440,6 +497,111 @@ def assess_local_journal(ref: dict, path: str | os.PathLike[str] | None = None) 
     }
 
 
+def _source_scoped_local_journal(
+    ref: dict, path: str | os.PathLike[str] | None = None,
+) -> dict | None:
+    """Bind one source-spanned venue to a unique NLM entity and all its ISSNs.
+
+    Exact unique aliases retain the existing authority policy. When there is no
+    exact recognition, all canonical/alias pairs are examined; a mixed source
+    venue may use ordered literal tokens from one pair on the same entity.
+    """
+    cited = _cited_container(ref)
+    raw = ref.get("raw_entry") if isinstance(ref, dict) else None
+    if not isinstance(raw, str) or not cited:
+        return None
+    from core.resolve import matching
+
+    source_span = matching._source_spanned_coordinate(ref, "container", raw)
+    if source_span is None:
+        return None
+    source_value = raw[source_span[0]:source_span[1]]
+    if _text_key(source_value) != _text_key(cited):
+        return None
+    raw_sha256 = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    exact = assess_local_journal(ref, path)
+    if isinstance(exact, dict) and exact.get("status") == "recognized":
+        if exact.get("registry") != "nlm-pubmed":
+            return None
+        exact_issns = issns_for_record(exact, path)
+        if not exact_issns:
+            return None
+        return {
+            **exact,
+            "issns": list(exact_issns),
+            "source": {
+                "raw_entry_sha256": raw_sha256,
+                "container_span": [source_span[0], source_span[1]],
+                "container_value": source_value,
+            },
+            "venue_witness": {
+                "mode": "exact_registered_name",
+                "canonical_title": exact["canonical_title"],
+                "registered_alias": exact["matched_alias"],
+            },
+        }
+
+    configured = path if path is not None else os.environ.get(CATALOG_ENV)
+    if not configured:
+        return None
+    catalog = Path(configured).expanduser().resolve()
+    signature = _catalog_signature(catalog)
+    metadata = _load_catalog(str(catalog), *signature)
+    if metadata.get("registry") != "nlm-pubmed":
+        return None
+    pairs = _all_registered_venue_pairs(str(catalog), *signature)
+    source_key = _text_key(source_value)
+    matches: list[tuple[str, str, str, tuple[str, ...], str]] = []
+    for record_id, canonical, alias, issns in pairs:
+        if source_key == _text_key(canonical):
+            matches.append((record_id, canonical, alias, issns, "exact_canonical"))
+        elif source_key == _text_key(alias):
+            matches.append((record_id, canonical, alias, issns, "exact_alias"))
+        if _ordered_registered_venue_composition(source_value, canonical, alias):
+            matches.append((record_id, canonical, alias, issns, "ordered_composition"))
+    if _catalog_signature(catalog) != signature:
+        raise RuntimeError("journal authority catalog changed during lookup")
+    entity_ids = {row[0] for row in matches}
+    if len(entity_ids) != 1:
+        return None
+    # Only choose a witness after the exhaustive entity check above.
+    selected = sorted(matches, key=lambda row: (row[1], row[2], row[4]))[0]
+    record_id, canonical, alias, registered_issns, match_kind = selected
+    if not registered_issns:
+        return None
+    match_basis = (
+        "canonical_title" if match_kind == "exact_canonical"
+        else "registered_alias" if match_kind == "exact_alias"
+        else "registered_title_alias_composition"
+    )
+    return {
+        "status": "recognized",
+        "registry": metadata["registry"],
+        "registry_version": metadata["registry_version"],
+        "record_id": record_id,
+        "cited_venue": cited,
+        "canonical_title": canonical,
+        "matched_alias": alias,
+        "match_basis": match_basis,
+        "snapshot_sha256": metadata["snapshot_sha256"],
+        "issns": list(registered_issns),
+        "source": {
+            "raw_entry_sha256": raw_sha256,
+            "container_span": [source_span[0], source_span[1]],
+            "container_value": source_value,
+        },
+        "venue_witness": {
+            "mode": (
+                "exact_registered_name" if match_kind.startswith("exact_")
+                else "ordered_canonical_registered_alias_tokens_v1"
+            ),
+            "canonical_title": canonical,
+            "registered_alias": alias,
+        },
+    }
+
+
 def assess_local_journal_alias(ref: dict, path: str | os.PathLike[str] | None = None) -> dict | None:
     """Describe an exact or one-edit registered alias without granting authority.
 
@@ -514,8 +676,19 @@ def issns_for_record(authority: dict, path: str | os.PathLike[str] | None = None
         return ()
     catalog = Path(configured).expanduser().resolve()
     signature = _catalog_signature(catalog)
+    metadata = _load_catalog(str(catalog), *signature)
+    if (
+        authority.get("status") != "recognized"
+        or authority.get("registry") != metadata.get("registry")
+        or authority.get("registry_version") != metadata.get("registry_version")
+        or authority.get("snapshot_sha256") != metadata.get("snapshot_sha256")
+    ):
+        raise RuntimeError("journal authority record belongs to a different catalog snapshot")
     conn = _open_catalog(str(catalog))
     try:
+        record = conn.execute(
+            "SELECT canonical_title FROM journals WHERE record_id=?", (record_id,),
+        ).fetchone()
         values = tuple(row[0] for row in conn.execute(
             "SELECT issn FROM journal_issns WHERE record_id=? ORDER BY issn", (record_id,),
         ))
@@ -525,4 +698,9 @@ def issns_for_record(authority: dict, path: str | os.PathLike[str] | None = None
         conn.close()
     if _catalog_signature(catalog) != signature:
         raise RuntimeError("journal authority catalog changed during lookup")
+    if record is None:
+        return ()
+    canonical_title = authority.get("canonical_title")
+    if isinstance(canonical_title, str) and canonical_title != record[0]:
+        raise RuntimeError("journal authority record no longer matches its catalog snapshot")
     return values

@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "target": "Windows x64 Microsoft Store native rebuild",
+  "bootstrap_python": {
+    "version": "3.13.15",
+    "nuget_id": "python",
+    "url": "https://api.nuget.org/v3-flatcontainer/python/3.13.15/python.3.13.15.nupkg",
+    "filename": "python.3.13.15.nupkg",
+    "destination": "python-3.13.15",
+    "executable": "tools/python.exe",
+    "sha256": "05357887df50d3153efc681bdf432c321d3e2f9ce5788f99f4515b27e8fda0ac",
+    "bytes": 14391248,
+    "sha256_source": "Computed from official NuGet package bytes; versioned public nupkg URL checked for availability"
+  },
+  "visual_studio": {
+    "version": "17.9.7",
+    "bootstrapper": {
+      "url": "https://download.visualstudio.microsoft.com/download/pr/7e1f1b8d-73fe-448c-a4e0-0ea481025985/110c25702bb7e40f1c04da43e99afa3d54ee5adf45225908747ac26c1104b60a/vs_BuildTools.exe",
+      "filename": "vs_BuildTools.exe",
+      "sha256": "110c25702bb7e40f1c04da43e99afa3d54ee5adf45225908747ac26c1104b60a",
+      "sha256_source": "64-hex SHA256 component in the fixed Microsoft CDN URL; helper verifies downloaded bytes against it",
+      "destination": "vs-build-tools-bootstrap"
+    },
+    "component_id": "Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64",
+    "install_components": [
+      "Microsoft.VisualStudio.Workload.VCTools",
+      "Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64"
+    ],
+    "expected_install_relative_paths": [
+      "MSBuild/Current/Bin/MSBuild.exe",
+      "VC/Tools/MSVC/14.39.33519/bin/Hostx64/x64/cl.exe",
+      "VC/Tools/MSVC/14.39.33519/bin/Hostx64/x64/link.exe",
+      "MSBuild/Microsoft/VC/v170"
+    ],
+    "expected_toolset_directory": "14.39.33519",
+    "expected_compiler_version": "19.39.33523",
+    "expected_linker_version": "14.39.33523",
+    "version_gate_required": true
+  },
+  "windows_sdk": {
+    "nuget_version": "10.0.26100.9169",
+    "files_version": "10.0.26100.0",
+    "packages": [
+      {
+        "id": "Microsoft.Windows.SDK.CPP",
+        "filename": "microsoft.windows.sdk.cpp.10.0.26100.9169.nupkg",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp/10.0.26100.9169/microsoft.windows.sdk.cpp.10.0.26100.9169.nupkg",
+        "payload_subdirectory": "c",
+        "sdk_target_subdirectory": "",
+        "sha256": "475269434dcd808a67853773272f972c3229c0e10c3ddc821290e70cc0f6904d",
+        "bytes": 160512239,
+        "sha256_source": "Computed from official NuGet package bytes; versioned public nupkg URL checked for availability"
+      },
+      {
+        "id": "Microsoft.Windows.SDK.CPP.x64",
+        "filename": "microsoft.windows.sdk.cpp.x64.10.0.26100.9169.nupkg",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.x64/10.0.26100.9169/microsoft.windows.sdk.cpp.x64.10.0.26100.9169.nupkg",
+        "payload_subdirectory": "c",
+        "sdk_target_subdirectory": "",
+        "sha256": "df6226a051e320942abfbd57848b43d18772996ecd66beadad240f2a56ed2f7b",
+        "bytes": 53001499,
+        "sha256_source": "Computed from official NuGet package bytes; versioned public nupkg URL checked for availability"
+      },
+      {
+        "id": "Microsoft.Windows.SDK.BuildTools",
+        "filename": "microsoft.windows.sdk.buildtools.10.0.26100.9169.nupkg",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.buildtools/10.0.26100.9169/microsoft.windows.sdk.buildtools.10.0.26100.9169.nupkg",
+        "payload_subdirectory": "bin",
+        "sdk_target_subdirectory": "bin",
+        "sha256": "6000c971fc9155052a8359779b30b6682c39e091664d83b3852c4702ab6d238e",
+        "bytes": 22680539,
+        "sha256_source": "Computed from official NuGet package bytes; versioned public nupkg URL checked for availability"
+      }
+    ]
+  },
+  "vclibs": {
+    "package_version": "14.0.33728.0",
+    "dll_version": "14.40.33728.0",
+    "archive": {
+      "filename": "DesktopAppInstaller_Dependencies.zip",
+      "url": "https://github.com/microsoft/winget-cli/releases/download/v1.9.25180/DesktopAppInstaller_Dependencies.zip",
+      "sha256": "eeba62f08531c8669b3e5fb895ce8800ae66d798739cda2b4aef2a1d80a5f3c5"
+    },
+    "member": "x64/Microsoft.VCLibs.140.00.UWPDesktop_14.0.33728.0_x64.appx",
+    "appx_filename": "Microsoft.VCLibs.x64.14.00.Desktop.appx",
+    "appx_sha256": "077a3d1a5d0622bd3004dca85f5e192d6e98ec79b83d4aa06766759ea6c09c3d",
+    "winget_manifest": "https://github.com/microsoft/winget-pkgs/blob/master/manifests/m/Microsoft/VCLibs/Desktop/14/14.0.33728.0/Microsoft.VCLibs.Desktop.14.installer.yaml"
+  },
+  "framework_audit_inputs": [
+    {
+      "filename": "VC_CRT.Desktop.Appx.140.msi",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/a62262cf-b9f6-4770-9454-7372ad8fcec0/d94f2d9ac19fbb39ee2fb8ab0ef656fe657347b6cbc6d129218edf303b4364b9/VC_CRT.Desktop.Appx.140.msi",
+      "sha256": "d94f2d9ac19fbb39ee2fb8ab0ef656fe657347b6cbc6d129218edf303b4364b9",
+      "bytes": 204800
+    },
+    {
+      "filename": "cab1.cab",
+      "url": "https://download.visualstudio.microsoft.com/download/pr/a62262cf-b9f6-4770-9454-7372ad8fcec0/0bd480f32e37eb2dc76d8555a65aa1664aedd46915d3d683f8dcde34eb380a7a/cab1.cab",
+      "sha256": "0bd480f32e37eb2dc76d8555a65aa1664aedd46915d3d683f8dcde34eb380a7a",
+      "bytes": 44937645
+    }
+  ],
+  "qt_libclang": {
+    "version": "18.1.7",
+    "archive": {
+      "filename": "libclang-release_18.1.7-based-windows-vs2019_64.7z",
+      "url": "https://download.qt.io/development_releases/prebuilt/libclang/qt/libclang-release_18.1.7-based-windows-vs2019_64.7z",
+      "sha256": "841219942e203da988a523ae29b476dcafee4ec7d472c1142624a26c8e3cf440",
+      "bytes": 483635096,
+      "checksum_listing": "https://download.qt.io/development_releases/prebuilt/libclang/qt/libclang-release_18.1.7-based-sha256.txt"
+    },
+    "extractor": {
+      "filename": "7zr.exe",
+      "url": "https://github.com/ip7z/7zip/releases/download/26.03/7zr.exe",
+      "sha256": "ad4c82fadcbdf93c03b4fc440f300509c7d60c5c2f4d183e35d9d70d6957037d",
+      "version": "26.03"
+    },
+    "destination": "qt-build-tools/clang"
+  },
+  "cmake": {
+    "version": "4.4.3",
+    "pypi_json_url": "https://pypi.org/pypi/cmake/4.4.3/json",
+    "wheel_filename": "cmake-4.4.3-py3-none-win_amd64.whl",
+    "destination": "python-build-tools/cmake"
+  },
+  "ninja": {
+    "version": "1.13.2",
+    "pypi_json_url": "https://pypi.org/pypi/ninja/1.13.2/json",
+    "wheel_filename": "ninja-1.13.2-py3-none-win_amd64.whl",
+    "destination": "python-build-tools/ninja"
+  },
+  "perl": {
+    "version": "5.42.3.1",
+    "filename": "strawberry-perl-5.42.3.1-64bit-portable.zip",
+    "url": "https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54231_64bit/strawberry-perl-5.42.3.1-64bit-portable.zip",
+    "sha256": "6a081a811781c30aca51dbc036afd93092af91e3297901f02c17043795a10690",
+    "bytes": 304765269,
+    "destination": "strawberry-perl"
+  },
+  "nasm": {
+    "version": "3.02",
+    "filename": "nasm-3.02-win64.zip",
+    "url": "https://www.nasm.us/pub/nasm/releasebuilds/3.02/win64/nasm-3.02-win64.zip",
+    "sha256": "161d0bfaff53c2f9e9f3e69fd0672323ebabafd1268976a5cec11be92a19aee7",
+    "bytes": 641314,
+    "sha256_source": "Verified official archive download; matches retained upstream archive bytes and https://github.com/baulk/bucket/blob/master/bucket/nasm.json",
+    "destination": "nasm",
+    "executable": "nasm-3.02/nasm.exe"
+  },
+  "rust": {
+    "version": "1.85.0",
+    "filename": "rust-1.85.0-x86_64-pc-windows-msvc.tar.xz",
+    "url": "https://static.rust-lang.org/dist/rust-1.85.0-x86_64-pc-windows-msvc.tar.xz",
+    "sha256": "6f04dd4cc0ce1bb69507fb7b61ce8d502a58d70abc3dfb0b90b8ae12222b8f46",
+    "destination": "rust-1.85"
+  }
+}

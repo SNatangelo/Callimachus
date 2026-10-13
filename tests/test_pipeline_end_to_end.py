@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from core.infra.db import RunRepository
-from ._resolve_fixtures import current_resolution
+from tests._resolve_fixtures import current_resolution
 
 
 class PipelineEndToEndTests(unittest.TestCase):

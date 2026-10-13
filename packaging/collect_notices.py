@@ -267,8 +267,10 @@ def _is_cpython_binary(source: Path, python_root: Path) -> bool:
     relative = source.relative_to(python_root)
     version = f"python{sys.version_info.major}.{sys.version_info.minor}"
     return ("lib-dynload" in relative.parts and version in relative.parts) or (
-        sys.platform == "win32" and "dlls" in {part.lower() for part in relative.parts}
-        and name.endswith(".pyd")
+        sys.platform == "win32" and name.endswith(".pyd") and (
+            "dlls" in {part.lower() for part in relative.parts}
+            or source.parent == python_root / "PCbuild" / "amd64"
+        )
     )
 
 
@@ -348,7 +350,9 @@ def _add_mac_openssl_notice(
 
 
 def _windows_python_component(source: Path, python_root: Path) -> str | None:
-    if sys.platform != "win32" or source.parent != python_root / "DLLs":
+    if sys.platform != "win32" or source.parent not in (
+        python_root / "DLLs", python_root / "PCbuild" / "amd64",
+    ):
         return None
     return {
         "libcrypto-3.dll": "OpenSSL", "libssl-3.dll": "OpenSSL",

@@ -358,12 +358,6 @@ def test_frozen_run_without_arguments_dispatches_desktop(monkeypatch):
     assert entrypoint._main() == ("core.app.commands.desktop", [])
 
 
-def test_freeze_support_precedes_application_main():
-    source = Path(entrypoint.__file__).read_text(encoding="utf-8")
-    guard = source.split('if __name__ == "__main__":', 1)[1]
-    assert guard.index("multiprocessing.freeze_support()") < guard.index("main()")
-
-
 def test_source_app_uses_splash_without_changing_other_commands(monkeypatch):
     monkeypatch.setattr(entrypoint, "is_frozen", lambda: False)
     monkeypatch.setattr(entrypoint, "_check_runtime_dependencies", lambda: None)
@@ -382,3 +376,22 @@ def test_source_app_uses_splash_without_changing_other_commands(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["run.py", "app", "--help"])
     assert entrypoint._main() == 9
     assert calls[-1] == ("dispatch", ("core.app.commands.desktop", ["--help"], "run.py app"))
+
+
+def test_missing_gui_dependency_keeps_desktop_diagnosis(monkeypatch):
+    from core.gui import startup_splash
+
+    def missing_gui(**_kwargs):
+        raise ModuleNotFoundError("No module named 'PySide6'", name="PySide6")
+
+    calls = []
+    monkeypatch.setattr(startup_splash, "run_with_splash", missing_gui)
+    monkeypatch.setattr(entrypoint, "_dispatch", lambda *args: calls.append(args) or 2)
+    assert entrypoint._launch_desktop("core.app.commands.desktop", [], "run.py app") == 2
+    assert calls == [("core.app.commands.desktop", [], "run.py app")]
+
+
+def test_freeze_support_precedes_application_main():
+    source = Path(entrypoint.__file__).read_text(encoding="utf-8")
+    guard = source.split('if __name__ == "__main__":', 1)[1]
+    assert guard.index("multiprocessing.freeze_support()") < guard.index("main()")

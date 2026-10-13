@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.1 — 2026-10-13
+
+- Improve citation parsing across numeric, author-year and footnote styles,
+  preserving literal titles, publication coordinates and wrapped DOI suffixes.
+- Require evidence for the cited publication, chapter, edition or version before
+  admitting a discovered DOI; keep transport availability separate from identity
+  verification.
+- Preserve provider-attempt evidence through storage, cache reuse and resume,
+  and enforce the verified-identity boundary when selecting sources for Fetch.
+- Assign authors, literal titles, journals, years and publication coordinates
+  through modular citation-style readers before resolution.
+- Keep page ranges distinct from opaque article identifiers, preventing false
+  coordinate discrepancies while retaining comparable-coordinate checks.
+- Skip recognizable API and XML/JSON retrieval links in Guided Fetch browser
+  navigation; retain normal article/PDF links and use a resolved DOI when needed.
+- Package the Microsoft Store application as a Windows GUI executable so closing
+  a console window cannot terminate the application.
+- Support deep Windows paths during OCR, reopening, preview and source admission without changing the OS long-path policy; preserve logical paths and evidence hashes.
+
+- Reflow desktop analysis controls to the available width, preserving complete labels and panel resizing.
+
 ## 1.1.0 — 2026-10-02
 
 - Add a paged desktop Console for CLI commands and analysis output, with

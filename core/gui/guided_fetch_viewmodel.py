@@ -7,9 +7,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import re
 from string import Formatter
 from typing import Any
-from urllib.parse import quote_plus, unquote, urlparse
+from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlparse
 
 
 _STATUS = {
@@ -206,7 +207,10 @@ class GuidedFetchViewModel:
                 "Citation received",
                 "These are the bibliographic details Callimachus received for this reference.",
                 _rows((
-                    ("Title", parsed.get("title")), ("DOI", parsed.get("doi")),
+                    ("Authors", "; ".join(parsed.get("authors") or [])),
+                    ("Title", parsed.get("title")), ("Journal", parsed.get("journal")),
+                    ("Volume", parsed.get("volume")), ("Issue", parsed.get("issue")),
+                    ("Pages", parsed.get("pages")), ("DOI", parsed.get("doi")),
                     ("Publication year", parsed.get("year")), ("PMID", parsed.get("pmid")),
                     ("ISBN", parsed.get("isbn")), ("Source link", parsed.get("url")),
                 )), raw["Parsed"],
@@ -413,8 +417,8 @@ class GuidedFetchViewModel:
         resolved = _mapping(entry.get("resolve"))
         for value in (
             _first_url(resolved.get("fulltext_links")),
-            _concrete_url(resolved.get("url")),
-            _concrete_url(parsed.get("url")),
+            _first_url(resolved.get("url")),
+            _first_url(parsed.get("url")),
         ):
             if value:
                 return value
@@ -422,7 +426,8 @@ class GuidedFetchViewModel:
 
     def browser_url(self, ref_id: str) -> str:
         """Return a navigable URL even when resolution recorded no link."""
-        return self.preferred_link(ref_id) or self._search_url(self.entry(ref_id))
+        entry = self.entry(ref_id)
+        return self.preferred_link(ref_id) or _resolved_doi_url(entry) or self._search_url(entry)
 
     def _search_url(self, entry: dict[str, Any]) -> str:
         query = _doi_search_query(entry) or _render_query(self._search_query_template, entry)
@@ -761,6 +766,21 @@ def _doi_search_query(entry: dict[str, Any]) -> str | None:
     return None
 
 
+def _resolved_doi_url(entry: dict[str, Any]) -> str | None:
+    resolved = _mapping(entry.get("resolve"))
+    identifier = _mapping(resolved.get("resolved_identifier"))
+    values = [resolved.get("doi")]
+    if str(identifier.get("type") or "").casefold() == "doi":
+        values.append(identifier.get("value"))
+    for value in values:
+        doi = _string_or_none(value)
+        if doi:
+            doi = _normalise_doi(doi)
+            if re.fullmatch(r"10\.\d{4,9}/\S+", doi):
+                return "https://doi.org/" + quote(doi, safe="/")
+    return None
+
+
 def _render_query(template: str, entry: dict[str, Any]) -> str:
     parsed = _mapping(entry.get("parsed"))
     values = {field: _normalised(parsed.get(field)) for field in _SEARCH_FIELDS}
@@ -800,15 +820,39 @@ def _concrete_url(value: Any) -> str | None:
 
 def _first_url(value: Any) -> str | None:
     if isinstance(value, str):
-        return _concrete_url(value)
+        return _browser_candidate_url(value)
     if isinstance(value, dict):
-        return _concrete_url(value.get("url"))
+        return _browser_candidate_url(value.get("url"), value)
     if isinstance(value, list):
         for item in value:
-            url = _concrete_url(item) if isinstance(item, str) else _concrete_url(_mapping(item).get("url"))
+            url = _first_url(item)
             if url:
                 return url
     return None
+
+
+def _browser_candidate_url(value: Any, metadata: dict[str, Any] | None = None) -> str | None:
+    url = _concrete_url(value)
+    if not url:
+        return None
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+    if any(label.casefold() == "api" for label in hostname.split(".")):
+        return None
+    metadata = metadata or {}
+    for key in ("content_type", "content-type"):
+        if _requests_machine_format(metadata.get(key)):
+            return None
+    for key, requested in parse_qsl(parsed.query, keep_blank_values=True):
+        if key.casefold() in {"httpaccept", "format"} and _requests_machine_format(requested):
+            return None
+    return url
+
+
+def _requests_machine_format(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    return re.search(r"(?:^|[+/.-])(?:xml|json)(?:$|[;\s,])", value.casefold()) is not None
 
 
 def _is_safe_http_url(value: str) -> bool:

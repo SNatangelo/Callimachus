@@ -12,6 +12,9 @@ The abbreviated public flow is `parse → resolve → fetch → verify → repor
 
 ## Reading path
 
+Before using online services, read the [privacy and AI information](privacy.md)
+([Italiano](privacy-it.md)).
+
 For a first installation, read Chapter 01 with Chapters 10 and 11 open as
 setup references. The remaining chapter numbers follow the operating workflow;
 the two reference chapters are not steps that should be postponed until the

@@ -30,9 +30,21 @@ import unicodedata
 from core.invocation import run_command
 
 try:
-    from core.parse.parsing_common import RANGE_DASHES, _terminal_issue_page_range_year
+    from core.parse.parsing_common import (
+        RANGE_DASHES,
+        _extract_title,
+        _literal_title_terminal_journal_year,
+        _terminal_paginated_publication_year,
+        _terminal_issue_page_range_year,
+    )
 except ImportError:
-    from parsing_common import RANGE_DASHES, _terminal_issue_page_range_year
+    from parsing_common import (
+        RANGE_DASHES,
+        _extract_title,
+        _literal_title_terminal_journal_year,
+        _terminal_paginated_publication_year,
+        _terminal_issue_page_range_year,
+    )
 
 YEAR = r"(?:1[5-9]|20)\d{2}"
 # Surname-word: initial capital (including accented letters), not all-caps short acronyms.
@@ -261,6 +273,18 @@ def entry_key(raw_entry: str):
     terminal_issue_year = _terminal_issue_page_range_year(e_year)
     if terminal_issue_year is not None:
         year, suffix = terminal_issue_year
+    literal_title_publication_year = _literal_title_terminal_journal_year(
+        raw_entry, _extract_title(raw_entry),
+    )
+    if literal_title_publication_year is not None:
+        year, suffix = literal_title_publication_year
+    paginated_publication_year = _terminal_paginated_publication_year(raw_entry)
+    if (
+        paginated_publication_year is not None
+        and terminal_issue_year is None
+        and literal_title_publication_year is None
+    ):
+        year, suffix = paginated_publication_year[:2]
     # Read the name off a base-Latin fold of the entry, so a surname does not
     # truncate at a letter the class below cannot see: "Zaviačič" (č is outside
     # À-ÿ) keeps all of itself as "Zaviacic".  _surname_key folds the same way, so

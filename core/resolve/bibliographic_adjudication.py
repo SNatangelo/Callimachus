@@ -11,15 +11,70 @@ that a cited work does not exist.
 from __future__ import annotations
 
 import re
+import urllib.parse
 from typing import Any
 
 try:
-    from .matching import _author_names_equivalent, _fold_author, is_unique_same_work_correction_candidate
+    from .matching import (
+        _author_names_equivalent,
+        _anchored_metadata_author_conflict,
+        _first_author_key,
+        _fold_author,
+        _crossref_terminal_numeric_title_range_result_supported,
+        _metadata_candidate_has_source_spanned_definite_locator_conflict,
+        _pubmed_titleless_coordinate_profile_supported,
+        _pubmed_titled_coordinate_profile_supported,
+        is_unique_same_work_correction_candidate,
+    )
 except ImportError:  # direct execution
-    from resolve.matching import _author_names_equivalent, _fold_author, is_unique_same_work_correction_candidate
+    from resolve.matching import (
+        _author_names_equivalent,
+        _anchored_metadata_author_conflict,
+        _first_author_key,
+        _fold_author,
+        _crossref_terminal_numeric_title_range_result_supported,
+        _metadata_candidate_has_source_spanned_definite_locator_conflict,
+        _pubmed_titleless_coordinate_profile_supported,
+        _pubmed_titled_coordinate_profile_supported,
+        is_unique_same_work_correction_candidate,
+    )
 
 
 RULE_VERSION = "bibliographic-adjudication/v4"
+_PUBLISHER_NATIVE_URI_QUERY_CONTRACT = (
+    "Crossref selected DOI publisher native PII URI candidate lookup"
+)
+_PUBLISHER_NATIVE_URI_VALIDATED_VIA = (
+    "crossref:publisher_native_pii_uri_attestation"
+)
+
+
+def _publisher_literal_article_uri(ref: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Extract the one literal article URL and exact PII path segment from source."""
+    raw_entry = ref.get("raw_entry")
+    if not isinstance(raw_entry, str):
+        return None
+    urls = re.findall(r"https?://[^\s<>\"']+", raw_entry, flags=re.IGNORECASE)
+    if len(urls) != 1:
+        return None
+    source_uri = urls[0].rstrip(".,;:!?]")
+    while source_uri.endswith(")") and source_uri.count("(") < source_uri.count(")"):
+        source_uri = source_uri[:-1]
+    try:
+        parsed = urllib.parse.urlsplit(source_uri)
+    except ValueError:
+        return None
+    segments = parsed.path.strip("/").split("/")
+    if (
+        not parsed.hostname
+        or len(segments) != 3
+        or segments[0].casefold() != "article"
+        or segments[2].casefold() != "fulltext"
+        or not segments[1]
+        or "%" in segments[1]
+    ):
+        return None
+    return source_uri, parsed.hostname.rstrip(".").casefold(), segments[1]
 
 
 def _normalized_doi(value: object) -> str:
@@ -188,6 +243,51 @@ def _anchored_issue_author_conflict(
     )
 
 
+def _bound_validation_author_refutation(
+    ref: dict[str, Any], result: dict[str, Any],
+    attempts: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Keep a direct validation's author contradiction on the locked DOI."""
+    raw = ref.get("raw_entry")
+    if not isinstance(raw, str):
+        return None
+    try:
+        from core.parse.parsing_common import _closed_source_author_head_end
+    except ImportError:  # direct execution
+        from parse.parsing_common import _closed_source_author_head_end
+    end = _closed_source_author_head_end(raw)
+    if end is None:
+        return None
+    anchor = _first_author_key(raw[:end])
+    selected = _selected_result_doi(result)
+    identifier = result.get("resolved_identifier")
+    if (
+        not selected or not isinstance(identifier, dict)
+        or identifier.get("type") != "doi"
+        or _normalized_doi(identifier.get("value")) != selected
+    ):
+        return None
+    for attempt in attempts or ():
+        if (
+            not isinstance(attempt, dict)
+            or attempt.get("via") != "identifier_validation:crossref"
+            or attempt.get("status") != "resolved"
+            or attempt.get("identifier_type") != "doi"
+            or _normalized_doi(attempt.get("identifier_value")) != selected
+        ):
+            continue
+        match = attempt.get("metadata_match")
+        if _anchored_metadata_author_conflict(match, anchor):
+            return {
+                "kind": "author_mismatch", "field": "author",
+                "cited_value": match["cited_first_author"],
+                "observed_value": match["matched_first_author"],
+                "source": "identifier_validation:crossref",
+                "basis": "identifier-bound validation contradicts the closed cited first author",
+            }
+    return None
+
+
 def _resolved_identity_is_locked(
     ref: dict[str, Any],
     evidence: dict[str, Any],
@@ -206,13 +306,105 @@ def _resolved_identity_is_locked(
         return False
 
     basis = evidence.get("resolution_basis") or result.get("resolution_basis")
+    resolved_identifier = result.get("resolved_identifier")
+    if (
+        isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == "crossref:arxiv_published_journal_unit_certificate"
+    ):
+        from .providers import arxiv as arxiv_provider
+
+        return arxiv_provider._published_relation_proof_is_valid(
+            ref, result, attempts,
+        )
+    if (
+        isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == "crossref:generic_article_locator_role_certificate"
+    ):
+        from .providers import crossref_metadata
+
+        return crossref_metadata._crossref_generic_article_locator_relock(
+            ref, evidence, result, attempts,
+        )
+    if (
+        isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == "crossref:ambiguous_title_journal_boundary_certificate"
+    ):
+        from .providers import crossref_metadata
+
+        return crossref_metadata._crossref_ambiguous_boundary_relock(
+            ref, result, attempts,
+        )
+    if (
+        isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == "crossref:registered_coordinate_certificate"
+    ):
+        if (
+            result.get("status") != "resolved"
+            or result.get("via") != "crossref_metadata"
+            or basis != "metadata_search"
+            or resolved_identifier.get("type") != "doi"
+            or not _normalized_doi(result.get("doi"))
+            or _normalized_doi(result.get("doi"))
+            != _normalized_doi(resolved_identifier.get("value"))
+        ):
+            return False
+        proof = metadata_match.get("registered_coordinate_certificate")
+        if not isinstance(proof, dict):
+            return False
+        from .providers.crossref_metadata import (
+            _crossref_metadata_match_profile,
+            _crossref_registered_titled_coordinate_certificate,
+        )
+
+        candidate_msg = {
+            "DOI": result.get("doi"),
+            "type": result.get("work_type"),
+            "title": [result.get("matched_title")],
+            "author": [{"family": name} for name in result.get("matched_authors") or ()],
+            "published": {"date-parts": [[metadata_match.get("matched_year")]]},
+            "container-title": [metadata_match.get("matched_venue")],
+            "ISSN": proof.get("candidate_issns"),
+        }
+        fields = {
+            "container": "container-title", "volume": "volume", "issue": "issue",
+            "article_page_range": "page", "article_locator": "page",
+            "elocator": "article-number", "article_number": "article-number",
+        }
+        for comparison in metadata_match.get("coordinate_comparisons") or ():
+            if not isinstance(comparison, dict):
+                continue
+            field = fields.get(comparison.get("kind"))
+            if field:
+                value = comparison.get("matched_value")
+                candidate_msg[field] = [value] if field == "container-title" else value
+        recomputed_profile = _crossref_metadata_match_profile(ref, candidate_msg)
+        profile_fields = (
+            "title_overlap", "score", "author_match", "year_match",
+            "year_mismatch_plausible", "matched_first_author", "cited_first_author",
+            "matched_year", "matched_venue", "venue_overlap",
+            "coordinate_comparisons", "ordinal_conflict", "metadata_conflict",
+        )
+        if any(
+            recomputed_profile.get(field) != metadata_match.get(field)
+            for field in profile_fields
+        ):
+            return False
+        return _crossref_registered_titled_coordinate_certificate(
+            ref,
+            candidate_msg,
+            recomputed_profile,
+            stored_proof=proof,
+        ) is not None
     if basis != "metadata_search":
         return True
 
     # A registry-validated identifier discovered from an admitted metadata
     # candidate locks that candidate's identity, but does not erase cited-field
     # discrepancies (notably a wrong publication year).
-    resolved_identifier = result.get("resolved_identifier")
     if _is_crossref_same_work_correction(result):
         candidate_msg = {
             "author": [{"family": author} for author in result.get("matched_authors") or ()],
@@ -228,10 +420,205 @@ def _resolved_identity_is_locked(
             ref, candidate_msg, result.get("matched_title"), metadata_match,
         ):
             return True
+    identifiers = result.get("identifiers")
+    if (
+        result.get("status") == "resolved"
+        and result.get("via") == "crossref_metadata"
+        and isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("type") == "doi"
+        and resolved_identifier.get("validated_via")
+        == "crossref:complete_coordinate_certificate"
+        and _normalized_doi(result.get("doi"))
+        and _normalized_doi(result.get("doi"))
+        == _normalized_doi(resolved_identifier.get("value"))
+    ):
+        from .providers.crossref_metadata import (
+            _REGISTERED_SOURCE_SCOPE_CERTIFICATE_KEY,
+            _TITLELESS_NATIVE_VENUE_COMPOSITION_KEY,
+            _crossref_titleless_coordinate_certificate,
+        )
+
+        selected_scope_proof = metadata_match.get(
+            _REGISTERED_SOURCE_SCOPE_CERTIFICATE_KEY,
+        )
+        retained_scope_proofs = []
+        for attempt in attempts or ():
+            attempt_identifier = (
+                attempt.get("resolved_identifier")
+                if isinstance(attempt, dict) else None
+            )
+            attempt_profile = (
+                attempt.get("metadata_match")
+                if isinstance(attempt, dict) else None
+            )
+            if (
+                not isinstance(attempt, dict)
+                or attempt.get("status") != "resolved"
+                or attempt.get("via") != "crossref_metadata"
+                or not isinstance(attempt_identifier, dict)
+                or attempt_identifier.get("validated_via")
+                != "crossref:complete_coordinate_certificate"
+                or _normalized_doi(attempt.get("doi"))
+                != _normalized_doi(result.get("doi"))
+                or not isinstance(attempt_profile, dict)
+                or _REGISTERED_SOURCE_SCOPE_CERTIFICATE_KEY not in attempt_profile
+            ):
+                continue
+            attempt_scope_proof = attempt_profile[
+                _REGISTERED_SOURCE_SCOPE_CERTIFICATE_KEY
+            ]
+            if not isinstance(attempt_scope_proof, dict):
+                return False
+            retained_scope_proofs.append(attempt_scope_proof)
+        if retained_scope_proofs and selected_scope_proof not in retained_scope_proofs:
+            return False
+
+        # Recheck the direct record's full tuple against source spans. A
+        # composed-venue witness reconstructs only its native short title;
+        # matched_venue remains the primary container and the comparison row
+        # retains the provider's original container result.
+        candidate_msg = {
+            "DOI": result.get("doi"), "type": result.get("work_type"),
+            "title": [result.get("matched_title")],
+            "author": [{"family": name} for name in result.get("matched_authors") or ()],
+            "published": {"date-parts": [[metadata_match.get("matched_year")]]},
+        }
+        venue_composition = metadata_match.get(
+            _TITLELESS_NATIVE_VENUE_COMPOSITION_KEY,
+        )
+        if isinstance(venue_composition, dict):
+            candidate_msg["short-container-title"] = [
+                venue_composition.get("native_short"),
+            ]
+        fields = {
+            "container": "container-title", "volume": "volume", "issue": "issue",
+            "article_page_range": "page", "article_locator": "page",
+            "elocator": "article-number", "article_number": "article-number",
+        }
+        for comparison in metadata_match.get("coordinate_comparisons") or ():
+            if not isinstance(comparison, dict):
+                continue
+            field = fields.get(comparison.get("kind"))
+            if field:
+                value = comparison.get("matched_value")
+                candidate_msg[field] = [value] if field == "container-title" else value
+        if (
+            _crossref_titleless_coordinate_certificate(ref, candidate_msg, metadata_match)
+            and _crossref_titleless_coordinate_certificate(ref, candidate_msg)
+        ):
+            return True
+    if (
+        result.get("status") == "resolved"
+        and result.get("via") == "publisher_native_uri_metadata"
+        and basis == "metadata_search"
+        and not ref.get("doi")
+        and isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("type") == "doi"
+        and resolved_identifier.get("validated_via")
+        == _PUBLISHER_NATIVE_URI_VALIDATED_VIA
+        and _normalized_doi(resolved_identifier.get("value"))
+        and (
+            not result.get("doi")
+            or _normalized_doi(result.get("doi"))
+            == _normalized_doi(resolved_identifier.get("value"))
+        )
+    ):
+        selected_doi = _normalized_doi(resolved_identifier.get("value"))
+        try:
+            from . import service as resolve_service
+        except ImportError:  # direct execution
+            import service as resolve_service
+
+        native_uri_attested = any(
+            isinstance(attempt, dict)
+            and attempt.get("via") == "publisher_native_uri_metadata"
+            and attempt.get("status") == "resolved"
+            and _normalized_doi(attempt.get("doi")) == selected_doi
+            and isinstance(attempt.get("identity_search"), dict)
+            and attempt["identity_search"].get("query_contract")
+            == _PUBLISHER_NATIVE_URI_QUERY_CONTRACT
+            and attempt["identity_search"].get("completion") == "complete"
+            and attempt["identity_search"].get("outcome") == "compatible_identity"
+            and resolve_service._publisher_native_uri_proof_is_valid(
+                ref, result, attempt, selected_doi,
+                metadata_match if metadata_match else None,
+            )
+            for attempt in attempts or ()
+        )
+        direct_crossref_validated = any(
+            isinstance(attempt, dict)
+            and attempt.get("via") == "identifier_validation:crossref"
+            and attempt.get("status") == "resolved"
+            and attempt.get("identifier_type") == "doi"
+            and _normalized_doi(attempt.get("identifier_value")) == selected_doi
+            for attempt in attempts or ()
+        )
+        if native_uri_attested and direct_crossref_validated:
+            return True
+    if (
+        result.get("status") == "resolved"
+        and result.get("via") == "pubmed_citation_match"
+        and (
+            _pubmed_titleless_coordinate_profile_supported(ref, metadata_match)
+            or _pubmed_titled_coordinate_profile_supported(ref, metadata_match)
+        )
+        and isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("type") == "doi"
+        and resolved_identifier.get("validated_via") == "pubmed_citation_match"
+        and isinstance(identifiers, dict)
+        and _normalized_doi(resolved_identifier.get("value"))
+        and _normalized_doi(resolved_identifier.get("value"))
+        == _normalized_doi(identifiers.get("doi"))
+        and str(result.get("pmid") or "").strip().isdigit()
+        and str(identifiers.get("pmid") or "").strip()
+        == str(result.get("pmid") or "").strip()
+    ):
+        return True
+    selected_doi = (
+        _normalized_doi(resolved_identifier.get("value"))
+        if isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("type") == "doi"
+        and resolved_identifier.get("validated_via") == "crossref"
+        else ""
+    )
+    if (
+        result.get("status") == "resolved"
+        and result.get("resolution_basis") == "metadata_search"
+        and not any(ref.get(field) for field in ("doi", "pmid", "isbn"))
+        and selected_doi
+    ):
+        for attempt in attempts or ():
+            if (
+                isinstance(attempt, dict)
+                and attempt.get("via") == "identifier_validation:crossref"
+                and attempt.get("status") == "resolved"
+                and attempt.get("identifier_type") == "doi"
+                and _normalized_doi(attempt.get("identifier_value")) == selected_doi
+                and _metadata_candidate_has_source_spanned_definite_locator_conflict(
+                    ref,
+                    attempt.get("metadata_match"),
+                    work_type=attempt.get("work_type"),
+                    matched_title=attempt.get("matched_title"),
+                )
+            ):
+                return False
     if (
         isinstance(resolved_identifier, dict)
         and resolved_identifier.get("validated_via")
         and (metadata_match.get("title_overlap") or 0) >= 0.85
+        and not (
+            metadata_match.get("author_match") is not True
+            and (
+                (
+                    metadata_match.get("year_match") is False
+                    and metadata_match.get("matched_year") is not None
+                )
+                or any(
+                    comparison.get("status") == "mismatch"
+                    for comparison in metadata_match.get("coordinate_comparisons") or ()
+                )
+            )
+        )
         and (
             metadata_match.get("author_match") is not False
             or not metadata_match.get("matched_first_author")
@@ -291,7 +678,14 @@ def _resolved_identity_is_locked(
     if not metadata_match:
         return confidence == "high"
     overlap = metadata_match.get("title_overlap")
-    if not isinstance(overlap, (int, float)) or overlap < 0.85:
+    terminal_range_title_supported = (
+        basis == "metadata_search"
+        and _crossref_terminal_numeric_title_range_result_supported(ref, result)
+    )
+    if (
+        (not isinstance(overlap, (int, float)) or overlap < 0.85)
+        and not terminal_range_title_supported
+    ):
         return False
     if evidence.get("has_author") and metadata_match.get("author_match") is not True:
         return False
@@ -408,7 +802,30 @@ def adjudicate_bibliographic_evidence(
         locked_source = str(
             result.get("content_via") or result.get("via") or "correction search"
         )
-    refutations.extend(_coordinate_refutations(locked_match, source=locked_source))
+    refutation_match = locked_match
+    resolved_identifier = result.get("resolved_identifier")
+    registered_titled_coordinate_lock = bool(
+        resolved_identity_locked
+        and result.get("via") == "crossref_metadata"
+        and result.get("resolution_basis") == "metadata_search"
+        and isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == "crossref:registered_coordinate_certificate"
+    )
+    if registered_titled_coordinate_lock and isinstance(locked_match, dict):
+        # The NLM/ISSN certificate explains only the exact cited-container to
+        # primary-Crossref-container mismatch. Preserve that source evidence,
+        # while excluding it from bibliographic refutation.
+        refutation_match = dict(locked_match)
+        refutation_match["coordinate_comparisons"] = [
+            row for row in locked_match.get("coordinate_comparisons") or ()
+            if not (
+                isinstance(row, dict)
+                and row.get("kind") == "container"
+                and row.get("status") == "mismatch"
+            )
+        ]
+    refutations.extend(_coordinate_refutations(refutation_match, source=locked_source))
     year_refutation = _year_refutation(ref, locked_match, source=locked_source)
     if year_refutation is not None:
         refutations.append(year_refutation)
@@ -468,6 +885,13 @@ def adjudicate_bibliographic_evidence(
             "source": str(present_attestation.get("provider") or "complete issue archive"),
             "basis": "identity-locked issue member contradicts the cited first author",
         })
+
+    if resolved_identity_locked and not any(
+        item["kind"] == "author_mismatch" for item in refutations
+    ):
+        author_refutation = _bound_validation_author_refutation(ref, result, attempts)
+        if author_refutation is not None:
+            refutations.append(author_refutation)
 
     fallback_status = fallback.get("status")
     if resolved_identity_locked:

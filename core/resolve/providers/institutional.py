@@ -21,11 +21,14 @@ title, then a strict discriminator that accepts a result as the report ONLY when
      own organisational author (its acronym or a significant name word) appears
      in the result host or title. We never write "who.int" in code — we match
      the citation's own token against the result;
-  3. it is *title-coherent*: the result title overlaps the cited title.
+  3. it is *title-coherent*: all significant cited-title words recur in the
+     result title; institution suffixes and other added words are allowed.
+  4. if the citation supplies a publication year, the provider title or URL path
+     explicitly identifies that same year.
 
-Everything tunable (authoritative domain classes, organisational-author words,
-report-like words, thresholds) lives in ``config/institutional_sources.json`` and
-can be edited without touching this module.
+Domain classes, organisational-author words, and report-like words live in
+``config/institutional_sources.json``. Complete title wording and year agreement
+are fixed fail-closed admission constraints.
 
 Honesty: a report recovered here is the primary document, but its identity was
 established by web search of a non-scholarly, link-less citation — not by a
@@ -90,7 +93,7 @@ def _author_block(ref: dict) -> str:
         return ""
     # Cut at the first year, or the first sentence stop, whichever comes first.
     cut = len(raw)
-    year = re.search(r"\(?(1[89]\d{2}|20\d{2})\)?", raw)
+    year = _PUBLICATION_YEAR.search(raw)
     if year:
         cut = min(cut, year.start())
     stop = re.search(r"\.\s", raw)
@@ -311,7 +314,9 @@ def _coherence_tier(tokens: list[str], result: dict) -> str | None:
     return None
 
 
-def _title_coherent(cited_title: str, result: dict, cfg: dict) -> bool:
+def _title_coherent(
+    cited_title: str, result: dict, cfg: dict, *, require_complete: bool = False,
+) -> bool:
     """Directional containment: how much of the cited title's significant wording
     recurs in the result title. Robust to the institution suffix web results carry
     (e.g. "... - European Commission"), which a symmetric overlap would penalise."""
@@ -320,7 +325,52 @@ def _title_coherent(cited_title: str, result: dict, cfg: dict) -> bool:
     if not cited or not result_words:
         return False
     hit = sum(1 for w in cited if w in result_words)
-    return (hit / len(cited)) >= cfg.get("title_overlap_min", 0.6)
+    threshold = 1.0 if require_complete else cfg.get("title_overlap_min", 0.6)
+    return (hit / len(cited)) >= threshold
+
+
+_PUBLICATION_YEAR = re.compile(r"(?<!\w)(?:1[89]\d{2}|20\d{2})(?!\w)")
+
+
+def _citation_year(ref: dict) -> tuple[str | None, bool]:
+    """Return one unambiguous cited year and whether the citation has conflicting dates."""
+    field_year = str(ref.get("year") or "").strip()
+    if _PUBLICATION_YEAR.fullmatch(field_year):
+        # The parser has already assigned the publication year. Other numbers
+        # in the title or raw citation may describe historical periods and do
+        # not override that stronger field.
+        return field_year, False
+    years: set[str] = set()
+    for key in ("title", "raw_entry"):
+        years.update(_PUBLICATION_YEAR.findall(str(ref.get(key) or "")))
+    if len(years) > 1:
+        return None, True
+    return (next(iter(years)), False) if years else (None, False)
+
+
+def _provider_years(result: dict, cited_title: str, cited_year: str) -> set[str]:
+    """Publication-year evidence in the result title/path, excluding title dates."""
+    url = urllib.parse.urlsplit(str(result.get("url") or ""))
+    path = urllib.parse.unquote(url.path)
+    cited_title_years = set(_PUBLICATION_YEAR.findall(cited_title))
+    evidence = " ".join((str(result.get("title") or ""), path))
+    historical_title_years = cited_title_years - {cited_year}
+    return set(_PUBLICATION_YEAR.findall(evidence)) - historical_title_years
+
+
+def _title_numbers_coherent(result: dict, cited_title: str, cited_year: str | None) -> bool:
+    """Keep numeric title details aligned while allowing a supported pub-year addition."""
+    cited_numbers = set(re.findall(r"\d+", cited_title))
+    result_title = str(result.get("title") or "")
+    result_numbers = set(re.findall(r"\d+", result_title))
+    missing = cited_numbers - result_numbers
+    if missing:
+        if cited_year is None or missing != {cited_year}:
+            return False
+        path = urllib.parse.unquote(urllib.parse.urlsplit(str(result.get("url") or "")).path)
+        if cited_year not in _PUBLICATION_YEAR.findall(path):
+            return False
+    return not (result_numbers - cited_numbers - ({cited_year} if cited_year else set()))
 
 
 def _content_type(url: str) -> str:
@@ -328,19 +378,32 @@ def _content_type(url: str) -> str:
 
 
 def _choose(ref: dict, results: list[dict], cfg: dict) -> dict | None:
-    """Pick the report. A candidate must be authoritative AND title-coherent AND
-    institution-coherent; a host-level institution match is preferred over a
-    title-only one, so who.int wins over a cdc.gov page that merely names the WHO."""
+    """Pick only an authoritative result with complete title and institution evidence.
+
+    A host-level institution match is preferred over a title-only one, so who.int
+    wins over a cdc.gov page that merely names the WHO.
+    """
     from core.resolve import service as resolve_mod
 
     cited_title = resolve_mod._article_title_candidate(ref) or ref.get("title") or ""
+    cited_year, ambiguous_year = _citation_year(ref)
+    if ambiguous_year:
+        return None
     tokens = _identity_tokens(ref, cfg)
     host_match = None
     title_match = None
     for result in results:
         if not _is_authoritative(result.get("url", ""), cfg):
             continue
-        if not _title_coherent(cited_title, result, cfg):
+        if cited_year is not None:
+            provider_years = _provider_years(result, cited_title, cited_year)
+            if provider_years != {cited_year}:
+                continue
+        if not _title_numbers_coherent(result, cited_title, cited_year):
+            continue
+        if not _title_coherent(
+            cited_title, result, cfg, require_complete=True,
+        ):
             continue
         tier = _coherence_tier(tokens, result)
         if tier == "host" and host_match is None:

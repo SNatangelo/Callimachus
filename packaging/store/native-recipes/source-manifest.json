@@ -1,0 +1,59 @@
+{
+  "cpython": {
+    "observed_sha256": "1e66a7945a48390ee4c2a4268a0e4185884059a13c4aab6d148aa208deea4a76",
+    "url": "https://www.python.org/ftp/python/3.13.15/Python-3.13.15.tar.xz",
+    "version": "3.13.15"
+  },
+  "onnxruntime": {
+    "revision": "2e2543fbe9fae542f921d47a72d21d5a4ef0b710",
+    "repository": "https://github.com/microsoft/onnxruntime.git",
+    "version": "1.29.0"
+  },
+  "pypi_manifest": "native-recipes/python-sources/manifest.json",
+  "qt_sources_manifest": "Callimachus-dependency-sources.json",
+  "compiler": {
+    "executable": "<BUILD_HOST_MSVC>",
+    "version": "19.39.33523",
+    "verified_manifest": "build-host evidence omitted from public source bundle"
+  },
+  "sdk": {
+    "source": "Microsoft.Windows.SDK.CPP and Microsoft.Windows.SDK.CPP.x64 10.0.26100.9169",
+    "root": "<BUILD_HOST_WINDOWS_SDK>",
+    "version": "10.0.26100.0"
+  },
+  "build_status": "native-project-preparation",
+  "runtime_target": "14.40.33728.0",
+  "completed_msix": false,
+  "additional_native_source_archives": [
+    {
+      "archive": "geos-3.13.1.tar.bz2",
+      "version": "3.13.1",
+      "observed_sha256": "df2c50503295f325e7c8d7b783aca8ba4773919cde984193850cf9e361dfd28c"
+    },
+    {
+      "archive": "libyaml-0.2.5.tar.gz",
+      "version": "0.2.5",
+      "observed_sha256": "fa240dbf262be053f3898006d502d514936c818e422afdcf33921c63bed9bf2e"
+    },
+    {
+      "archive": "mupdf-1.28.0-source.tar.gz",
+      "version": "1.28.0",
+      "observed_sha256": "21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2"
+    },
+    {
+      "archive": "openssl-4.0.2.tar.gz",
+      "version": "4.0.2",
+      "observed_sha256": "736b467530f916737b7031310ccb21d8218c6229e61e8e160cd1d3458cd543a8"
+    }
+  ],
+  "pillow_dependency_manifest": "pillow-12.3.0.tar.gz: pillow-12.3.0/.github/dependencies.json",
+  "qt_pyside_wheels": "not included; rebuild from the pinned Qt and PySide sources",
+  "framework_runtime_manifest": "framework-runtime-manifest.json",
+  "reused_native_engine": {
+    "component": "MuPDF",
+    "version": "1.28.0",
+    "file": "pymupdf/mupdfcpp64.dll",
+    "toolset_linker": "14.29",
+    "wheel_reuse_verification": "build-pymupdf-wheel/build_pymupdf_wheel.py"
+  }
+}

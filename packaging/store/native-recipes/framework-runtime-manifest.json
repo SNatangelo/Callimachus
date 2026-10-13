@@ -1,0 +1,37 @@
+{
+  "appx_sha256": "077a3d1a5d0622bd3004dca85f5e192d6e98ec79b83d4aa06766759ea6c09c3d",
+  "dlls": [
+    {
+      "appx_path": "concrt140.dll",
+      "sha256": "e02aefc7967e98c6372d68ad70405e9a78ebb899f385985ae9e263e10745f9fe"
+    },
+    {
+      "appx_path": "msvcp140.dll",
+      "sha256": "fd96b594b1f418852893de4cb960f74b43d6905d9966c5532263ca619c9dafc7"
+    },
+    {
+      "appx_path": "msvcp140_1.dll",
+      "sha256": "58c7208525b5dcc34ef0f6482c436dc594040f53f8bb923559bcef636419fc7c"
+    },
+    {
+      "appx_path": "msvcp140_2.dll",
+      "sha256": "cd83ea129b429799f12197bf6cd8e218acb049ef54cfac94b729f544616bb168"
+    },
+    {
+      "appx_path": "msvcp140_atomic_wait.dll",
+      "sha256": "2679492c2a9e6ce17a0cdd4bdb6cb332d8881d7ef99e2d78c9d95521999c386f"
+    },
+    {
+      "appx_path": "msvcp140_codecvt_ids.dll",
+      "sha256": "3afe5011b521891a86bad6e5d5861585a66e9d3a2ebb834634f7ec40d354bb09"
+    },
+    {
+      "appx_path": "vcruntime140.dll",
+      "sha256": "c4ae88c9eb48d63b23560f2e5babbdbf129e3787127688d5383415bbc7347b59"
+    },
+    {
+      "appx_path": "vcruntime140_1.dll",
+      "sha256": "63b9a905cfb0c822d403e2a511ffa4132b1433285530b3cc062f41e8e0a274ac"
+    }
+  ]
+}

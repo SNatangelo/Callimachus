@@ -10,6 +10,7 @@ core modules will use. The LLM must never write to the database directly.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -1151,8 +1152,9 @@ class RunRepository:
                     INSERT INTO reference_entries(
                       ref_id, ref_number, raw_entry, title, doi, pmid, isbn, url, year,
                       ay_surname, ay_year, ay_suffix,
-                      source_type, source_kind, indexability, source_type_confidence
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      source_type, source_kind, indexability, source_type_confidence,
+                      bibliographic_parse_json
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ref_id,
@@ -1171,6 +1173,7 @@ class RunRepository:
                         _clean_text(ref.get("source_kind")),
                         _clean_text(ref.get("indexability")),
                         _clean_text(ref.get("source_type_confidence")),
+                        _bibliographic_parse_json(ref),
                     ),
                 )
                 self._replace_cited_coordinates(
@@ -1314,7 +1317,7 @@ class RunRepository:
                 coordinate["raw_value"]
             ):
                 raise ValueError("cited coordinate normalized value is invalid")
-            if coordinate["extractor_version"] != "cited-coordinates/v1":
+            if coordinate["extractor_version"] != "cited-coordinates/v2":
                 raise ValueError("cited coordinate extractor version is invalid")
             spans = coordinate["spans"]
             if not isinstance(spans, list) or not spans:
@@ -2538,7 +2541,9 @@ class RunRepository:
                 "weak_corroboration_events": None,
             }
         fulltext_exists, link_sets = _validate_resolve_fulltext_payload(payload)
-        evidence_profile = _validate_resolve_evidence_profile(payload.get("evidence_profile"))
+        evidence_profile = _prepare_resolve_evidence_profile_for_storage(
+            payload, payload.get("evidence_profile"), attempts,
+        )
         resolved_identifier = _validate_resolved_identifier(payload.get("resolved_identifier"))
         with self._write_transaction():
             self._conn.execute(
@@ -4797,6 +4802,22 @@ def _clean_text(value: Any) -> str | None:
     return text
 
 
+def _bibliographic_parse_json(ref: JsonDict) -> str | None:
+    """Validate field assignments and raw spans before making them Parse facts."""
+    record = ref.get("bibliographic_parse")
+    if record is None:
+        return None
+    from core.parse.reference_readers import validate_parse
+
+    if not validate_parse(record, _clean_text(ref.get("raw_entry")) or ""):
+        raise ValueError("bibliographic Parse evidence is invalid")
+    for name in ("title", "year", "doi", "url"):
+        field = record["fields"].get(name)
+        if field is not None and field["value"] != ref.get(name):
+            raise ValueError(f"bibliographic Parse {name} disagrees with its projection")
+    return json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def _normalize_cited_coordinate_value(value: str) -> str:
     return " ".join(
         value.replace("‐", "-").replace("‑", "-").replace("‒", "-")
@@ -4888,6 +4909,10 @@ _RISK_SIGNALS = {
 }
 _REPAIR_TRIGGERS = {"status=unresolved", "via=crossref_metadata"}
 _CORROBORATE_SIGNALS = {"doi", "pmid", "title", "tokens", "url"}
+_FETCH_REPAIR_CORROBORATE_SIGNALS = _CORROBORATE_SIGNALS | {
+    "arxiv_id", "acl_id", "author_copy", "official_curated_document",
+    "cited_landing_pdf",
+}
 
 
 def _exact_object(
@@ -5391,7 +5416,10 @@ def _validate_repair_overlays(value: dict[str, Any]) -> None:
     _optional_text(item["stored_source_ref"], "fetch_repair.stored_source_ref")
     if item["content_version"] not in {None, "published", "preprint", "accepted_manuscript"}:
         raise ValueError("evidence_profile.fetch_repair.content_version is invalid")
-    if item["corroborate_signal"] is not None and item["corroborate_signal"] not in _CORROBORATE_SIGNALS:
+    if (
+        item["corroborate_signal"] is not None
+        and item["corroborate_signal"] not in _FETCH_REPAIR_CORROBORATE_SIGNALS
+    ):
         raise ValueError("evidence_profile.fetch_repair.corroborate_signal is invalid")
     _fraction(item["corroborate_score"], "fetch_repair.corroborate_score")
 
@@ -6526,6 +6554,13 @@ def _reference_record(conn: sqlite3.Connection, row) -> ReferenceRecord:
             "extractor_version": coordinate["extractor_version"],
             "spans": spans,
         })
+    bibliographic_parse = None
+    if row["bibliographic_parse_json"] is not None:
+        try:
+            bibliographic_parse = json.loads(row["bibliographic_parse_json"])
+            _bibliographic_parse_json({**dict(row), "bibliographic_parse": bibliographic_parse})
+        except (ValueError, TypeError, KeyError) as exc:
+            raise RuntimeError("stored bibliographic Parse evidence is invalid") from exc
     return ReferenceRecord(
         ref_id=row["ref_id"],
         ref_number=int(row["ref_number"]),
@@ -6544,6 +6579,7 @@ def _reference_record(conn: sqlite3.Connection, row) -> ReferenceRecord:
         indexability=row["indexability"],
         source_type_confidence=row["source_type_confidence"],
         cited_coordinates=tuple(coordinates),
+        bibliographic_parse=bibliographic_parse,
     )
 
 
@@ -7403,6 +7439,12 @@ def _reference_dict(row: ReferenceRecord) -> JsonDict:
     }
     if row.cited_coordinates:
         out["cited_coordinates"] = [dict(coordinate) for coordinate in row.cited_coordinates]
+    if row.bibliographic_parse is not None:
+        out["bibliographic_parse"] = copy.deepcopy(row.bibliographic_parse)
+        for name in ("authors", "first_author", "journal", "volume", "issue", "pages", "publisher", "place", "editors"):
+            field = row.bibliographic_parse["fields"].get(name)
+            if field is not None:
+                out[name] = copy.deepcopy(field["value"])
     return out
 
 
@@ -7417,6 +7459,9 @@ def _citation_dict(row: CitationRecord) -> JsonDict:
 
 def _resolve_result_export_dict(row: ResolveResultRecord) -> JsonDict:
     evidence_profile = row.evidence_profile or {}
+    evidence_profile = _restore_registered_coordinate_certificate(
+        row, evidence_profile,
+    )
     payload = {
         "ref_id": row.ref_id,
         "status": row.status,
@@ -7455,6 +7500,352 @@ def _resolve_result_export_dict(row: ResolveResultRecord) -> JsonDict:
         payload["identity_state"] = identity_state
         payload["identity"] = identity
     return payload
+
+
+_REGISTERED_COORDINATE_CERTIFICATE_FIELD = "registered_coordinate_certificate"
+_REGISTERED_COORDINATE_VALIDATED_VIA = "crossref:registered_coordinate_certificate"
+_NO_REGISTERED_COORDINATE_CERTIFICATE = object()
+
+
+def _canonical_resolve_doi(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"^https?://(?:dx\.)?doi\.org/", "", text,
+        flags=re.IGNORECASE | re.ASCII,
+    )
+    text = re.sub(r"[.,;:'\"<>\]}]+$", "", text.strip())
+    return text.translate(str.maketrans(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz",
+    ))
+
+
+def _metadata_without_registered_coordinate_certificate(value: Any) -> Any:
+    if type(value) is not dict:
+        return value
+    return {
+        key: item for key, item in value.items()
+        if key != _REGISTERED_COORDINATE_CERTIFICATE_FIELD
+    }
+
+
+def _profile_without_registered_coordinate_certificates(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    profile = copy.deepcopy(value)
+    metadata_match = profile.get("metadata_match")
+    if isinstance(metadata_match, dict):
+        metadata_match.pop(_REGISTERED_COORDINATE_CERTIFICATE_FIELD, None)
+    best_candidate = profile.get("best_candidate")
+    if isinstance(best_candidate, dict):
+        candidate_metadata = best_candidate.get("metadata_match")
+        if isinstance(candidate_metadata, dict):
+            candidate_metadata.pop(_REGISTERED_COORDINATE_CERTIFICATE_FIELD, None)
+    return profile
+
+
+def _matching_registered_coordinate_attempts(
+    attempts: Any,
+    metadata_match: Any,
+    attempt_matches: Any,
+) -> list[dict[str, Any]]:
+    if type(attempts) is not list or not isinstance(metadata_match, dict):
+        return []
+    ordinary_metadata = _metadata_without_registered_coordinate_certificate(
+        metadata_match,
+    )
+    matches = []
+    for attempt in attempts:
+        if not isinstance(attempt, dict) or not attempt_matches(attempt):
+            continue
+        attempt_metadata = attempt.get("metadata_match")
+        if (
+            isinstance(attempt_metadata, dict)
+            and _metadata_without_registered_coordinate_certificate(
+                attempt_metadata,
+            ) == ordinary_metadata
+        ):
+            matches.append(attempt)
+    return matches
+
+
+def _bind_registered_coordinate_attempt(
+    attempts: Any,
+    metadata_match: Any,
+    attempt_matches: Any,
+    *,
+    expected_certificate: Any = _NO_REGISTERED_COORDINATE_CERTIFICATE,
+    context: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    matches = _matching_registered_coordinate_attempts(
+        attempts, metadata_match, attempt_matches,
+    )
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"registered coordinate certificate {context} does not have exactly one bound attempt"
+        )
+    attempt = matches[0]
+    attempt_metadata = attempt.get("metadata_match")
+    certificate = (
+        attempt_metadata.get(_REGISTERED_COORDINATE_CERTIFICATE_FIELD)
+        if isinstance(attempt_metadata, dict) else None
+    )
+    if type(certificate) is not dict:
+        raise RuntimeError(
+            f"registered coordinate certificate is missing from its {context} bound attempt"
+        )
+    if (
+        expected_certificate is not _NO_REGISTERED_COORDINATE_CERTIFICATE
+        and (
+            type(expected_certificate) is not dict
+            or expected_certificate != certificate
+        )
+    ):
+        raise RuntimeError(
+            f"registered coordinate certificate does not match its {context} bound attempt"
+        )
+    return attempt, certificate
+
+
+def _selected_registered_coordinate_attempt_matches(
+    attempt: dict[str, Any],
+    *,
+    status: Any,
+    via: Any,
+    matched_title: Any,
+    work_type: Any,
+    resolved_identifier: Any,
+) -> bool:
+    selected_doi = (
+        _canonical_resolve_doi(resolved_identifier.get("value"))
+        if isinstance(resolved_identifier, dict) else ""
+    )
+    return bool(
+        selected_doi
+        and attempt.get("status") == status
+        and attempt.get("via") == via
+        and attempt.get("matched_title") == matched_title
+        and attempt.get("work_type") == work_type
+        and _canonical_resolve_doi(attempt.get("doi")) == selected_doi
+        and attempt.get("resolved_identifier") == resolved_identifier
+    )
+
+
+def _best_candidate_attempt_matches(
+    attempt: dict[str, Any], best_candidate: Any,
+) -> bool:
+    return bool(
+        isinstance(best_candidate, dict)
+        and attempt.get("via") == best_candidate.get("source")
+        and attempt.get("matched_title") == best_candidate.get("title")
+        and attempt.get("status") == best_candidate.get("status")
+        and attempt.get("matched_authors") == best_candidate.get("authors")
+        and attempt.get("reason") == best_candidate.get("reason")
+    )
+
+
+def _prepare_resolve_evidence_profile_for_storage(
+    payload: Any,
+    evidence_profile: Any,
+    attempts: Any,
+) -> JsonDict | None:
+    # Validate all ordinary relational fields first; certificate fields are
+    # stored only on their strictly validated typed attempts.
+    projected_profile = _profile_without_registered_coordinate_certificates(
+        evidence_profile,
+    )
+    validated_profile = _validate_resolve_evidence_profile(projected_profile)
+    resolved_identifier = (
+        payload.get("resolved_identifier") if isinstance(payload, dict) else None
+    )
+    selected_via_certificate = (
+        isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == _REGISTERED_COORDINATE_VALIDATED_VIA
+    )
+    if not isinstance(evidence_profile, dict):
+        if selected_via_certificate:
+            raise RuntimeError(
+                "registered coordinate certificate selected evidence profile is missing"
+            )
+        return validated_profile
+
+    selected_metadata = evidence_profile.get("metadata_match")
+    selected_has_certificate = (
+        isinstance(selected_metadata, dict)
+        and _REGISTERED_COORDINATE_CERTIFICATE_FIELD in selected_metadata
+    )
+    selected_attempt = None
+    selected_certificate = None
+    if selected_via_certificate:
+        if (
+            not isinstance(payload, dict)
+            or payload.get("status") != "resolved"
+            or payload.get("via") != "crossref_metadata"
+            or resolved_identifier.get("type") != "doi"
+            or not _canonical_resolve_doi(resolved_identifier.get("value"))
+        ):
+            raise RuntimeError(
+                "registered coordinate certificate selected result is invalid"
+            )
+        if not selected_has_certificate:
+            raise RuntimeError(
+                "registered coordinate certificate is missing from selected evidence profile"
+            )
+        selected_attempt, selected_certificate = _bind_registered_coordinate_attempt(
+            attempts,
+            selected_metadata,
+            lambda attempt: _selected_registered_coordinate_attempt_matches(
+                attempt,
+                status=payload.get("status"),
+                via=payload.get("via"),
+                matched_title=payload.get("matched_title"),
+                work_type=payload.get("work_type"),
+                resolved_identifier=resolved_identifier,
+            ),
+            expected_certificate=selected_metadata[
+                _REGISTERED_COORDINATE_CERTIFICATE_FIELD
+            ],
+            context="selected result",
+        )
+    elif selected_has_certificate:
+        raise RuntimeError(
+            "registered coordinate certificate has no validated selected identifier"
+        )
+
+    best_candidate = evidence_profile.get("best_candidate")
+    best_metadata = (
+        best_candidate.get("metadata_match")
+        if isinstance(best_candidate, dict) else None
+    )
+    best_has_certificate = (
+        isinstance(best_metadata, dict)
+        and _REGISTERED_COORDINATE_CERTIFICATE_FIELD in best_metadata
+    )
+    if isinstance(best_candidate, dict) and isinstance(best_metadata, dict):
+        best_matches = _matching_registered_coordinate_attempts(
+            attempts,
+            best_metadata,
+            lambda attempt: _best_candidate_attempt_matches(
+                attempt, best_candidate,
+            ),
+        )
+        matches_selected = (
+            selected_attempt is not None
+            and any(attempt is selected_attempt for attempt in best_matches)
+        )
+        if best_has_certificate or matches_selected:
+            if len(best_matches) != 1 or not matches_selected:
+                raise RuntimeError(
+                    "registered coordinate certificate best candidate is not uniquely bound to the selected attempt"
+                )
+            if not best_has_certificate:
+                raise RuntimeError(
+                    "registered coordinate certificate is missing from its matching best candidate"
+                )
+            if best_metadata[_REGISTERED_COORDINATE_CERTIFICATE_FIELD] != selected_certificate:
+                raise RuntimeError(
+                    "registered coordinate certificate does not match its best candidate attempt"
+                )
+
+    return validated_profile
+
+
+def _restore_registered_coordinate_certificate(
+    row: ResolveResultRecord,
+    evidence_profile: JsonDict,
+) -> JsonDict:
+    if not isinstance(evidence_profile, dict):
+        return evidence_profile
+    restored_profile = copy.deepcopy(evidence_profile)
+    resolved_identifier = row.resolved_identifier
+    selected_via_certificate = (
+        isinstance(resolved_identifier, dict)
+        and resolved_identifier.get("validated_via")
+        == _REGISTERED_COORDINATE_VALIDATED_VIA
+    )
+    selected_metadata = restored_profile.get("metadata_match")
+    selected_has_certificate = (
+        isinstance(selected_metadata, dict)
+        and _REGISTERED_COORDINATE_CERTIFICATE_FIELD in selected_metadata
+    )
+    selected_attempt = None
+    selected_certificate = None
+    if selected_via_certificate:
+        if (
+            row.status != "resolved"
+            or row.via != "crossref_metadata"
+            or resolved_identifier.get("type") != "doi"
+            or not _canonical_resolve_doi(resolved_identifier.get("value"))
+            or not isinstance(selected_metadata, dict)
+        ):
+            raise RuntimeError(
+                "registered coordinate certificate selected result is invalid"
+            )
+        selected_attempt, selected_certificate = _bind_registered_coordinate_attempt(
+            row.attempts,
+            selected_metadata,
+            lambda attempt: _selected_registered_coordinate_attempt_matches(
+                attempt,
+                status=row.status,
+                via=row.via,
+                matched_title=row.matched_title,
+                work_type=row.work_type,
+                resolved_identifier=resolved_identifier,
+            ),
+            expected_certificate=(
+                selected_metadata[_REGISTERED_COORDINATE_CERTIFICATE_FIELD]
+                if selected_has_certificate
+                else _NO_REGISTERED_COORDINATE_CERTIFICATE
+            ),
+            context="selected result",
+        )
+        selected_metadata[_REGISTERED_COORDINATE_CERTIFICATE_FIELD] = copy.deepcopy(
+            selected_certificate,
+        )
+    elif selected_has_certificate:
+        raise RuntimeError(
+            "registered coordinate certificate has no validated selected identifier"
+        )
+
+    best_candidate = restored_profile.get("best_candidate")
+    best_metadata = (
+        best_candidate.get("metadata_match")
+        if isinstance(best_candidate, dict) else None
+    )
+    if isinstance(best_candidate, dict) and isinstance(best_metadata, dict):
+        best_has_certificate = (
+            _REGISTERED_COORDINATE_CERTIFICATE_FIELD in best_metadata
+        )
+        best_matches = _matching_registered_coordinate_attempts(
+            row.attempts,
+            best_metadata,
+            lambda attempt: _best_candidate_attempt_matches(
+                attempt, best_candidate,
+            ),
+        )
+        matches_selected = (
+            selected_attempt is not None
+            and any(attempt is selected_attempt for attempt in best_matches)
+        )
+        if best_has_certificate or matches_selected:
+            if len(best_matches) != 1 or not matches_selected:
+                raise RuntimeError(
+                    "registered coordinate certificate best candidate is not uniquely bound to the selected attempt"
+                )
+            if best_has_certificate and best_metadata[
+                _REGISTERED_COORDINATE_CERTIFICATE_FIELD
+            ] != selected_certificate:
+                raise RuntimeError(
+                    "registered coordinate certificate does not match its best candidate attempt"
+                )
+            best_metadata[_REGISTERED_COORDINATE_CERTIFICATE_FIELD] = copy.deepcopy(
+                selected_certificate,
+            )
+    return restored_profile
 
 
 def _persisted_strong_doi_identity(

@@ -1,17 +1,14 @@
+# tests/test_ocr_logging.py
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
-
 import io
-
 import logging
-
 import sys
-
 import types
-
 from pathlib import Path
 
 from core.fetch.extraction import ocr
+
 
 def test_rapidocr_setup_suppresses_info_but_preserves_warnings(monkeypatch, tmp_path):
     logger = logging.getLogger("RapidOCR")
@@ -65,3 +62,17 @@ def test_rapidocr_setup_suppresses_info_but_preserves_warnings(monkeypatch, tmp_
         logger.setLevel(previous_level)
         logger.handlers = previous_handlers
         logger.propagate = previous_propagate
+
+
+def test_legacy_rapidocr_engine_uses_default_constructor(monkeypatch):
+    class Engine:
+        def __init__(self):
+            self.initialized = True
+
+    Engine.__module__ = "rapidocr_onnxruntime.main"
+    monkeypatch.setattr(ocr, "_rapidocr_class", lambda: Engine)
+
+    engine = ocr._new_rapidocr_engine()
+
+    assert isinstance(engine, Engine)
+    assert engine.initialized

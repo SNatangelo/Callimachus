@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 from core.gui.guided_fetch_viewmodel import GuidedFetchViewModel, present_facts
@@ -52,6 +54,64 @@ def test_viewmodel_statuses_overlay_and_audit_detail(tmp_path):
     assert "What not to do:" in model.action_guidance("r1")
     assert "Proceed / skip remaining" in model.action_guidance("r2")
     assert "No Fetch action" in model.action_guidance("r3")
+
+
+def test_parsed_panel_exposes_assigned_author_and_journal_fields(tmp_path):
+    inventory = _inventory(tmp_path)
+    inventory["references"][0]["parsed"].update({
+        "authors": ["Novotny, L.", "van Hulst, N."],
+        "journal": "Nat. Photonics", "year": 2011,
+        "volume": "5", "pages": "83–90",
+    })
+    panel = GuidedFetchViewModel(inventory).detail_panels("r1")["Parsed"]
+    rows = dict(panel["rows"])
+    assert "Novotny, L." in rows["Authors"]
+    assert "van Hulst, N." in rows["Authors"]
+    assert rows["Journal"] == "Nat. Photonics"
+    assert rows["Publication year"] == "2011"
+    assert rows["Volume"] == "5"
+    assert rows["Pages"] == "83–90"
+
+
+def test_viewmodel_labels_staged_ocr_preview_without_promoting_fetch_text(tmp_path):
+    inventory = _inventory(tmp_path)
+    staged_text = tmp_path / "guided-ocr-staged.txt"
+    staged_text.write_text("parsed OCR text", encoding="utf-8")
+    inventory["references"][1]["fetch"].update({
+        "preview_path": str(staged_text),
+        "preview_kind": "guided_ocr_staged",
+    })
+    model = GuidedFetchViewModel(inventory)
+
+    assert model.rows()[1].status == "abstract"
+    assert model.detail_tabs("r2")["Preview"] == {
+        "path": str(staged_text),
+        "kind": "guided_ocr_staged",
+    }
+    preview = model.detail_panels("r2")["Preview"]
+    assert preview["headline"] == "Staged OCR text"
+    assert any(
+        label == "Preview status" and "not admitted for verification" in value
+        for label, value in preview["rows"]
+    )
+
+
+def test_reopened_unreadable_answer_has_actionable_guidance(tmp_path):
+    inventory = _inventory(tmp_path)
+    inventory["references"][1]["fetch"]["pending_tasks"][0]["last_error"] = {
+        "stage": "fetch_answer_ingest",
+        "type": "ValueError",
+        "message": "fetch task answer was not admitted as full text: unreadable:",
+        "traceback": "private absolute path must not be displayed",
+    }
+    model = GuidedFetchViewModel(inventory)
+
+    guidance = model.rejected_source_guidance("r2")
+    assert guidance is not None
+    assert "could not be admitted as readable full text" in guidance
+    assert "Choose another file" in guidance
+    assert "Proceed / skip remaining" in guidance
+    assert "private absolute path" not in guidance
 
 
 def test_viewmodel_projects_one_safe_pending_identity_review(tmp_path):
@@ -282,17 +342,127 @@ def test_browser_url_prefers_concrete_sources_then_resolve_and_parsed_doi_search
     entry["parsed"]["url"] = "https://parsed.test/source"
     assert model.preferred_link("r1") == "https://parsed.test/source"
     entry["parsed"].pop("url")
-    assert model.browser_url("r1") == "https://www.google.com/search?q=10.1000%2Fresolved"
+    assert model.browser_url("r1") == "https://doi.org/10.1000/resolved"
 
     entry["resolve"] = {}
     assert model.browser_url("r1") == "https://www.google.com/search?q=10.1000%2Fcited"
 
     entry["parsed"].pop("doi")
     entry["resolve"] = {"resolved_identifier": {"type": "doi", "value": "https://doi.org/10.1000%2Ffrom-url"}}
-    assert model.browser_url("r1") == "https://www.google.com/search?q=10.1000%2Ffrom-url"
+    assert model.browser_url("r1") == "https://doi.org/10.1000/from-url"
 
     entry["resolve"] = {"fulltext_links": {"url": "https://fulltext.test/single"}}
     assert model.preferred_link("r1") == "https://fulltext.test/single"
+
+
+def test_browser_navigation_skips_machine_endpoints_and_uses_resolved_doi(tmp_path):
+    inventory = _inventory(tmp_path)
+    entry = inventory["references"][0]
+    entry["resolve"] = {
+        "doi": "https://doi.org/10.5555/a/b?part=1#section",
+        "fulltext_links": [
+            {"url": "https://api.publisher.example/article/123", "content_type": "application/xml; charset=utf-8"},
+            {"url": "https://metadata.example/article/123?format=json"},
+            {"url": "https://publisher.example/article/123?httpAccept=application%2Fxml"},
+            {"url": "https://publisher.example/api/article/123.pdf?download=1", "content-type": "application/pdf"},
+        ],
+    }
+    before = deepcopy(inventory)
+    model = GuidedFetchViewModel(inventory)
+
+    assert model.preferred_link("r1") == "https://publisher.example/api/article/123.pdf?download=1"
+    assert model.browser_url("r1") == "https://publisher.example/api/article/123.pdf?download=1"
+    assert inventory == before
+
+
+def test_browser_navigation_uses_resolved_doi_for_reported_elsevier_xml_endpoint(tmp_path):
+    inventory = _inventory(tmp_path)
+    entry = inventory["references"][0]
+    entry["resolve"] = {
+        "doi": "10.1000/resolved",
+        "fulltext_links": [
+            {"url": "https://api.elsevier.com/content/article/PII:S0140673604170347?httpAccept=text/xml"},
+        ],
+    }
+
+    assert GuidedFetchViewModel(inventory).browser_url("r1") == "https://doi.org/10.1000/resolved"
+
+
+@pytest.mark.parametrize(
+    "machine_url",
+    [
+        "https://API.other-domain.example/v1/article",
+        "https://articles.example/item?format=application%2Fjson",
+        "https://articles.example/item?httpAccept=application%2Fxml",
+    ],
+)
+def test_browser_navigation_skips_machine_urls_and_keeps_later_html_link(tmp_path, machine_url):
+    inventory = _inventory(tmp_path)
+    entry = inventory["references"][0]
+    entry["resolve"] = {
+        "fulltext_links": [machine_url, {"url": "https://journal.example/article/123"}],
+    }
+
+    assert GuidedFetchViewModel(inventory).preferred_link("r1") == "https://journal.example/article/123"
+
+
+def test_browser_navigation_machine_endpoint_without_resolved_doi_keeps_configured_search(tmp_path):
+    inventory = _inventory(tmp_path)
+    entry = inventory["references"][0]
+    entry["parsed"] = {"raw_entry": "Cited title"}
+    entry["resolve"] = {"fulltext_links": ["https://api.example/data.xml?format=xml"]}
+    model = GuidedFetchViewModel(inventory, env={
+        "CITATION_VERIFIER_GUIDED_SEARCH_URL": "https://search.example/?q={query}",
+        "CITATION_VERIFIER_GUIDED_SEARCH_QUERY": "{raw_entry}",
+    })
+
+    assert model.browser_url("r1") == "https://search.example/?q=Cited+title"
+
+
+@pytest.mark.parametrize(
+    ("field", "url", "metadata"),
+    [
+        ("fulltext_links", "https://api.publisher.example/item", {}),
+        ("fulltext_links", "https://publisher.example/item", {"content_type": "application/vnd.test+json; charset=utf-8"}),
+        ("url", "https://publisher.example/item?format=application%2Fxml", {}),
+        ("parsed_url", "https://publisher.example/item?httpAccept=application%2Fjson", {}),
+    ],
+)
+def test_browser_navigation_filters_machine_endpoints_in_each_slot(tmp_path, field, url, metadata):
+    inventory = _inventory(tmp_path)
+    entry = inventory["references"][0]
+    entry["resolve"] = {"fulltext_links": [], "url": None}
+    entry["parsed"]["url"] = None
+    if field == "fulltext_links":
+        entry["resolve"][field] = [{"url": url, **metadata}, {"url": "https://journal.example/article"}]
+    elif field == "url":
+        entry["resolve"][field] = {"url": url, **metadata}
+        entry["parsed"]["url"] = "https://journal.example/article"
+    else:
+        entry["parsed"]["url"] = [url, {"url": "https://journal.example/article"}]
+
+    assert GuidedFetchViewModel(inventory).preferred_link("r1") == "https://journal.example/article"
+
+
+def test_browser_navigation_uses_quoted_valid_resolved_doi_when_no_links_remain(tmp_path):
+    inventory = _inventory(tmp_path)
+    entry = inventory["references"][0]
+    entry["parsed"] = {"raw_entry": "Cited title"}
+    entry["resolve"] = {"doi": "10.5555/a/b?part=1#section"}
+
+    assert GuidedFetchViewModel(inventory).browser_url("r1") == (
+        "https://doi.org/10.5555/a/b%3Fpart%3D1%23section"
+    )
+
+
+@pytest.mark.parametrize("url", ["https://user:secret@api.example/item", "file:///tmp/article.pdf"])
+def test_browser_navigation_never_selects_unsafe_or_machine_links(tmp_path, url):
+    inventory = _inventory(tmp_path)
+    inventory["references"][0]["resolve"] = {"fulltext_links": [url]}
+    inventory["references"][0]["resolve"].pop("resolved_identifier", None)
+    inventory["references"][0]["parsed"] = {"raw_entry": "Cited title"}
+
+    assert GuidedFetchViewModel(inventory).preferred_link("r1") is None
 
 
 def test_browser_url_uses_configured_templates_and_encodes_parsed_citation(tmp_path):
@@ -340,25 +510,3 @@ def test_browser_search_empty_per_reference_query_fails_closed(tmp_path):
     model = GuidedFetchViewModel(_inventory(tmp_path))
     with pytest.raises(ValueError, match="rendered an empty value"):
         model.browser_url("r3")
-
-def test_viewmodel_labels_staged_ocr_preview_without_promoting_fetch_text(tmp_path):
-    inventory = _inventory(tmp_path)
-    staged_text = tmp_path / "guided-ocr-staged.txt"
-    staged_text.write_text("parsed OCR text", encoding="utf-8")
-    inventory["references"][1]["fetch"].update({
-        "preview_path": str(staged_text),
-        "preview_kind": "guided_ocr_staged",
-    })
-    model = GuidedFetchViewModel(inventory)
-
-    assert model.rows()[1].status == "abstract"
-    assert model.detail_tabs("r2")["Preview"] == {
-        "path": str(staged_text),
-        "kind": "guided_ocr_staged",
-    }
-    preview = model.detail_panels("r2")["Preview"]
-    assert preview["headline"] == "Staged OCR text"
-    assert any(
-        label == "Preview status" and "not admitted for verification" in value
-        for label, value in preview["rows"]
-    )
