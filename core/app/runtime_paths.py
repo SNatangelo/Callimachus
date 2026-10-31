@@ -1,3 +1,6 @@
+# core/app/runtime_paths.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Resolve bundled resources, writable application data, and child commands."""
@@ -5,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 import platform
 import sys
@@ -16,7 +19,7 @@ _LOADED_ENV_VALUES: dict[str, str] = {}
 
 
 def is_frozen() -> bool:
-    """Return whether this process was started by a freezer bootloader."""
+    """Return whether this process runs from a PyInstaller bundle."""
     return bool(getattr(sys, "frozen", False))
 
 
@@ -63,7 +66,40 @@ def ensure_user_data_root(*, source_root: str | os.PathLike[str] | None = None) 
 
 
 def environment_file(*, source_root: str | os.PathLike[str] | None = None) -> Path:
-    return user_data_root(source_root=source_root) / ".env"
+    name = "settings.conf" if is_frozen() else ".env"
+    return user_data_root(source_root=source_root) / name
+
+
+def settings_template_file(
+    *, source_root: str | os.PathLike[str] | None = None,
+) -> Path:
+    """Return the read-only settings inventory template for this runtime."""
+    root = Path(source_root).resolve() if source_root is not None else resource_root()
+    name = "settings.defaults" if is_frozen() else ".env.example"
+    return root / name
+
+
+def saved_secret_values(
+    *, names: set[str] | None = None,
+    overrides: Mapping[str, str] | None = None,
+    source_root: str | os.PathLike[str] | None = None,
+) -> dict[str, str]:
+    """Load frozen-build secrets from the OS vault, never from the settings file."""
+    if not is_frozen():
+        return {}
+    from core.app.settings.credentials import (
+        load_secret_values,
+        secret_names_from_template,
+    )
+
+    selected = secret_names_from_template(
+        settings_template_file(source_root=source_root)
+    )
+    if names is not None:
+        selected.intersection_update(names)
+    process_overrides = os.environ if overrides is None else overrides
+    missing_from_process = selected - set(process_overrides)
+    return load_secret_values(missing_from_process)
 
 
 def runs_directory(*, source_root: str | os.PathLike[str] | None = None) -> Path:
@@ -71,26 +107,34 @@ def runs_directory(*, source_root: str | os.PathLike[str] | None = None) -> Path
 
 
 def load_environment_file(path: str | os.PathLike[str]) -> None:
-    """Load the project's small dotenv format without overwriting the process env."""
-    env_path = Path(path)
-    if not env_path.is_file():
-        return
-    with env_path.open(encoding="utf-8") as source:
-        for line in source:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            if line.startswith(("export ", "export\t")):
-                line = line[len("export"):].lstrip()
-            key, value = (piece.strip() for piece in line.split("=", 1))
-            if not key:
-                continue
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-                value = value[1:-1]
-            else:
-                comment = value.find(" #")
-                if comment != -1:
-                    value = value[:comment].rstrip()
+    """Load source dotenv or frozen non-secret settings beneath process overrides."""
+    frozen = is_frozen()
+    env_path = environment_file() if frozen else Path(path)
+    from core.app.settings.credentials import is_secret_setting
+
+    if env_path.is_file():
+        with env_path.open(encoding="utf-8") as source:
+            for line in source:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.startswith(("export ", "export\t")):
+                    line = line[len("export"):].lstrip()
+                key, value = (piece.strip() for piece in line.split("=", 1))
+                if not key or (frozen and is_secret_setting(key)):
+                    continue
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                else:
+                    comment = value.find(" #")
+                    if comment != -1:
+                        value = value[:comment].rstrip()
+                if key not in os.environ:
+                    os.environ[key] = value
+                    _LOADED_ENV_VALUES[key] = value
+
+    if frozen:
+        for key, value in saved_secret_values().items():
             if key not in os.environ:
                 os.environ[key] = value
                 _LOADED_ENV_VALUES[key] = value
@@ -112,6 +156,14 @@ def refresh_loaded_environment(updates: Mapping[str, str]) -> None:
         if loaded_value is not None and os.environ.get(name) == loaded_value:
             os.environ[name] = str(value)
             _LOADED_ENV_VALUES[name] = str(value)
+
+
+def clear_loaded_environment(names: Iterable[str]) -> None:
+    """Remove previously loaded settings that were deleted by import or reset."""
+    for name in names:
+        loaded_value = _LOADED_ENV_VALUES.pop(name, None)
+        if loaded_value is not None and os.environ.get(name) == loaded_value:
+            os.environ.pop(name, None)
 
 
 def application_argv(

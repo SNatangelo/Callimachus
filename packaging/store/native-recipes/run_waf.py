@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/run_waf.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Use the already activated portable Microsoft compiler for the upstream Waf build."""
 import os
 import sys

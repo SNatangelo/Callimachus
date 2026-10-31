@@ -163,13 +163,25 @@ def _resolve_inputs(body: str, tex_dir: str, depth: int = 0) -> str:
     if depth > 10:
         return body
 
+    document_root = os.path.realpath(tex_dir)
+
     def _replace(m: re.Match) -> str:
         name = m.group(1).strip()
         if not name.endswith(".tex"):
             name += ".tex"
         sub_path = os.path.join(tex_dir, name)
-        if os.path.exists(sub_path):
-            with open(sub_path, encoding="utf-8", errors="replace") as sf:
+        resolved_path = os.path.realpath(sub_path)
+        try:
+            common_path = os.path.commonpath((document_root, resolved_path))
+        except ValueError as exc:
+            raise ValueError(
+                f"LaTeX include escapes document directory: {name!r}"
+            ) from exc
+        if os.path.normcase(common_path) != os.path.normcase(document_root):
+            raise ValueError(f"LaTeX include escapes document directory: {name!r}")
+
+        if os.path.exists(resolved_path):
+            with open(resolved_path, encoding="utf-8", errors="replace") as sf:
                 sub = sf.read()
             sub = re.sub(r"(?<!\\)%.*", "", sub)
             sub = re.sub(r"\\(?:begin|end)\{document\}", "", sub)

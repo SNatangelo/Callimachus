@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import urllib.parse
 import unicodedata
+from xml.etree import ElementTree as ET
 
 try:
     from core.resolve import sources as _sources
@@ -134,6 +136,7 @@ def _store_prepared_fulltext(
     extraction_flags: list[str] | None,
     extraction_method: str | None,
     storage_provenance: dict | None = None,
+    arxiv_version_get=None,
     **kwargs,
 ) -> dict:
     """Store verifier text and upgrade its cache row with preparation provenance.
@@ -144,6 +147,32 @@ def _store_prepared_fulltext(
     """
     stored_kwargs = dict(kwargs)
     stored_kwargs.update(storage_provenance or {})
+    if callable(arxiv_version_get):
+        source_version = None
+        analyzer = getattr(_sources, "_arxiv_version_for_source", None)
+        if callable(analyzer):
+            try:
+                source_version = analyzer(
+                    ref,
+                    stored_kwargs.get("source_ref"),
+                    text,
+                )
+            except Exception:
+                source_version = None
+        if isinstance(source_version, dict):
+            arxiv_id = source_version.get("arxiv_id")
+            fetched_version = source_version.get("version")
+            if (
+                isinstance(arxiv_id, str)
+                and _arxiv_id(arxiv_id) is not None
+                and _arxiv_id(arxiv_id).casefold() == arxiv_id.casefold()
+                and type(fetched_version) is int
+                and fetched_version > 0
+            ):
+                latest = _arxiv_latest_version(arxiv_id, arxiv_version_get)
+                if latest is not None and latest["version"] >= fetched_version:
+                    stored_kwargs["arxiv_latest_version"] = latest["version"]
+                    stored_kwargs["arxiv_latest_observation"] = latest["observation"]
     entry = _sources.store_text(
         run_dir, ref, "fulltext", origin, text,
         extraction_flags=extraction_flags,
@@ -391,6 +420,75 @@ def _arxiv_id(value: object) -> str | None:
         flags=re.IGNORECASE,
     )
     return match.group(1) if match else None
+
+
+def _arxiv_latest_version(arxiv_id: str, get_fn) -> dict | None:
+    """Query one exact arXiv record through the supplied audited Fetch callback."""
+    if not callable(get_fn) or not isinstance(arxiv_id, str) or not _arxiv_id(arxiv_id):
+        return None
+    request_url = "https://export.arxiv.org/api/query?" + urllib.parse.urlencode({
+        "id_list": arxiv_id,
+    })
+    try:
+        response = get_fn(request_url)
+    except Exception:
+        return None
+    if not isinstance(response, dict):
+        return None
+    status = response.get("status")
+    body = response.get("body")
+    if response.get("url") != request_url:
+        return None
+    if type(status) is not int or status != 200:
+        return None
+    if isinstance(body, bytes):
+        body_bytes = body
+    elif isinstance(body, str):
+        body_bytes = body.encode("utf-8")
+    else:
+        return None
+    response_sha256 = hashlib.sha256(body_bytes).hexdigest()
+    atom_namespace = "http://www.w3.org/2005/Atom"
+    try:
+        feed = ET.fromstring(body_bytes)
+    except (ET.ParseError, ValueError):
+        return None
+    if feed.tag != f"{{{atom_namespace}}}feed":
+        return None
+    entries = feed.findall(f"{{{atom_namespace}}}entry")
+    if len(entries) != 1:
+        return None
+    entry_id = (entries[0].findtext(f"{{{atom_namespace}}}id") or "").strip()
+    try:
+        parsed_id = urllib.parse.urlsplit(entry_id)
+        port = parsed_id.port
+    except ValueError:
+        return None
+    if (
+        parsed_id.scheme.lower() not in {"http", "https"}
+        or parsed_id.hostname not in {"arxiv.org", "www.arxiv.org", "export.arxiv.org"}
+        or parsed_id.username is not None
+        or parsed_id.password is not None
+        or port is not None
+        or parsed_id.query
+        or parsed_id.fragment
+    ):
+        return None
+    identifier = r"(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[a-z-]+)?/\d{7})"
+    match = re.fullmatch(
+        rf"/abs/({identifier})v([1-9]\d*)",
+        parsed_id.path,
+        flags=re.IGNORECASE | re.ASCII,
+    )
+    if match is None or match.group(1).casefold() != arxiv_id.casefold():
+        return None
+    return {
+        "version": int(match.group(2)),
+        "observation": {
+            "request_url": request_url,
+            "response_sha256": response_sha256,
+        },
+    }
 
 
 def _acl_id(value: object) -> str | None:
@@ -1184,6 +1282,7 @@ def try_store_fulltext(
     redirect_chain: list | None = None,
     storage_provenance: dict | None = None,
     identity_attested: bool = False,
+    arxiv_version_get=None,
 ) -> dict:
     storage_provenance = _validated_storage_provenance(storage_provenance)
     if type(identity_attested) is not bool:
@@ -1266,6 +1365,7 @@ def try_store_fulltext(
             identity_note=("identity confirmed by the authenticated operator through "
                            "the controlled task answer"),
             content_version=content_version,
+            arxiv_version_get=arxiv_version_get,
         )
         store_resolver_abstract_if_present(run_dir, ref, resolve_result)
         return {
@@ -1321,6 +1421,7 @@ def try_store_fulltext(
             identity_note=("URL explicitly cited in the manuscript; the retrieved text "
                            "is anchored to that cited URL rather than inferred from "
                            "bibliographic metadata"),
+            arxiv_version_get=arxiv_version_get,
         )
         store_resolver_abstract_if_present(run_dir, ref, resolve_result)
         result = {
@@ -1650,6 +1751,7 @@ def try_store_fulltext(
                 ),
                 content_version=content_version,
                 provenance_relation=provenance_relation,
+                arxiv_version_get=arxiv_version_get,
             )
             result = {
                 "status": "stored",
@@ -1734,6 +1836,7 @@ def try_store_fulltext(
                 ),
                 content_version=content_version,
                 provenance_relation=provenance_relation,
+                arxiv_version_get=arxiv_version_get,
             )
             result = {
                 "status": "stored",
@@ -1849,6 +1952,7 @@ def try_store_fulltext(
         identity_note=identity_note,
         content_version=content_version,
         provenance_relation=provenance_relation,
+        arxiv_version_get=arxiv_version_get,
     )
     store_resolver_abstract_if_present(run_dir, ref, resolve_result)
     result = {

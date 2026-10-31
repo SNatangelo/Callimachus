@@ -9,6 +9,7 @@ import json
 import os
 import socket
 import struct
+import time
 from typing import Any
 
 from .authority import AUTHORITY_PROTOCOL_VERSION, AuthorityError
@@ -25,15 +26,27 @@ class AuthorityRejected(AuthorityError):
     pass
 
 
-def _recv_exact(connection: socket.socket, byte_count: int) -> bytes:
+def _recv_exact(
+    connection: socket.socket,
+    byte_count: int,
+    *,
+    deadline: float | None = None,
+) -> bytes:
     chunks = []
     remaining = byte_count
     while remaining:
+        if deadline is not None:
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                raise TimeoutError("integrity authority frame exceeded receive deadline")
+            connection.settimeout(timeout)
         chunk = connection.recv(remaining)
         if not chunk:
             raise AuthorityUnavailable("integrity authority closed an incomplete response")
         chunks.append(chunk)
         remaining -= len(chunk)
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("integrity authority frame exceeded receive deadline")
     return b"".join(chunks)
 
 
@@ -46,14 +59,25 @@ def send_frame(connection: socket.socket, payload: dict[str, Any]) -> None:
     connection.sendall(struct.pack(">Q", len(encoded)) + encoded)
 
 
-def receive_frame(connection: socket.socket) -> dict[str, Any]:
-    size = struct.unpack(">Q", _recv_exact(connection, 8))[0]
-    if size > MAX_FRAME_BYTES:
-        raise AuthorityError("integrity authority frame exceeds the closed size limit")
+def receive_frame(
+    connection: socket.socket,
+    *,
+    deadline: float | None = None,
+) -> dict[str, Any]:
+    previous_timeout = connection.gettimeout() if deadline is not None else None
     try:
-        payload = json.loads(_recv_exact(connection, size).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise AuthorityUnavailable("integrity authority returned malformed JSON") from exc
+        size = struct.unpack(">Q", _recv_exact(connection, 8, deadline=deadline))[0]
+        if size > MAX_FRAME_BYTES:
+            raise AuthorityError("integrity authority frame exceeds the closed size limit")
+        try:
+            payload = json.loads(
+                _recv_exact(connection, size, deadline=deadline).decode("utf-8")
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise AuthorityUnavailable("integrity authority returned malformed JSON") from exc
+    finally:
+        if deadline is not None:
+            connection.settimeout(previous_timeout)
     if not isinstance(payload, dict):
         raise AuthorityUnavailable("integrity authority response is not an object")
     return payload
@@ -164,7 +188,7 @@ class IntegrityAuthorityClient:
         return self._worker_request("enroll", run_dir)
 
     def check(self, run_dir: str) -> dict[str, Any]:
-        return self.request("check", run_dir=run_dir)
+        return self._worker_request("check", run_dir)
 
     def begin_transition(
         self,
@@ -217,8 +241,8 @@ class IntegrityAuthorityClient:
             worker_capability=self._admin_capability,
         )
 
-    def check_content_store(self) -> dict[str, Any]:
-        return self.request("content_store_check")
+    def check_content_store(self, run_dir: str) -> dict[str, Any]:
+        return self._worker_request("content_store_check", run_dir)
 
     def begin_content_store_transition(
         self, run_dir: str, transition_id: str

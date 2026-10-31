@@ -3,41 +3,23 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Claude CLI backend — subprocess via the ``claude`` CLI tool."""
 import json
-import os
-import shutil
 import subprocess
 
+from core.infra._local_executables import cli_argv, cli_environment, find_cli
 from core.verify.backends._chat_transport import llm_timeout
 from core.verify.backends._registry import BackendSpec, register
-from core.verify.backends.errors import cli_failure_error, cli_timeout_error
+from core.verify.backends.errors import ConfigError, cli_failure_error, cli_timeout_error
 
 
 def _resolve_cli() -> str:
-    nt = os.name == "nt"
-    if nt:
-        exe = shutil.which("claude.exe")
-        if exe:
-            return exe
-    exe = shutil.which("claude")
-    if exe and nt and exe.upper().endswith(".CMD"):
-        base = os.path.dirname(exe)
-        candidate = os.path.join(
-            base, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe",
-        )
-        if os.path.exists(candidate):
-            return os.path.abspath(candidate)
-        fallback = shutil.which("claude.exe")
-        if fallback:
-            return fallback
-    if exe:
-        return exe
-    if nt:
-        exe = shutil.which("claude.cmd")
-    return exe or "claude"
+    exe = find_cli("claude")
+    if exe is None:
+        raise ConfigError("Claude CLI was not found in supported installation locations.", backend="claude_cli")
+    return exe
 
 
 def _available() -> bool:
-    return shutil.which("claude") is not None
+    return find_cli("claude") is not None
 
 
 def _call_cli(system: str, user: str, model: str | None, max_tokens: int = 1500) -> str:
@@ -56,8 +38,10 @@ def _call_cli(system: str, user: str, model: str | None, max_tokens: int = 1500)
         cmd += ["--model", model]
     timeout = llm_timeout()
     try:
-        p = subprocess.run(cmd, input=user, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout)
+        child_env = cli_environment("claude")
+        p = subprocess.run(cli_argv(cmd, child_env), input=user, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=timeout,
+                           env=child_env)
     except subprocess.TimeoutExpired:
         raise cli_timeout_error("claude_cli", timeout)
     if p.returncode != 0:
@@ -72,6 +56,7 @@ def _call_cli(system: str, user: str, model: str | None, max_tokens: int = 1500)
 register(BackendSpec(
     name="claude_cli",
     env_key="",  # no API key — relies on claude CLI login
+    env_model="CLAUDE_CLI_MODEL",
     available=_available,
     call=_call_cli,
     requires_model=False,

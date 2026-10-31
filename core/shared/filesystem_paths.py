@@ -1,3 +1,6 @@
+# core/shared/filesystem_paths.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Windows extended paths for filesystem I/O, with logical-path projection."""

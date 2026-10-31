@@ -1,5 +1,5 @@
 ---
-name: citation-verifier
+name: Callimachus
 description: >-
   Verifies the citations of a manuscript (.docx, LaTeX/.tex, .pdf, .md, .txt, .html):
   for each source it checks that it EXISTS (DOI/PubMed/web, incl. retraction), that it is

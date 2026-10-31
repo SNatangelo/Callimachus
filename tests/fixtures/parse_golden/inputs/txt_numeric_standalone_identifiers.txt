@@ -1,0 +1,6 @@
+Standalone identifiers are supported [1] and [2].
+
+References
+
+[1] 10.1038/example.123
+[2] https://example.org/report

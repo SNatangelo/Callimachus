@@ -1,0 +1,674 @@
+{
+  "topics": [
+    {
+      "id": "start",
+      "category": "La prima analisi",
+      "title": "Prepara la tua prima analisi",
+      "lead": "Parti dal manoscritto, poi scegli come eseguire la verifica.",
+      "steps": [
+        [
+          "Scegli il manoscritto",
+          "Nella schermata Analisi scegli un file oppure trascinalo nel riquadro. Controlla il nome prima di partire: la Libreria delle fonti e il manoscritto da analizzare sono due cose diverse."
+        ],
+        [
+          "Prepara i Jury",
+          "Apri Jury 1 e Jury 2, configura i provider che vuoi usare e seleziona i modelli. Le credenziali sono condivise per provider; le assegnazioni dei due Jury restano indipendenti."
+        ],
+        [
+          "Rivedi le Opzioni",
+          "Controlla la modalità e le scelte di revisione manuale e recupero. Qui trovi anche la severità di Jury 2. Se il recupero richiede un accesso istituzionale, prepara la sessione prevista."
+        ],
+        [
+          "Avvia e segui le fasi",
+          "Avvia l’analisi e leggi l’attività in corso. Callimachus può fermarsi per chiedere di distinguere riferimenti, fornire un testo o controllare l’identità di un documento."
+        ],
+        [
+          "Apri e leggi il report",
+          "Alla fine apri il report e controlla esiti e copertura. Ritroverai la run nella Cronologia; il completamento non significa che ogni affermazione sia supportata."
+        ]
+      ],
+      "notice": "Se hai selezionato dei Jury, la run controlla che rispondano prima di partire.",
+      "related": "Vedi anche: configurare i modelli e accesso istituzionale.",
+      "faq": [
+        [
+          "Devo configurare tutte le chiavi?",
+          "Configura i servizi e i provider che vuoi usare. Un campo dedicato a un servizio non configura gli altri; controlla separatamente i modelli selezionati per ciascun Jury."
+        ],
+        [
+          "Posso fermarmi e tornare più tardi?",
+          "Le azioni disponibili dipendono dallo stato della run. Leggi l’avviso prima di interrompere e usa la Cronologia per ritrovare il lavoro; Riprendi è disponibile quando quello stato lo consente."
+        ]
+      ],
+      "example": [
+        "Prima di premere Avvia",
+        "Manoscritto: revisione-letteratura.docx. Jury 1: modelli selezionati. Jury 2: modelli selezionati. Opzioni: revisioni manuali ammesse. Il nome del file e le selezioni devono corrispondere al lavoro che vuoi iniziare."
+      ],
+      "links": [
+        "models",
+        "workflow",
+        "services"
+      ]
+    },
+    {
+      "id": "workflow",
+      "category": "Orientarsi · Le cinque fasi",
+      "title": "Cosa succede durante l’analisi",
+      "lead": "La barra delle fasi ti dice dove sei. Le richieste di revisione indicano quando serve una tua scelta.",
+      "steps": [
+        [
+          "Parse · riconoscere citazioni e bibliografia",
+          "Callimachus legge il manoscritto e collega le citazioni ai riferimenti. Se un collegamento è ambiguo può chiederti di scegliere un candidato: controlla il testo citato prima di decidere."
+        ],
+        [
+          "Risoluzione · identificare le opere",
+          "I riferimenti vengono confrontati con i dati bibliografici disponibili. Titolo, autori, anno e identificatori aiutano a distinguere opere simili. Identificare un’opera non significa averne già ottenuto il testo."
+        ],
+        [
+          "Recupero · ottenere il contenuto",
+          "L’app cerca i testi disponibili. Quando serve, il Fetch assistito ti permette di fornire il documento o un abstract. Le scansioni possono richiedere l’OCR; i materiali acquisiti devono ancora superare i controlli."
+        ],
+        [
+          "Verifica · confrontare affermazioni ed evidenze",
+          "La verifica usa il materiale ammesso per valutare le affermazioni. Leggi ogni esito insieme al passaggio citato e alla spiegazione: un errore tecnico non è un giudizio sul contenuto."
+        ],
+        [
+          "Report · leggere il risultato",
+          "Il report raccoglie esiti, copertura e provenienza delle evidenze. Anche una run completata può contenere fonti non disponibili o valutazioni non decidibili."
+        ]
+      ],
+      "notice": "Una fase conclusa descrive l’avanzamento del lavoro, non la correttezza scientifica di tutte le citazioni.",
+      "faq": [
+        [
+          "Perché chiede un intervento invece di scegliere da solo?",
+          "Alcuni collegamenti o documenti non possono essere confermati con i dati disponibili. La richiesta serve a rendere esplicita la decisione e a conservare la sua provenienza."
+        ],
+        [
+          "Una fonte risolta è già pronta per la verifica?",
+          "Non necessariamente. Risoluzione bibliografica, disponibilità del testo e ammissione del documento sono passaggi distinti."
+        ]
+      ],
+      "links": [
+        "identity",
+        "fetch",
+        "report"
+      ]
+    },
+    {
+      "id": "models",
+      "category": "Prima di iniziare · Modelli e Jury",
+      "title": "Scegli i modelli per la verifica",
+      "lead": "I due Jury possono usare modelli diversi. Le scelte dei modelli sono indipendenti; le credenziali dello stesso provider sono condivise.",
+      "steps": [
+        [
+          "Apri il selettore del Jury",
+          "Dalla schermata Analisi apri Jury 1 o Jury 2. Il titolo del selettore indica quale gruppo stai modificando."
+        ],
+        [
+          "Configura il provider",
+          "Seleziona il servizio e inserisci le credenziali o l’endpoint richiesti. Per gli strumenti CLI usa l’accesso previsto dallo strumento. Il pulsante di controllo serve a verificare la configurazione disponibile."
+        ],
+        [
+          "Seleziona i modelli",
+          "Spunta i modelli che vuoi usare per quel Jury. Il conteggio nella navigazione aiuta a ritrovare le selezioni, anche quando provengono da provider diversi."
+        ],
+        [
+          "Controlla il secondo Jury e le Opzioni",
+          "Chiudi il selettore e rivedi l’altro Jury. La severità di Jury 2 si modifica nelle Opzioni della schermata Analisi."
+        ]
+      ],
+      "notice": "Salvare una chiave non seleziona automaticamente un modello. Controlla entrambi i Jury prima di avviare.",
+      "faq": [
+        [
+          "Se cambio provider perdo le altre selezioni?",
+          "I modelli già selezionati negli altri provider restano nel Jury. I conteggi aiutano a controllare l’intero gruppo, non solo la pagina che stai guardando."
+        ],
+        [
+          "Perché il catalogo è vuoto?",
+          "Leggi prima lo stato del controllo: il catalogo può non essere stato richiesto, essere in caricamento oppure non essere disponibile con la configurazione corrente. Un elenco vuoto, da solo, non spiega il motivo."
+        ],
+        [
+          "Dove cambio la severità di Jury 2?",
+          "Nelle Opzioni della schermata principale Analisi. Le impostazioni del provider e le scelte dei modelli rimangono nel selettore Jury."
+        ]
+      ],
+      "links": [
+        "start",
+        "services"
+      ]
+    },
+    {
+      "id": "identity",
+      "category": "Identificare le fonti",
+      "title": "Scegli tra due riferimenti ambigui",
+      "lead": "Quando il collegamento non è certo, Callimachus chiede una decisione.",
+      "steps": [
+        [
+          "Distingui la richiesta",
+          "Una scelta tra riferimenti collega una citazione alla bibliografia; un controllo d’identità confronta invece il documento recuperato con l’opera cercata. Leggi quale delle due decisioni viene richiesta."
+        ],
+        [
+          "Leggi il contesto e confronta i dati",
+          "Per la citazione guarda il testo del manoscritto. Per il documento controlla titolo, autori, anno, identificatori e i dettagli disponibili. Non basarti solo sul nome del file."
+        ],
+        [
+          "Scegli solo con elementi sufficienti",
+          "Se due opere hanno stesso autore e anno, usa titolo e contesto per distinguerle. Nessun candidato è una scelta corretta solo perché compare per primo."
+        ],
+        [
+          "Conferma o lascia irrisolto",
+          "Conferma il collegamento sostenuto dai dati. Se non puoi stabilirlo, lascia la richiesta aperta oppure usa l’azione prevista per proseguire senza una conferma: l’incertezza deve rimanere visibile."
+        ]
+      ],
+      "notice": "Il contenuto del documento non viene riscritto per farlo corrispondere a una fonte.",
+      "related": "Vedi anche: confermare l’identità di un PDF.",
+      "example": [
+        "Due opere dello stesso autore e anno",
+        "Il manoscritto cita «Rossi, 2026». La bibliografia contiene «Decisioni condivise» e «Metodi di valutazione». Se la frase parla di partecipazione del paziente, confronta il contesto e i dati delle opere: autore e anno, da soli, non bastano."
+      ],
+      "faq": [
+        [
+          "Il titolo è simile: posso confermare?",
+          "Un titolo simile è un indizio da confrontare con gli altri dati. Controlla almeno autori, anno e l’eventuale identificatore; se restano differenze sostanziali non forzare la corrispondenza."
+        ],
+        [
+          "Gli avvisi di revisione provano che la fonte è inventata?",
+          "No. Indicano che serve una verifica. Leggi le evidenze registrate e lascia visibile l’incertezza quando i dati non consentono una conclusione."
+        ]
+      ],
+      "links": [
+        "fetch",
+        "coverage"
+      ]
+    },
+    {
+      "id": "fetch",
+      "category": "Recuperare i testi · Fetch assistito",
+      "title": "Fornire un testo mancante",
+      "lead": "Usa un documento che corrisponde alla fonte citata. La scelta tra Full text e Abstract descrive il contenuto che stai fornendo.",
+      "steps": [
+        [
+          "Seleziona la fonte",
+          "Scegli il riferimento nella lista. Confronta titolo, autori, anno e i dettagli registrati: il documento deve corrispondere all’opera citata."
+        ],
+        [
+          "Apri o acquisisci il documento",
+          "Usa il browser di sistema oppure Chrome assistito. In Chrome assistito l’acquisizione si effettua dalla sua barra con Cattura PDF o HTML. Puoi anche scegliere direttamente un file locale."
+        ],
+        [
+          "Indica che cosa stai fornendo",
+          "Scegli Full text per il documento completo oppure Abstract per il riassunto. Dopo la scelta del file la preparazione parte automaticamente: non serve una seconda conferma."
+        ],
+        [
+          "Leggi il testo e lo stato",
+          "Apri Anteprima. Il pulsante Full text o Abstract a destra del titolo apre il testo estratto in una finestra di lettura. Se il titolo è abbreviato, il passaggio del mouse mostra quello completo."
+        ],
+        [
+          "Attendi, scarta oppure continua",
+          "Attendi gli eventuali controlli o l’OCR. Scarta annulla la fonte appena fornita; è inattivo finché non ne hai fornita una. Quando continui saltando i recuperi rimasti, quei testi restano non disponibili per la verifica."
+        ]
+      ],
+      "notice": "Un documento acquisito viene controllato prima di essere usato nella verifica.",
+      "related": "Vedi anche: identità della fonte e OCR.",
+      "faq": [
+        [
+          "Ho già fornito il PDF: perché vedo “in coda”?",
+          "Il file è stato fornito ma può attendere estrazione, OCR o altri controlli. Non è ancora una conferma che il documento sia ammesso alla verifica."
+        ],
+        [
+          "Posso fornire solo l’abstract?",
+          "Sì, scegli Abstract quando stai fornendo quel tipo di contenuto. Il suo limite rimane registrato; non viene trasformato in testo completo."
+        ],
+        [
+          "Non riesco a recuperare la fonte: posso continuare?",
+          "Usa l’azione prevista per continuare saltando i recuperi rimasti e leggi la conferma. I testi mancanti restano non disponibili; l’app non inventa il contenuto della fonte."
+        ]
+      ],
+      "links": [
+        "ocr",
+        "identity",
+        "coverage"
+      ]
+    },
+    {
+      "id": "ocr",
+      "category": "Recuperare i testi · PDF scansionati",
+      "title": "Quando serve l’OCR",
+      "lead": "L’OCR prova a trasformare le immagini di una scansione in testo. Il risultato va controllato prima di usarlo come evidenza.",
+      "steps": [
+        [
+          "Fornisci il documento della fonte",
+          "Nel Fetch assistito seleziona il riferimento corretto e scegli il PDF. Controlla prima titolo, autori e contenuto: una scansione leggibile dell’opera sbagliata resta la fonte sbagliata."
+        ],
+        [
+          "Leggi lo stato del PDF",
+          "Un documento composto da immagini può comparire tra quelli da elaborare con OCR. Non scegliere Abstract per aggirare un problema di estrazione: il tipo deve descrivere ciò che stai fornendo."
+        ],
+        [
+          "Avvia l’elaborazione disponibile",
+          "Usa Esegui OCR per i documenti in coda e attendi il risultato. Durante l’elaborazione controlla la fonte e il messaggio di attività."
+        ],
+        [
+          "Controlla il testo estratto",
+          "Apri l’Anteprima e premi Full text per leggere il testo in una finestra più ampia. Cerca errori evidenti in parole, numeri, simboli e ordine dei paragrafi."
+        ],
+        [
+          "Risolvi le richieste rimaste",
+          "Il testo estratto può essere ancora in attesa dei controlli Fetch o di una decisione sull’identità. Prima di continuare attendi l’elaborazione o scarta il documento che hai fornito."
+        ]
+      ],
+      "notice": "“Testo estratto” non equivale a “fonte ammessa”. L’OCR non conferma l’identità dell’opera né la correttezza della citazione.",
+      "example": [
+        "Una scansione non è ancora testo verificabile",
+        "Nel PDF si legge «Il campione comprende 120 pazienti». L’estrazione OCR può confondere un numero o una lettera, per esempio «I20». Controlla il passaggio sul documento originale prima di fare affidamento sul testo estratto."
+      ],
+      "faq": [
+        [
+          "Posso usare l’OCR per un PDF già testuale?",
+          "Segui il risultato dei controlli sul file. Il semplice fatto che un PDF sia visualizzabile non dice se l’estrazione del testo è riuscita bene."
+        ],
+        [
+          "Il testo è incompleto o disordinato: che faccio?",
+          "Confronta la scansione, in particolare tabelle, colonne e simboli. Se il materiale non è utilizzabile, cerca una copia migliore oppure lascia il recupero non disponibile secondo le azioni dell’app."
+        ],
+        [
+          "“OCR completato” equivale a fonte confermata?",
+          "No. Estrazione, identità e ammissione sono controlli distinti. Leggi sempre lo stato della fonte prima di continuare."
+        ]
+      ],
+      "links": [
+        "fetch",
+        "coverage",
+        "trouble"
+      ]
+    },
+    {
+      "id": "report",
+      "category": "Leggere il report",
+      "title": "Distingui gli esiti della verifica",
+      "lead": "Il completamento della run e l’esito delle singole citazioni sono due informazioni distinte.",
+      "steps": [
+        [
+          "Parti dal quadro generale",
+          "Controlla il manoscritto e lo stato della run. Il riepilogo serve a orientarti: “Verifica completata” descrive la conclusione del processo, non un’approvazione di tutte le citazioni."
+        ],
+        [
+          "Leggi l’affermazione e l’evidenza insieme",
+          "Per ogni valutazione confronta la frase del manoscritto con il passaggio disponibile della fonte e con la motivazione registrata. Un testo sullo stesso argomento può non sostenere quella specifica affermazione."
+        ],
+        [
+          "Filtra gli elementi da rivedere",
+          "Usa i filtri anche in combinazione per ritrovare esiti parziali, non decidibili o fuori tema. Gli errori tecnici rimangono separati dai giudizi sul contenuto."
+        ],
+        [
+          "Controlla copertura e provenienza",
+          "Prima di concludere, verifica se erano disponibili il full text, un abstract oppure nessun testo, e quale documento è stato effettivamente usato."
+        ],
+        [
+          "Conserva o condividi il report",
+          "Puoi ritrovare il report dalla Cronologia ed esportarne una copia. L’esportazione del report non include i testi completi delle fonti."
+        ]
+      ],
+      "notice": "“Verifica completata” non significa che tutte le citazioni siano supportate.",
+      "related": "Vedi anche: provenienza dei testi e condivisione del report.",
+      "glossary": [
+        [
+          "Supportata",
+          "Il materiale esaminato sostiene l’affermazione nel contesto valutato."
+        ],
+        [
+          "Parziale",
+          "Il sostegno riguarda solo una parte, o richiede una precisazione importante."
+        ],
+        [
+          "Contraddetta",
+          "Le evidenze registrate sono in contrasto con l’affermazione."
+        ],
+        [
+          "Correlata",
+          "Il materiale tratta un tema collegato, senza sostenere direttamente l’affermazione."
+        ],
+        [
+          "Off topic",
+          "Il contenuto esaminato non affronta la specifica affermazione."
+        ],
+        [
+          "Non decidibile",
+          "Le evidenze disponibili non consentono una valutazione sufficiente."
+        ],
+        [
+          "Errore tecnico",
+          "Un problema operativo ha impedito il controllo: resta distinto da un giudizio sul contenuto."
+        ]
+      ],
+      "faq": [
+        [
+          "Devo correggere automaticamente ogni citazione segnalata?",
+          "Prima leggi il passaggio e la spiegazione, confrontali con la fonte e valuta la modifica nel contesto del manoscritto. Il report rende ispezionabile il controllo; non sostituisce la tua revisione."
+        ],
+        [
+          "Tutti i modelli concordano?",
+          "Controlla i risultati registrati per i modelli e le valutazioni disponibili. Non dedurre l’unanimità dal solo stato complessivo della run."
+        ]
+      ],
+      "links": [
+        "coverage",
+        "resume"
+      ]
+    },
+    {
+      "id": "coverage",
+      "category": "Leggere i risultati · Copertura",
+      "title": "Quanto testo era disponibile?",
+      "lead": "La copertura descrive il materiale disponibile per la verifica. Va letta insieme agli esiti, non sostituita da essi.",
+      "steps": [
+        [
+          "Distingui identità e disponibilità",
+          "Una fonte può essere identificata con sicurezza senza avere un testo utilizzabile. Al contrario, un file può essere stato fornito ma attendere ancora i controlli sull’identità."
+        ],
+        [
+          "Controlla il tipo di testo",
+          "Full text indica un testo completo disponibile. Abstract indica una disponibilità limitata al riassunto o al materiale di quel livello. Nessun testo segnala che manca contenuto utilizzabile per quella fonte."
+        ],
+        [
+          "Leggi i limiti dell’esito",
+          "Un abstract può non contenere il metodo, un dato o una precisazione presenti nell’articolo. Se il materiale non basta, l’esito va letto come limitato o non decidibile secondo le evidenze registrate."
+        ],
+        [
+          "Apri i dettagli della fonte",
+          "Verifica quale documento e quale passaggio sono stati usati. Il report permette di distinguere un limite del materiale da un problema tecnico."
+        ]
+      ],
+      "notice": "Full text descrive la disponibilità del testo: non è un bollino di qualità né un esito positivo.",
+      "glossary": [
+        [
+          "Identità",
+          "Quale opera è stata riconosciuta e con quali evidenze."
+        ],
+        [
+          "Full text",
+          "Testo completo disponibile, con i controlli di ammissione richiesti."
+        ],
+        [
+          "Abstract",
+          "Contenuto limitato al riassunto o al livello indicato."
+        ],
+        [
+          "Nessun testo",
+          "Nessun contenuto utilizzabile disponibile per la fonte."
+        ],
+        [
+          "In coda / OCR",
+          "Attività ancora da completare; non equivale a testo ammesso."
+        ]
+      ],
+      "example": [
+        "Una limitazione da conservare nel report",
+        "L’abstract descrive un’associazione, ma non riporta l’analisi del sottogruppo citato nel manoscritto. La presenza dell’abstract non permette di presumere il risultato mancante."
+      ],
+      "faq": [
+        [
+          "Copertura completa significa citazioni corrette?",
+          "No. Disporre del testo permette il confronto, ma il suo risultato può essere positivo, parziale, negativo o non decidibile."
+        ]
+      ],
+      "links": [
+        "report",
+        "fetch"
+      ]
+    },
+    {
+      "id": "resume",
+      "category": "Cronologia · Ripresa",
+      "title": "Riprendi un lavoro precedente",
+      "lead": "La Cronologia conserva le analisi e le azioni disponibili per ciascuna run.",
+      "steps": [
+        [
+          "Apri la Cronologia",
+          "Seleziona l’analisi da riprendere. I suoi dettagli vengono caricati quando li richiedi."
+        ],
+        [
+          "Controlla il punto raggiunto",
+          "Leggi la fase e lo stato prima di scegliere l’azione. Una verifica completata può contenere esiti diversi."
+        ],
+        [
+          "Usa Riprendi",
+          "Se disponibile, Riprendi continua la run dal punto raggiunto. Le richieste ancora aperte tornano nella schermata di revisione."
+        ],
+        [
+          "Distingui ripresa e nuova analisi",
+          "Prima di iniziare un altro lavoro controlla il manoscritto selezionato. Usa la Cronologia per tornare alla run precedente e leggi quali azioni sono disponibili per il suo stato."
+        ]
+      ],
+      "notice": "La ripresa riguarda la run selezionata: controlla il nome del manoscritto.",
+      "related": "Vedi anche: analisi interrotta e report.",
+      "faq": [
+        [
+          "Riprendi è disattivato: è un errore?",
+          "Non necessariamente. Le azioni dipendono dallo stato e dai dati disponibili per la run selezionata. Una run terminata può offrire azioni sul report anziché la ripresa."
+        ],
+        [
+          "Riprendi ultimo e la riga che ho selezionato sono la stessa cosa?",
+          "Riprendi ultimo riguarda la run individuata come più recente; l’azione nella Cronologia riguarda la run che hai selezionato. Controlla sempre il nome del manoscritto."
+        ]
+      ],
+      "links": [
+        "report",
+        "trouble",
+        "library"
+      ]
+    },
+    {
+      "id": "library",
+      "category": "Ritrovare il lavoro · Libreria",
+      "title": "Gestisci i documenti nella Libreria",
+      "lead": "La Libreria riguarda le fonti conservate. La Cronologia riguarda le analisi eseguite sui manoscritti.",
+      "steps": [
+        [
+          "Cerca una fonte",
+          "Usa la ricerca e il filtro di disponibilità per trovare il documento. Titolo, autore e anno aiutano a distinguere record simili."
+        ],
+        [
+          "Importa paper",
+          "Scegli Importa paper per aggiungere documenti con il testo integrale. Il selettore segue i lettori di documenti abilitati in Callimachus. Durante l’importazione segui i messaggi di lettura, estrazione e controllo; un caricamento ancora in corso non è una fonte pronta."
+        ],
+        [
+          "Controlla le revisioni pendenti",
+          "Se il pulsante Revisioni pendenti segnala elementi da rivedere, aprili e confronta le informazioni disponibili prima di confermare l’identità."
+        ],
+        [
+          "Usa con attenzione le azioni di pulizia",
+          "Seleziona le voci a cui applicare un’azione e leggi la conferma. Svuota cache è un comando di pulizia distinto dalla consultazione delle fonti."
+        ]
+      ],
+      "notice": "Un documento presente nella Libreria non garantisce che sia quello citato in un nuovo manoscritto: conta il collegamento verificato per quella run.",
+      "faq": [
+        [
+          "Libreria e Cronologia contengono le stesse cose?",
+          "No. La prima raccoglie documenti delle fonti; la seconda raccoglie analisi, stati e report dei manoscritti."
+        ],
+        [
+          "Perché ci sono documenti da rivedere dopo l’importazione?",
+          "Il documento è stato acquisito, ma alcuni dati possono richiedere una decisione sull’identità. Controlla i dettagli prima di confermare."
+        ]
+      ],
+      "links": [
+        "identity",
+        "fetch",
+        "resume"
+      ]
+    },
+    {
+      "id": "trouble",
+      "category": "Risolvere un problema",
+      "title": "Capisci perché l’analisi è in attesa",
+      "lead": "Parti dal messaggio mostrato dall’app, senza perdere il lavoro già acquisito.",
+      "steps": [
+        [
+          "Controlla la fase",
+          "La barra delle fasi indica dove si trova l’analisi. La riga della fonte mostra l’attività in corso."
+        ],
+        [
+          "Leggi la richiesta",
+          "Potrebbe servire un testo, una scelta tra riferimenti o un controllo della connessione ai modelli."
+        ],
+        [
+          "Risolvi e continua",
+          "Completa la richiesta oppure usa l’azione disponibile per lasciare l’elemento irrisolto. Un PDF ancora in elaborazione va atteso o scartato prima di continuare."
+        ]
+      ],
+      "notice": "Un errore tecnico resta distinto da un esito negativo della verifica.",
+      "related": "Vedi anche: recupero della run e controlli dei servizi.",
+      "faq": [
+        [
+          "L’analisi sembra ferma su una fonte",
+          "Controlla l’attività in corso, le richieste di revisione e gli eventuali documenti ancora in elaborazione. Un’attesa non dimostra da sola che la run sia bloccata."
+        ],
+        [
+          "Il PDF si apre, ma il testo non viene letto",
+          "Potrebbe essere una scansione o un’estrazione non utilizzabile. Leggi lo stato del file, controlla l’anteprima e consulta PDF scansionati e OCR."
+        ],
+        [
+          "Non posso premere Continua",
+          "Leggi il messaggio accanto al comando. Può esserci un’elaborazione ancora attiva o una decisione da risolvere. Attendi o usa l’azione di scarto prevista per il documento fornito."
+        ],
+        [
+          "Il programma si è chiuso durante un’operazione",
+          "Riapri l’app e controlla la run nella Cronologia. Annota il punto raggiunto e l’ultima azione eseguita; non presumere che l’operazione in corso sia stata completata."
+        ],
+        [
+          "Il testo è troppo piccolo o il tema non è leggibile",
+          "Apri Impostazioni → Generali → Personalizzazione. Regola la dimensione o usa Ripristina e verifica il tema scelto."
+        ],
+        [
+          "Quali informazioni sono utili per descrivere un problema?",
+          "Annota schermata, fase, azione, messaggio completo e possibilità di ripetere il problema. Se condividi console o immagini, escludi chiavi e altri dati riservati."
+        ]
+      ],
+      "links": [
+        "ocr",
+        "services",
+        "resume"
+      ]
+    },
+    {
+      "id": "services",
+      "category": "Risolvere un problema · Chiavi e connessioni",
+      "title": "Se una chiave o un servizio non risponde",
+      "lead": "Parti dal servizio indicato nel messaggio. I servizi bibliografici e i provider dei Jury usano configurazioni distinte.",
+      "steps": [
+        [
+          "Individua il campo corretto",
+          "Apri Impostazioni e cerca il nome del servizio, della chiave o del controllo. La ricerca considera nomi e descrizioni, non il contenuto delle credenziali. Scegli un risultato per raggiungere il campo; per le chiavi dei modelli si apre il relativo provider nel selettore Jury."
+        ],
+        [
+          "Controlla il valore completo",
+          "Se devi sostituire una chiave, inserisci il valore completo nel campo. Evita spazi aggiuntivi e controlla che la credenziale appartenga proprio al servizio scelto."
+        ],
+        [
+          "Usa il controllo del servizio",
+          "Leggi il risultato del controllo dopo la modifica. Un vecchio messaggio positivo non conferma una chiave che è stata cambiata successivamente."
+        ],
+        [
+          "Segui il messaggio specifico",
+          "Una chiave rifiutata, una configurazione del servizio e un errore di rete richiedono verifiche diverse. Un codice generico come 400, da solo, non identifica la causa."
+        ]
+      ],
+      "notice": "Non inserire chiavi API nei manoscritti, nelle note di revisione o negli screenshot da condividere.",
+      "faq": [
+        [
+          "Google Books restituisce 400: la chiave è sbagliata?",
+          "Il solo codice non basta per dirlo. Leggi l’eventuale motivo specifico mostrato dal controllo, verifica di aver inserito la chiave completa nel campo Google Books e controlla la configurazione del servizio sul relativo portale."
+        ],
+        [
+          "Il controllo passa ma il modello non compare",
+          "Il controllo delle credenziali e il caricamento del catalogo sono informazioni diverse. Controlla lo stato del catalogo e la selezione del provider."
+        ],
+        [
+          "Il collegamento richiede l’accesso al sito",
+          "I portali per creare o gestire token possono richiedere l’accesso all’account del servizio. Le credenziali del sito non vanno incollate nel campo destinato al token."
+        ]
+      ],
+      "links": [
+        "models",
+        "trouble",
+        "privacy"
+      ]
+    },
+    {
+      "id": "privacy",
+      "category": "Dati e privacy",
+      "title": "Quali dati vengono usati",
+      "lead": "Le operazioni e i servizi selezionati determinano quali informazioni escono dal computer.",
+      "steps": [
+        [
+          "Servizi bibliografici",
+          "I servizi vengono interrogati per recuperare e identificare i riferimenti."
+        ],
+        [
+          "Modelli di verifica",
+          "I modelli selezionati possono ricevere il materiale necessario alla verifica. Consulta le condizioni del provider."
+        ],
+        [
+          "Sessioni e configurazione",
+          "Le impostazioni includono credenziali e preferenze. Se esporti le impostazioni puoi proteggerle con una password."
+        ]
+      ],
+      "notice": "Se perdi la password di un’esportazione cifrata, il file non è recuperabile.",
+      "related": "Vedi anche: impostazioni, cache browser e credenziali.",
+      "faq": [
+        [
+          "Tutto rimane sul computer?",
+          "Non assumere che sia così: i servizi bibliografici, i provider remoti e gli strumenti selezionati possono comunicare con sistemi esterni. Le operazioni e i modelli scelti determinano quali materiali vengono usati."
+        ],
+        [
+          "Che differenza c’è tra report e backup delle impostazioni?",
+          "Il report descrive i risultati. Un backup delle impostazioni riguarda configurazione e credenziali e va gestito separatamente; puoi proteggerne l’esportazione con una password."
+        ],
+        [
+          "Perché esiste una pulizia della cache del browser?",
+          "Il browser può conservare dati della navigazione e sessioni. Le opzioni di pulizia si trovano nelle impostazioni di acquisizione; verifica la scelta adatta alla sessione che stai usando."
+        ]
+      ],
+      "links": [
+        "services",
+        "report"
+      ]
+    },
+    {
+      "id": "cli",
+      "category": "Riferimento tecnico · CLI",
+      "title": "La documentazione per la CLI",
+      "lead": "Opzioni e dettagli tecnici restano separati dalle istruzioni per l’interfaccia grafica.",
+      "steps": [
+        [
+          "Avvio e comandi",
+          "Riferimento per i comandi disponibili, gli argomenti e i codici di uscita."
+        ],
+        [
+          "Configurazione",
+          "Significato delle variabili e delle opzioni tecniche, con valori predefiniti e vincoli."
+        ],
+        [
+          "Dati e provenienza",
+          "Fasi della pipeline, archivio delle run e controlli di integrità."
+        ]
+      ],
+      "notice": "Questa è una proposta editoriale: la documentazione attuale resta conservata.",
+      "related": "Argomenti separati dalle istruzioni operative della GUI.",
+      "faq": [
+        [
+          "Mi serve la CLI per usare l’app?",
+          "Le operazioni normali hanno i propri comandi nell’interfaccia. Consulta il riferimento tecnico quando devi usare funzioni da terminale o approfondire la configurazione."
+        ],
+        [
+          "Dove trovo gli errori dell’esecuzione?",
+          "La console opzionale si abilita dalle impostazioni Generali. Leggi il messaggio insieme alla fase e all’azione che lo ha prodotto; evita di condividere credenziali nei log."
+        ]
+      ],
+      "links": [
+        "trouble",
+        "models"
+      ]
+    }
+  ]
+}

@@ -2815,8 +2815,40 @@ def _conference_or_online_first(msg: dict, ref: dict) -> bool:
     return conference or online_first
 
 
+def _parsed_title_span_from_raw_entry(ref: dict) -> str | None:
+    """Return a parser-grounded title slice, never an author/venue prefix."""
+    raw = ref.get("raw_entry")
+    parse = ref.get("bibliographic_parse")
+    fields = parse.get("fields") if isinstance(parse, dict) else None
+    title = fields.get("title") if isinstance(fields, dict) else None
+    spans = title.get("spans") if isinstance(title, dict) else None
+    if not isinstance(raw, str) or not isinstance(spans, list):
+        return None
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        start = span.get("start", span.get("raw_start"))
+        end = span.get("end", span.get("raw_end"))
+        raw_value = span.get("raw_value")
+        if (
+            type(start) is not int
+            or type(end) is not int
+            or start < 0
+            or end <= start
+            or end > len(raw)
+            or not isinstance(raw_value, str)
+            or not raw_value
+            or raw[start:end] != raw_value
+        ):
+            continue
+        return raw_value
+    return None
+
+
 def _metadata_match_profile(ref: dict, msg: dict, matched_title: str | None) -> dict:
     raw = ref.get("raw_entry")
+    parsed_title_span = _parsed_title_span_from_raw_entry(ref)
+    raw_title_fallback = parsed_title_span if parsed_title_span is not None else raw
     cited_title = ref.get("title") or _article_title_candidate(ref) or raw
     if _has_structurally_titleless_article_coordinates(ref):
         cited_title = None
@@ -2844,18 +2876,17 @@ def _metadata_match_profile(ref: dict, msg: dict, matched_title: str | None) -> 
         # outside this equivalence.
         title_score = 1.0
     else:
-        # Long parsed titles can be column-interleaved or can name a proceedings
-        # volume instead of the cited paper.  The complete bibliography entry
-        # retains author/title/venue context and was the historically safer
-        # comparison target.  Exact-only short-title handling remains separate.
-        title_score = title_overlap(matched_title, raw)
+        # Keep the legacy recovery for interleaved titles when no precise title
+        # span exists.  A grounded span bounds the comparison to the title field
+        # so the corporate author or venue cannot masquerade as the work title.
+        title_score = title_overlap(matched_title, raw_title_fallback)
         if title_score is None:
             title_score = _title_match_score(cited_title, matched_title)
     if title_score == 0.0 and len(cited_tokens) < TITLE_MIN_TOKENS:
-        # A short parsed title can be a parser truncation while the raw entry
-        # still contains the complete title.  Accept only near-complete raw
-        # containment, which is as discriminating as an exact long-title match.
-        raw_score = title_overlap(matched_title, raw)
+        # A short parsed title can be a parser truncation while its grounded
+        # title span still contains the complete work title. Without that span,
+        # retain the existing raw-entry recovery for OCR/interleaved layouts.
+        raw_score = title_overlap(matched_title, raw_title_fallback)
         if raw_score is not None and raw_score >= 0.95:
             title_score = raw_score
     quote_coverage = _quoted_title_candidate_coverage(ref, matched_title)
@@ -3361,6 +3392,13 @@ def _short_quoted_title_identifier_fallback_match(
         return False
 
 
+_VANCOUVER_BARE_INITIAL_AUTHOR_ITEM = (
+    r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÿ'’-]+"
+    r"(?:\s+[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÿ'’-]+){0,2}"
+    r"\s+(?:[A-Z](?:\s+[A-Z]){0,3}|[A-Z]{2,4})"
+)
+
+
 def _article_title_candidate(ref: dict) -> str | None:
     """Best-effort title candidate from a prose bibliography entry."""
     title = ref.get("title")
@@ -3387,6 +3425,31 @@ def _article_title_candidate(ref: dict) -> str | None:
     if initial_title:
         return initial_title
     parts = [p.strip(" ,;") for p in re.split(r"\.\s+", raw) if p.strip(" ,;")]
+    cited_year = ref.get("year")
+    cited_year_text = (
+        str(cited_year).strip()
+        if isinstance(cited_year, (int, str)) and not isinstance(cited_year, bool)
+        else ""
+    )
+    if (
+        len(parts) == 2
+        and re.fullmatch(r"(?:19|20)\d{2}", cited_year_text)
+        and re.fullmatch(
+            rf"{_VANCOUVER_BARE_INITIAL_AUTHOR_ITEM}"
+            rf"(?:,\s*{_VANCOUVER_BARE_INITIAL_AUTHOR_ITEM})+",
+            parts[0],
+        )
+    ):
+        terminal_title_year = re.fullmatch(
+            r"(?P<title>.+?)\s+(?P<year>(?:19|20)\d{2})\.", parts[1],
+        )
+        if terminal_title_year and terminal_title_year.group("year") == cited_year_text:
+            candidate = terminal_title_year.group("title").strip(" ,;")
+            if (
+                len(_sources._tokens(candidate)) >= TITLE_MIN_TOKENS
+                and not _degraded_title(candidate)
+            ):
+                return candidate
     # In common Vancouver-ish entries: authors. title. journal. year...
     # A ". " split shatters multi-initial author names ("A. M.", "L. M."), so in a
     # Nature-style entry with many authors the title lands several parts out — well
@@ -3582,7 +3645,15 @@ def _title_match_score(cited_title: str | None, matched_title: str | None) -> fl
 
 
 def _article_like_resolution_candidate(ref: dict) -> bool:
-    """Permit academic search for clearly misclassified proceedings only."""
+    """Permit article metadata search without replacing an explicit cited URL."""
+    # Generic cited URLs stay the acquisition target. A literal publisher
+    # article URI can still reach the existing independently validated PII proof.
+    if ref.get("url"):
+        from .bibliographic_adjudication import _publisher_literal_article_uri
+
+        literal_uri = _publisher_literal_article_uri(ref)
+        if literal_uri is None or literal_uri[0] != ref["url"]:
+            return False
     if ref.get("source_type") != "book":
         return bool(_article_title_candidate(ref))
     if ref.get("isbn") or not _article_title_candidate(ref):

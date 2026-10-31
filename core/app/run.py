@@ -26,12 +26,15 @@ from pathlib import Path
 
 from core.app.runtime_paths import (
     application_argv,
+    environment_file,
     is_frozen,
     load_environment_file,
     read_build_metadata,
     resource_root,
+    show_startup_error,
     user_data_root,
 )
+from core.app.settings.credentials import CredentialStoreError
 from core.invocation import run_command
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -45,18 +48,36 @@ _ACTIVE_DRIVER_SESSION: tuple[str, str] | None = None
 _ACTIVE_HEARTBEAT_STOP: threading.Event | None = None
 
 
+def _record_network_permission(event: dict) -> None:
+    """Record an operator decision before an exceptional network connection."""
+    if not _ACTIVE_RUN_DIR:
+        raise RuntimeError("network permission requires an active run")
+    from core.infra.db import RunRepository
+    repo = RunRepository.open(_ACTIVE_RUN_DIR)
+    try:
+        session_id = _ACTIVE_DRIVER_SESSION[1] if _ACTIVE_DRIVER_SESSION else None
+        repo.append_network_permission(event, session_id=session_id)
+    finally:
+        repo.close()
+
+
 def _desktop_control_reader(stream, interrupt=_thread.interrupt_main) -> None:
-    """Translate the desktop's explicit STOP line into the normal Ctrl+C path."""
+    """Accept authenticated network decisions and the desktop's explicit STOP."""
+    from core.fetch.transport import network_consent
     while True:
         try:
             line = stream.readline()
         except (OSError, ValueError):
+            network_consent.cancel_pending()
             return
         if not line:
+            network_consent.cancel_pending()
             return
         if line.rstrip("\r\n") == "STOP":
+            network_consent.cancel_pending()
             interrupt()
             return
+        network_consent.handle_control_line(line)
 
 
 def _stdin_is_interactive() -> bool:
@@ -70,11 +91,14 @@ def _stdin_is_interactive() -> bool:
 
 def _start_desktop_control_reader() -> None:
     """Enable the one-shot control pipe only for the opt-in desktop child."""
+    from core.fetch.transport import network_consent
+    key = os.environ.pop(network_consent.CONTROL_ENV, "")
     if os.environ.pop("CALLIMACHUS_DESKTOP_CONTROL", "") != "1":
         return
     stream = getattr(sys, "stdin", None)
     if stream is None:
         return
+    network_consent.configure(key, getattr(sys, "stderr", None), _record_network_permission)
     threading.Thread(
         target=_desktop_control_reader, args=(stream,), daemon=True,
         name="callimachus-desktop-control",
@@ -175,6 +199,7 @@ def _maybe_run_guided_fetch(
             st["run_dir"],
             submit_source=controller.stage_source,
             proceed=controller.proceed,
+            prepare_proceed=controller.proceed,
             discard_source=controller.discard_source,
             submit_identity_review=controller.submit_identity_decision,
             identity_review_allowed=controller.identity_review_allowed,
@@ -249,6 +274,7 @@ def _maybe_run_guided_fetch(
         st["run_dir"],
         submit_source=controller.stage_source,
         proceed=controller.proceed,
+        prepare_proceed=controller.proceed,
         discard_source=controller.discard_source,
         submit_identity_review=controller.submit_identity_decision,
         identity_review_allowed=controller.identity_review_allowed,
@@ -308,17 +334,19 @@ def _parse_dotenv_line(line: str) -> tuple[str, str] | None:
 
 
 def _load_dotenv(path: str | None = None) -> None:
-    """Load the current local environment format without Verify side effects."""
+    """Load source dotenv or frozen settings without Verify side effects."""
     try:
-        if path is None:
+        if is_frozen():
+            # Installed builds have one fresh settings file and never inspect a
+            # legacy bundled or user .env for fallback or conversion.
+            path = str(environment_file())
+        elif path is None:
             root = resource_root()
             configured_data_root = os.environ.get("CALLIMACHUS_DATA_DIR", "").strip()
             directories = (
                 (user_data_root(),)
-                if configured_data_root or is_frozen()
-                else (
-                    root / "core" / "verify", root / "core", root,
-                )
+                if configured_data_root
+                else (root / "core" / "verify", root / "core", root)
             )
             for directory in directories:
                 for name in (".env", ".env.local"):
@@ -331,11 +359,16 @@ def _load_dotenv(path: str | None = None) -> None:
         if path is None:
             return
         load_environment_file(path)
+    except CredentialStoreError as exc:
+        if is_frozen():
+            show_startup_error(str(exc))
+            raise SystemExit(2) from None
+        raise
     except Exception:
         pass
 
 
-# Load .env at import time so all startup checks see the configured values.
+# Load the current settings at import time so all startup checks see the values.
 _load_dotenv()
 
 if __package__:
@@ -852,7 +885,8 @@ def _drive(st, *, integrity_gate: RunIntegrityGate | None = None):
         try:
             transition.begin()
             transition.install_unit_callback()
-            _ingest_fetch_answers(st)
+            with _progress_phase("fetch"):
+                _ingest_fetch_answers(st)
             transition.commit()
         except IntegrityGateError as exc:
             print(f"[integrity] {exc}", file=sys.stderr)
@@ -1159,7 +1193,7 @@ def _debug_code_snapshot_identity(revision: str | None) -> dict:
             cwd=root,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=10,
+            timeout=30,
         )
         if diff.returncode != 0:
             raise RuntimeError(
@@ -1174,7 +1208,7 @@ def _debug_code_snapshot_identity(revision: str | None) -> dict:
             cwd=root,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=10,
+            timeout=30,
         )
         if untracked.returncode != 0:
             raise RuntimeError(

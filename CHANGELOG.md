@@ -1,5 +1,45 @@
 # Changelog
 
+## 2.0.0 — 2026-10-31
+
+Callimachus 2.0 significantly extends the desktop application, source acquisition, Library management, and model configuration. The GUI, multi-model verification engine, manual review, OCR, history/resume, and redacted HTML export existed in 1.1.x; this release integrates and expands them. The deterministic `parse → resolve → fetch → verify → report` pipeline and its fail-closed evidence boundaries remain in place.
+
+### Added
+
+- **Desktop analysis and review controls:** select Standard, Maximus, or Abstract evidence mode; assign Jury 1 and Jury 2 models independently; inspect claims alongside citation markers and bibliography entries; review footnote sources and ambiguous citation-to-reference associations. Explicitly leave a decision unresolved or finish without an optional manual stage without upgrading an unverified identity.
+- **Library import and identity review:** import single documents, batches, or folders using enabled extractors; review bibliographic metadata; look up exact DOI, PMID, PMCID, arXiv ID, or ISBN coordinates; validate the match before admitting a paper. Keep original bytes, detected format, extracted text, metadata corrections, and provenance available for reuse.
+- **Portable Library archives:** export and import ZIP backups containing originals, bibliographic metadata, and reusable extraction output. Imported items are checked for integrity and individually reported when skipped. These archives do not include credentials, analysis results, or verification authority.
+- **Institutional publisher retrieval:** optionally sign in through a browser and reuse an authenticated session for supported ScienceDirect, SpringerLink, Nature, and Wiley article/PDF paths. Retry sources after signing in; retrieved material remains subject to the normal identity and readability checks.
+- **Model discovery and preflight:** discover supported local/API/CLI environments, inspect available model catalogs, configure and test providers from the desktop, and require a usable response from every selected jury before starting/resuming Verify. Integrations include Claude Code, Codex, Gemini CLI, native Antigravity, qualified OpenCode CLI and Ollama, plus FreeToken on supported platforms. Add xAI/Grok support. Cursor and Copilot CLI may be detected but are not qualified jury routes.
+- **Network access choices:** review and save decisions for supported requests to private destinations and selected proxies, with permission checks before connecting.
+- **In-app bilingual Guide and settings discovery:** access Italian/English help and searchable configuration controls directly in the desktop application.
+
+### Changed
+
+- **Desktop workspace:** reorganize Analysis, Sources, History, Library, and Settings into a consistent responsive interface, with compact list/detail views, light/dark themes, adjustable type, clearer navigation and progress states.
+- **Guided Fetch:** distinguish missing full text, missing abstract/full text, and pending identity review. Retain a dedicated Chrome profile across sessions; support embedded PDF viewers, authenticated PDFs, and visible plain-text capture via the browser clipboard where appropriate. Provide explicit capture/cancellation feedback.
+- **Non-blocking document preparation:** run PDF readability checks, extraction, caching, OCR, and manual source-identity handling in the background. Preserve the correct source association when navigating, replacing a document, cancelling, or resuming staged work; paginate large Library batches.
+- **Analysis continuity and reporting:** keep the report accessible from Analysis and History, resume eligible work, and continue references-only Parse/Resolve output into Fetch/Verify via a child run. Keep the previously available redacted HTML export accessible from the desktop.
+- **Credential/configuration storage in packaged apps:** save non-secret settings in per-user `settings.conf`, seeded from bundled `settings.defaults`; save supported API credentials and the generated local report-signing key in Windows Credential Manager, macOS Keychain, or Linux Secret Service. Add explicit settings export/import/reset, with optional password encryption for backups. Source launches continue to use `.env`/`.env.local`.
+- **Acquisition provenance:** record the actual arXiv version and date fetched and expose them in reports; indicate a newer observed version or a fetched version dated later than the cited publication year.
+- **Fetch and Verify progress:** register planned verification pairs before dispatch, keep progress stable through resumes, and preserve provider attempt and source acquisition evidence across supported interruptions.
+
+### Fixed and hardened
+
+- **Citation parsing and numbering:** recover Word/DOCX automatic reference labels and numbering overrides, separate entries across numbering gaps, handle `[1]Author`, and bind year-adjacent citations such as `2030[1]` without confusing mathematical indexes. Improve title extraction for author-initial, institutional-report, book, news, and preprint reference formats.
+- **Source identity and metadata:** require corroborating citation-title/identifier evidence before a discovered work is admitted. Preserve meaningful symbols (for example, `CD4+` and `CD4-`), respect explicit cited URLs, and prevent unsupported substitutions, stale identity decisions, or mismatched identifiers between review and Library storage.
+- **Manual acquisition and OCR races:** reject stale results from replaced/cancelled files, keep incomplete or unreadable sources unresolved, and restore staged content/provenance without repeating work already completed.
+- **Network and credential boundaries:** validate resolved destinations and redirects, keep restricted endpoints behind their permission checks, reject redirected API-key validation requests, and strengthen Library filesystem and evidence-operation authorization.
+- **Resource and archive handling:** limit metadata/full-document responses, decompression, DOCX ZIP entries and XML processing; reject incomplete or oversized downloads rather than caching partial content as accepted evidence. Improve Windows long-path and Library-file conflict handling.
+- **Run and UI reliability:** repair resumed Jury 2 settings, improve asynchronous task cancellation and error reporting, and keep navigation and state consistent during large imports, history browsing, and report export.
+
+### Upgrade notes
+
+- Existing run databases are not migrated to the 2.0 schema. Historical HTML reports can still be opened and exported as redacted artifacts; this does not revalidate the original analysis.
+- Packaged applications keep non-secret settings separate from the operating-system credential vault. Old plaintext `.env` files are not imported automatically. Source launches retain dotenv support.
+- Library ZIP backups are unencrypted and exclude credentials and run results. Settings backups are separate and support optional password encryption.
+- External services may require accounts, API keys, subscriptions or manual browser access. A completed analysis is not a guarantee of correctness; review its evidence and limitations.
+
 ## 1.1.1 — 2026-10-13
 
 - Improve citation parsing across numeric, author-year and footnote styles,

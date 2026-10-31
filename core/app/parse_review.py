@@ -87,7 +87,9 @@ class ParseReviewController:
         answer = dict(payload)
         answer.setdefault("reason", "")
         resolution = resolve_existing(
-            self.run_dir, None, activate_worker=False,
+            # Authority admission checks integrity and checkpoints the answer
+            # atomically.  The review UI must not acquire a worker capability.
+            self.run_dir, None, activation_only=True, activate_worker=False,
             mirror_audit_records=False, allow_local_downgrade=True,
         )
         gate = resolution.gate

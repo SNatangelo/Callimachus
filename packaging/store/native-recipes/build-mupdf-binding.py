@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/build-mupdf-binding.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Rebuild the MuPDF Python binding against the unchanged older-toolset engine."""
 import os,sys,shutil,types
 from pathlib import Path

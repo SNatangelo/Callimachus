@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 from __future__ import annotations
 
+from copy import deepcopy
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -12,8 +14,28 @@ from core.app.guided_fetch import GuidedFetchController, source_payload
 from core.app.commands import tasks
 
 
+@pytest.fixture(autouse=True)
+def _stub_stage_artifact_io(monkeypatch):
+    """Keep controller unit tests explicit about their fake run/storage seam."""
+    monkeypatch.setattr(
+        guided_fetch,
+        "_store_guided_fetch_stage",
+        lambda _run, **kwargs: {
+            "record": {}, "payload": deepcopy(kwargs["payload"]),
+        },
+    )
+    monkeypatch.setattr(
+        guided_fetch, "_discard_guided_fetch_stage",
+        lambda _run, **_kwargs: {"record": {}},
+    )
+    monkeypatch.setattr(
+        guided_fetch, "_load_guided_fetch_stages",
+        lambda _run: {"latest": {}, "issues": {}},
+    )
+
+
 def _record(task_id: str):
-    return SimpleNamespace(task_id=task_id)
+    return SimpleNamespace(task_id=task_id, task_kind="fetch", generation=0)
 
 
 class _Repo:
@@ -161,7 +183,9 @@ def test_controller_skip_keeps_unprocessed_scan_as_waiver_attachment(monkeypatch
     controller, _repo = _controller(
         [{"task_id": "fetch:r1", "kind": "fetch", "ref_id": "r1"}], admitted
     )
-    monkeypatch.setattr(guided_fetch.provided_fulltext, "pdf_requires_ocr", lambda _path: True)
+    monkeypatch.setattr(
+        guided_fetch.provided_fulltext, "pdf_requires_ocr", lambda _path, **_kwargs: True,
+    )
     scan = tmp_path / "scan.pdf"
     scan.write_bytes(b"%PDF-1.4\n")
     controller.stage_source("r1", source_payload(file_path=str(scan)))
@@ -297,6 +321,79 @@ def test_controller_retry_keeps_only_sources_not_already_admitted():
 
     assert result["proceeded"] is True
     assert admitted == ["fetch:r1", "fetch:r2", "fetch:r2"]
+
+
+def test_completed_ocr_replaces_a_durable_staged_pdf_before_proceeding(
+    monkeypatch, tmp_path,
+):
+    admitted: list[tuple[str, dict]] = []
+    controller, _repo = _controller(
+        [{"task_id": "fetch:r1", "kind": "fetch", "ref_id": "r1"}], admitted
+    )
+    scan = tmp_path / "confirmed.pdf"
+    scan.write_bytes(b"%PDF-1.4 fixture scan")
+    staged_scan = source_payload(file_path=str(scan))
+    event_record = {
+        "action": "stage", "event_id": "a" * 32,
+        "task_id": "fetch:r1", "task_kind": "fetch", "task_generation": 0,
+    }
+    controller._staged["r1"] = staged_scan
+    controller._staged_records["r1"] = event_record
+    monkeypatch.setattr(
+        controller, "_stage_artifact_loader",
+        lambda _run: {
+            "latest": {
+                hashlib.sha256(b"r1").hexdigest(): {
+                    "record": event_record, "payload": staged_scan,
+                },
+            },
+            "issues": {},
+        },
+    )
+    monkeypatch.setattr(
+        guided_fetch.provided_fulltext.parse_extract,
+        "probe_file", lambda _path: None,
+    )
+    monkeypatch.setattr(
+        guided_fetch.provided_fulltext,
+        "list_pending_ocr_scans", lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(controller, "_reference_number", lambda _ref_id: 1)
+    monkeypatch.setattr(
+        guided_fetch.fetch_ocr, "ocr_pdf",
+        lambda *_args, **_kwargs: (
+            "Validated OCR text with enough words for a deterministic test.",
+            "fixture-ocr",
+        ),
+    )
+    monkeypatch.setattr(guided_fetch.fetch_pdf, "_quality", lambda _text: True)
+    text_path = tmp_path / "ocr-result.txt"
+
+    def persist_ocr(_run, **kwargs):
+        result = {
+            "scan_id": kwargs["scan_id"], "ref_id": kwargs["ref_id"],
+            "scan_path": kwargs["scan_path"],
+            "scan_sha256": kwargs["scan_sha256"],
+            "scan_token": kwargs["scan_token"],
+            "source_ref": kwargs["source_ref"],
+            "display_name": kwargs["display_name"],
+            "status": kwargs["status"],
+            "identity_attested": kwargs["identity_attested"],
+            "discarded": False, "text_file_path": None,
+        }
+        if kwargs["status"] == "done":
+            text_path.write_text(kwargs["text"], encoding="utf-8")
+            result["text_file_path"] = str(text_path)
+        return result
+
+    monkeypatch.setattr(tasks, "store_guided_ocr_artifact", persist_ocr)
+
+    artifact = controller._run_one_ocr("r1", None)
+    assert artifact["status"] == "done"
+    controller.proceed()
+
+    assert admitted[0][1]["file_path"] == str(text_path)
+    assert admitted[0][1]["ocr_scan_file_path"] == str(scan)
 
 
 def _identity_view():

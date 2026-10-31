@@ -1,0 +1,2392 @@
+[
+  {
+    "name": "md_numeric_basic",
+    "input": "inputs/md_numeric_basic.md",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "md_numeric_basic.md",
+          "format": "markdown",
+          "citation_mode": "numeric",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "ac8b1c2cef29c245d9d0cbd3f37d06a9e4630214104dd7c70d4db355f4f53911",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "A numeric claim [1].",
+            "context_window": "Manuscript A numeric claim [1]. Another numeric claim [2].",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "[1]",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          },
+          {
+            "id": "claim-002",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Another numeric claim [2].",
+            "context_window": "A numeric claim [1]. Another numeric claim [2].",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "[2]",
+            "marker_numbers": [
+              2
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "Alpha A. Numeric source one. Journal. 2020.",
+            "source_type": "unknown",
+            "source_kind": "unknown",
+            "source_type_confidence": "low",
+            "source_type_evidence": [],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": null,
+            "year": 2020,
+            "bibliographic_parse": {
+              "reader": "none",
+              "version": "1",
+              "status": "unrecognized",
+              "fields": {},
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "alpha",
+            "ay_year": 2020,
+            "ay_suffix": ""
+          },
+          {
+            "id": "ref-002",
+            "ref_number": 2,
+            "raw_entry": "Beta B. Numeric source two. Journal. 2021.",
+            "source_type": "unknown",
+            "source_kind": "unknown",
+            "source_type_confidence": "low",
+            "source_type_evidence": [],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": null,
+            "year": 2021,
+            "bibliographic_parse": {
+              "reader": "none",
+              "version": "1",
+              "status": "unrecognized",
+              "fields": {},
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "beta",
+            "ay_year": 2021,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "claim_id": "claim-001",
+            "ref_id": "ref-001",
+            "ref_number": 1
+          },
+          {
+            "claim_id": "claim-002",
+            "ref_id": "ref-002",
+            "ref_number": 2
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 4,
+            "total_lines": 9,
+            "context": "A numeric claim [1]. Another numeric claim [2].  References  [1] Alpha A. Numeric source one. Journal. 2020."
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": null
+          },
+          "citation_mode": "numeric",
+          "n_sentences": 3,
+          "n_claims": 2,
+          "n_references": 2,
+          "n_markers": 2,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 2,
+            "total": 2,
+            "pct": 100.0,
+            "in_prose": 2,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **markdown**\n- Citation mode: **numeric**\n- Total sentences: **3**\n- Claim sentences (with marker): **2**\n- Total markers: **2**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **2**\n\n- Reference coverage: **2/2 (100.0%)** cited — 2 in prose\n\n## Bibliography cut point\n\n- Cut line: `4` of `9`\n- Context around cut:\n\n> A numeric claim [1]. Another numeric claim [2].  References  [1] Alpha A. Numeric source one. Journal. 2020.\n\n## Claim sentences found (numbered)\n\n1. Manuscript\n2. A numeric claim [1].  ⟵ 1 marker(s)\n3. Another numeric claim [2].  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "txt_numeric_standalone_identifiers",
+    "input": "inputs/txt_numeric_standalone_identifiers.txt",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "txt_numeric_standalone_identifiers.txt",
+          "format": "txt",
+          "citation_mode": "numeric",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "4277090a4592944931d3e083f784baa44f0b76f99a9a39bdf08dc59c5057b70b",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Standalone identifiers are supported [1] and [2].",
+            "context_window": "Standalone identifiers are supported [1] and [2].",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "[1] [2]",
+            "marker_numbers": [
+              1,
+              2
+            ],
+            "is_multisource": true,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "10.1038/example.123",
+            "source_type": "article",
+            "source_kind": "article_like",
+            "source_type_confidence": "high",
+            "source_type_evidence": [
+              "strong_article_identifier"
+            ],
+            "indexability": "high",
+            "doi": "10.1038/example.123",
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": null,
+            "year": null,
+            "bibliographic_parse": {
+              "reader": "generic-text",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "doi": {
+                  "value": "10.1038/example.123",
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 19,
+                      "raw_value": "10.1038/example.123"
+                    }
+                  ],
+                  "rule": "generic-doi-token"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": null,
+            "ay_year": null,
+            "ay_suffix": ""
+          },
+          {
+            "id": "ref-002",
+            "ref_number": 2,
+            "raw_entry": "https://example.org/report",
+            "source_type": "webpage",
+            "source_kind": "report_like",
+            "source_type_confidence": "medium",
+            "source_type_evidence": [
+              "institution_or_report_marker"
+            ],
+            "indexability": "medium",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": "https://example.org/report",
+            "title": null,
+            "year": null,
+            "bibliographic_parse": {
+              "reader": "generic-text",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "url": {
+                  "value": "https://example.org/report",
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 26,
+                      "raw_value": "https://example.org/report"
+                    }
+                  ],
+                  "rule": "generic-url-token"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": null,
+            "ay_year": null,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "claim_id": "claim-001",
+            "ref_id": "ref-001",
+            "ref_number": 1
+          },
+          {
+            "claim_id": "claim-001",
+            "ref_id": "ref-002",
+            "ref_number": 2
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 2,
+            "total_lines": 7,
+            "context": "Standalone identifiers are supported [1] and [2].  References  [1] 10.1038/example.123"
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": null
+          },
+          "citation_mode": "numeric",
+          "n_sentences": 1,
+          "n_claims": 1,
+          "n_references": 2,
+          "n_markers": 2,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 2,
+            "total": 2,
+            "pct": 100.0,
+            "in_prose": 2,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **txt**\n- Citation mode: **numeric**\n- Total sentences: **1**\n- Claim sentences (with marker): **1**\n- Total markers: **2**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **2**\n\n- Reference coverage: **2/2 (100.0%)** cited — 2 in prose\n\n## Bibliography cut point\n\n- Cut line: `2` of `7`\n- Context around cut:\n\n> Standalone identifiers are supported [1] and [2].  References  [1] 10.1038/example.123\n\n## Claim sentences found (numbered)\n\n1. Standalone identifiers are supported [1] and [2].  ⟵ 2 marker(s)\n"
+    }
+  },
+  {
+    "name": "docx_numeric_superscript",
+    "input": "inputs/docx_numeric_superscript.docx",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "docx_numeric_superscript.docx",
+          "format": "docx",
+          "citation_mode": "numeric",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "32411e8e441652c14cc90afd7718079a35eef0b6b38194c7cbd6efafab664593",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Docx superscript claim[1].",
+            "context_window": "Docx superscript claim[1].",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "[1]",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "Gamma G. Superscript source. Journal. 2020.",
+            "source_type": "unknown",
+            "source_kind": "unknown",
+            "source_type_confidence": "low",
+            "source_type_evidence": [],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": null,
+            "year": 2020,
+            "bibliographic_parse": {
+              "reader": "none",
+              "version": "1",
+              "status": "unrecognized",
+              "fields": {},
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "gamma",
+            "ay_year": 2020,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "claim_id": "claim-001",
+            "ref_id": "ref-001",
+            "ref_number": 1
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 1,
+            "total_lines": 3,
+            "context": "Docx superscript claim⟦SUP:1⟧. References [1] Gamma G. Superscript source. Journal. 2020."
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": "markup"
+          },
+          "citation_mode": "numeric",
+          "n_sentences": 1,
+          "n_claims": 1,
+          "n_references": 1,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 1,
+            "pct": 100.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **docx**\n- Citation mode: **numeric**\n- Total sentences: **1**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **1**\n\n- Reference coverage: **1/1 (100.0%)** cited — 1 in prose\n\n## Bibliography cut point\n\n- Cut line: `1` of `3`\n- Context around cut:\n\n> Docx superscript claim⟦SUP:1⟧. References [1] Gamma G. Superscript source. Journal. 2020.\n\n## Claim sentences found (numbered)\n\n1. Docx superscript claim[1].  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "tex_numeric_thebibliography",
+    "input": "inputs/tex_numeric_thebibliography.tex",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "tex_numeric_thebibliography.tex",
+          "format": "latex",
+          "citation_mode": "numeric",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "41cd6b0fbe85b53f1cd96a96c6550119ae9ff682fb98feadd92aa93de031d63b",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "A TeX citation appears here [1].",
+            "context_window": "A TeX citation appears here [1].",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "[1]",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "Alpha A. TeX source. Journal. 2020.",
+            "source_type": "unknown",
+            "source_kind": "unknown",
+            "source_type_confidence": "low",
+            "source_type_evidence": [],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": null,
+            "year": 2020,
+            "bibliographic_parse": {
+              "reader": "none",
+              "version": "1",
+              "status": "unrecognized",
+              "fields": {},
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "alpha",
+            "ay_year": 2020,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "claim_id": "claim-001",
+            "ref_id": "ref-001",
+            "ref_number": 1
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 5,
+            "total_lines": 7,
+            "context": "  References [1] Alpha A. TeX source. Journal. 2020."
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "bib_source": "thebibliography",
+            "unknown_cite_keys": {},
+            "superscript_source": "cite-commands"
+          },
+          "citation_mode": "numeric",
+          "n_sentences": 1,
+          "n_claims": 1,
+          "n_references": 1,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 1,
+            "pct": 100.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **latex**\n- Citation mode: **numeric**\n- LaTeX bibliography from: `thebibliography`\n- Total sentences: **1**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **1**\n\n- Reference coverage: **1/1 (100.0%)** cited — 1 in prose\n\n## Bibliography cut point\n\n- Cut line: `5` of `7`\n- Context around cut:\n\n>   References [1] Alpha A. TeX source. Journal. 2020.\n\n## Claim sentences found (numbered)\n\n1. A TeX citation appears here [1].  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "pdf_numeric_superscript_restore",
+    "input": "inputs/pdf_numeric_superscript_restore.pdf",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "pdf_numeric_superscript_restore.pdf",
+          "format": "pdf",
+          "citation_mode": "numeric",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "2726a17d543a2fe340bfe2aa8f98f924572ee3fb1c4d148635c30846a37c840b",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "PDF superscript claim demonstrates the parser behavior across a longer body of text with enough alphabetic content to pass the quality gate before the citation marker.1Additional prose keeps the extracted text comfortably above the minimum threshold so this case exercises superscript restoration rather than OCR fallback.References[1] Delta D.",
+            "context_window": "PDF superscript claim demonstrates the parser behavior across a longer body of text with enough alphabetic content to pass the quality gate before the citation marker.1Additional prose keeps the extracted text comfortably above the minimum threshold so this case exercises superscript restoration rather than OCR fallback.References[1] Delta D. PDF superscript source.",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "[1]",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [],
+        "citations": [],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": null,
+            "total_lines": 1,
+            "context": "(no bibliography heading found at start of line)"
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "pdf_method": "stdlib",
+            "superscript_source": "text-heuristic"
+          },
+          "citation_mode": "numeric",
+          "n_sentences": 3,
+          "n_claims": 1,
+          "n_references": 0,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [
+            {
+              "marker_raw": "[1]",
+              "ref_number": 1,
+              "claim_id": "claim-001"
+            }
+          ],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 0,
+            "total": 0,
+            "pct": 0.0,
+            "in_prose": 0,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **pdf**\n- Citation mode: **numeric**\n- PDF extraction: `stdlib` (best-effort: check the sentences below)\n- Total sentences: **3**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **0**\n\n## Bibliography cut point\n\n- Cut line: `None` of `1`\n- Context around cut:\n\n> (no bibliography heading found at start of line)\n\n- **Orphan** citations (no entry in bibliography): **1**\n\n## ORPHAN citations (not in bibliography)\n\n- `[1]`\n\n## Claim sentences found (numbered)\n\n1. PDF superscript claim demonstrates the parser behavior across a longer body of text with enough alphabetic content to pass the quality gate before the citation marker.1Additional prose keeps the extracted text comfortably above the minimum threshold so this case exercises superscript restoration rather than OCR fallback.References[1] Delta D.  ⟵ 1 marker(s)\n2. PDF superscript source.\n3. Journal. 2020.\n"
+    }
+  },
+  {
+    "name": "md_author_year_basic",
+    "input": "inputs/md_author_year_basic.md",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "md_author_year_basic.md",
+          "format": "markdown",
+          "citation_mode": "author-year",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "74f2ee8e85857fbb3e7aa09231354c28c6fda28c44976e3dbb0e1a0bb98fad9b",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Author-year evidence appears here (Smith 2021).",
+            "context_window": "Manuscript Author-year evidence appears here (Smith 2021).",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(Smith 2021)",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "Smith, J. 2021. Author-year source. Journal.",
+            "source_type": "unknown",
+            "source_kind": "unknown",
+            "source_type_confidence": "low",
+            "source_type_evidence": [],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": "Author-year source",
+            "year": 2021,
+            "bibliographic_parse": {
+              "reader": "generic-text",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "title": {
+                  "value": "Author-year source",
+                  "spans": [
+                    {
+                      "start": 16,
+                      "end": 34,
+                      "raw_value": "Author-year source"
+                    }
+                  ],
+                  "rule": "generic-title-heuristic"
+                },
+                "year": {
+                  "value": 2021,
+                  "spans": [
+                    {
+                      "start": 10,
+                      "end": 14,
+                      "raw_value": "2021"
+                    }
+                  ],
+                  "rule": "common-extractor:unique-literal-value"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "smith",
+            "ay_year": 2021,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "ref_id": "ref-001",
+            "ref_number": 1,
+            "claim_id": "claim-001"
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 4,
+            "total_lines": 8,
+            "context": "Author-year evidence appears here (Smith 2021).  References  Smith, J. 2021. Author-year source. Journal."
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": null
+          },
+          "citation_mode": "author-year",
+          "n_sentences": 2,
+          "n_claims": 1,
+          "n_references": 1,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 1,
+            "pct": 100.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **markdown**\n- Citation mode: **author-year**\n- Total sentences: **2**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **1**\n\n- Reference coverage: **1/1 (100.0%)** cited — 1 in prose\n\n## Bibliography cut point\n\n- Cut line: `4` of `8`\n- Context around cut:\n\n> Author-year evidence appears here (Smith 2021).  References  Smith, J. 2021. Author-year source. Journal.\n\n## Claim sentences found (numbered)\n\n1. Manuscript\n2. Author-year evidence appears here (Smith 2021).  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "txt_author_year_multiline_refs",
+    "input": "inputs/txt_author_year_multiline_refs.txt",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "txt_author_year_multiline_refs.txt",
+          "format": "txt",
+          "citation_mode": "author-year",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "a2f8320b8da535b39a4e24020f84abb6ebce68feccded69a7a6f3b9d1dd7b63f",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "This is established (Abebe 2021).",
+            "context_window": "This is established (Abebe 2021).",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(Abebe 2021)",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "Abebe, T., & Tesfaye, M. (2021). Disability and institutional barriers. Journal of Ethiopian Studies, 45(2), 123-140.",
+            "source_type": "article",
+            "source_kind": "article_like",
+            "source_type_confidence": "high",
+            "source_type_evidence": [
+              "journal_volume_issue_pages"
+            ],
+            "indexability": "high",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": "Disability and institutional barriers",
+            "year": 2021,
+            "bibliographic_parse": {
+              "reader": "apa-journal",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "authors": {
+                  "value": [
+                    "Abebe, T.",
+                    "Tesfaye, M."
+                  ],
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 9,
+                      "raw_value": "Abebe, T."
+                    },
+                    {
+                      "start": 13,
+                      "end": 24,
+                      "raw_value": "Tesfaye, M."
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "title": {
+                  "value": "Disability and institutional barriers",
+                  "spans": [
+                    {
+                      "start": 33,
+                      "end": 70,
+                      "raw_value": "Disability and institutional barriers"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "journal": {
+                  "value": "Journal of Ethiopian Studies",
+                  "spans": [
+                    {
+                      "start": 72,
+                      "end": 100,
+                      "raw_value": "Journal of Ethiopian Studies"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "year": {
+                  "value": 2021,
+                  "spans": [
+                    {
+                      "start": 26,
+                      "end": 30,
+                      "raw_value": "2021"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "volume": {
+                  "value": "45",
+                  "spans": [
+                    {
+                      "start": 102,
+                      "end": 104,
+                      "raw_value": "45"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "pages": {
+                  "value": "123-140",
+                  "spans": [
+                    {
+                      "start": 109,
+                      "end": 116,
+                      "raw_value": "123-140"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "issue": {
+                  "value": "2",
+                  "spans": [
+                    {
+                      "start": 105,
+                      "end": 106,
+                      "raw_value": "2"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "first_author": {
+                  "value": "Abebe",
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 5,
+                      "raw_value": "Abebe"
+                    }
+                  ],
+                  "rule": "apa-journal:surname-before-comma"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "authors": [
+              "Abebe, T.",
+              "Tesfaye, M."
+            ],
+            "first_author": "Abebe",
+            "journal": "Journal of Ethiopian Studies",
+            "volume": "45",
+            "issue": "2",
+            "pages": "123-140",
+            "cited_coordinates": [
+              {
+                "kind": "container",
+                "raw_value": "Journal of Ethiopian Studies",
+                "normalized_value": "Journal of Ethiopian Studies",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 72,
+                    "raw_end": 100
+                  }
+                ]
+              },
+              {
+                "kind": "volume",
+                "raw_value": "45",
+                "normalized_value": "45",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 102,
+                    "raw_end": 104
+                  }
+                ]
+              },
+              {
+                "kind": "issue",
+                "raw_value": "2",
+                "normalized_value": "2",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 105,
+                    "raw_end": 106
+                  }
+                ]
+              },
+              {
+                "kind": "article_page_range",
+                "raw_value": "123-140",
+                "normalized_value": "123-140",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 109,
+                    "raw_end": 116
+                  }
+                ]
+              }
+            ],
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "abebe",
+            "ay_year": 2021,
+            "ay_suffix": ""
+          },
+          {
+            "id": "ref-002",
+            "ref_number": 2,
+            "raw_entry": "Baker, R., & McCafferty, D. (2020). The role of organizational culture: A systematic review. Journal of Business Ethics, 170(3), 567-582.",
+            "source_type": "article",
+            "source_kind": "article_like",
+            "source_type_confidence": "high",
+            "source_type_evidence": [
+              "journal_volume_issue_pages"
+            ],
+            "indexability": "high",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": "The role of organizational culture: A systematic review",
+            "year": 2020,
+            "bibliographic_parse": {
+              "reader": "apa-journal",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "authors": {
+                  "value": [
+                    "Baker, R.",
+                    "McCafferty, D."
+                  ],
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 9,
+                      "raw_value": "Baker, R."
+                    },
+                    {
+                      "start": 13,
+                      "end": 27,
+                      "raw_value": "McCafferty, D."
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "title": {
+                  "value": "The role of organizational culture: A systematic review",
+                  "spans": [
+                    {
+                      "start": 36,
+                      "end": 91,
+                      "raw_value": "The role of organizational culture: A systematic review"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "journal": {
+                  "value": "Journal of Business Ethics",
+                  "spans": [
+                    {
+                      "start": 93,
+                      "end": 119,
+                      "raw_value": "Journal of Business Ethics"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "year": {
+                  "value": 2020,
+                  "spans": [
+                    {
+                      "start": 29,
+                      "end": 33,
+                      "raw_value": "2020"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "volume": {
+                  "value": "170",
+                  "spans": [
+                    {
+                      "start": 121,
+                      "end": 124,
+                      "raw_value": "170"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "pages": {
+                  "value": "567-582",
+                  "spans": [
+                    {
+                      "start": 129,
+                      "end": 136,
+                      "raw_value": "567-582"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "issue": {
+                  "value": "3",
+                  "spans": [
+                    {
+                      "start": 125,
+                      "end": 126,
+                      "raw_value": "3"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "first_author": {
+                  "value": "Baker",
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 5,
+                      "raw_value": "Baker"
+                    }
+                  ],
+                  "rule": "apa-journal:surname-before-comma"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "authors": [
+              "Baker, R.",
+              "McCafferty, D."
+            ],
+            "first_author": "Baker",
+            "journal": "Journal of Business Ethics",
+            "volume": "170",
+            "issue": "3",
+            "pages": "567-582",
+            "cited_coordinates": [
+              {
+                "kind": "container",
+                "raw_value": "Journal of Business Ethics",
+                "normalized_value": "Journal of Business Ethics",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 93,
+                    "raw_end": 119
+                  }
+                ]
+              },
+              {
+                "kind": "volume",
+                "raw_value": "170",
+                "normalized_value": "170",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 121,
+                    "raw_end": 124
+                  }
+                ]
+              },
+              {
+                "kind": "issue",
+                "raw_value": "3",
+                "normalized_value": "3",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 125,
+                    "raw_end": 126
+                  }
+                ]
+              },
+              {
+                "kind": "article_page_range",
+                "raw_value": "567-582",
+                "normalized_value": "567-582",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 129,
+                    "raw_end": 136
+                  }
+                ]
+              }
+            ],
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "baker",
+            "ay_year": 2020,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "ref_id": "ref-001",
+            "ref_number": 1,
+            "claim_id": "claim-001"
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 2,
+            "total_lines": 9,
+            "context": "This is established (Abebe 2021).  References  Abebe, T., & Tesfaye, M. (2021). Disability and institutional barriers. Journal"
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": null
+          },
+          "citation_mode": "author-year",
+          "n_sentences": 1,
+          "n_claims": 1,
+          "n_references": 2,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 2,
+            "pct": 50.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [
+              2
+            ],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **txt**\n- Citation mode: **author-year**\n- Total sentences: **1**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **2**\n\n- Reference coverage: **1/2 (50.0%)** cited — 1 in prose\n- ⚠️ **Cited nowhere — not in prose, not in a table: 1** — [2]\n\n## Bibliography cut point\n\n- Cut line: `2` of `9`\n- Context around cut:\n\n> This is established (Abebe 2021).  References  Abebe, T., & Tesfaye, M. (2021). Disability and institutional barriers. Journal\n\n## Claim sentences found (numbered)\n\n1. This is established (Abebe 2021).  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "docx_author_year_basic",
+    "input": "inputs/docx_author_year_basic.docx",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "docx_author_year_basic.docx",
+          "format": "docx",
+          "citation_mode": "author-year",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "475fc1f9033aff14facb03da9c442cd90e2513a21e533bf66cb0dc1f10660aec",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Docx author-year claim (Jones 2019).",
+            "context_window": "Docx author-year claim (Jones 2019).",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(Jones 2019)",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "Jones, K. 2019. Docx author-year source. Journal.",
+            "source_type": "unknown",
+            "source_kind": "unknown",
+            "source_type_confidence": "low",
+            "source_type_evidence": [],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": "Docx author-year source",
+            "year": 2019,
+            "bibliographic_parse": {
+              "reader": "generic-text",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "title": {
+                  "value": "Docx author-year source",
+                  "spans": [
+                    {
+                      "start": 16,
+                      "end": 39,
+                      "raw_value": "Docx author-year source"
+                    }
+                  ],
+                  "rule": "generic-title-heuristic"
+                },
+                "year": {
+                  "value": 2019,
+                  "spans": [
+                    {
+                      "start": 10,
+                      "end": 14,
+                      "raw_value": "2019"
+                    }
+                  ],
+                  "rule": "common-extractor:unique-literal-value"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "jones",
+            "ay_year": 2019,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "ref_id": "ref-001",
+            "ref_number": 1,
+            "claim_id": "claim-001"
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 1,
+            "total_lines": 3,
+            "context": "Docx author-year claim (Jones 2019). References Jones, K. 2019. Docx author-year source. Journal."
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": "markup"
+          },
+          "citation_mode": "author-year",
+          "n_sentences": 1,
+          "n_claims": 1,
+          "n_references": 1,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 1,
+            "pct": 100.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **docx**\n- Citation mode: **author-year**\n- Total sentences: **1**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **1**\n\n- Reference coverage: **1/1 (100.0%)** cited — 1 in prose\n\n## Bibliography cut point\n\n- Cut line: `1` of `3`\n- Context around cut:\n\n> Docx author-year claim (Jones 2019). References Jones, K. 2019. Docx author-year source. Journal.\n\n## Claim sentences found (numbered)\n\n1. Docx author-year claim (Jones 2019).  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "tex_author_year_basic",
+    "input": "inputs/tex_author_year_basic.tex",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "tex_author_year_basic.tex",
+          "format": "latex",
+          "citation_mode": "author-year",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "995b035976b54c0b4666c4a93fa7b9ca0ecfc6918352a1458015fd7636f51a64",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "This result follows from prior work (Brown 2018).",
+            "context_window": "This result follows from prior work (Brown 2018).",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(Brown 2018)",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "Brown, B. 2018. TeX author-year source. Journal.",
+            "source_type": "unknown",
+            "source_kind": "unknown",
+            "source_type_confidence": "low",
+            "source_type_evidence": [],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": "TeX author-year source",
+            "year": 2018,
+            "bibliographic_parse": {
+              "reader": "generic-text",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "title": {
+                  "value": "TeX author-year source",
+                  "spans": [
+                    {
+                      "start": 16,
+                      "end": 38,
+                      "raw_value": "TeX author-year source"
+                    }
+                  ],
+                  "rule": "generic-title-heuristic"
+                },
+                "year": {
+                  "value": 2018,
+                  "spans": [
+                    {
+                      "start": 10,
+                      "end": 14,
+                      "raw_value": "2018"
+                    }
+                  ],
+                  "rule": "common-extractor:unique-literal-value"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "brown",
+            "ay_year": 2018,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "ref_id": "ref-001",
+            "ref_number": 1,
+            "claim_id": "claim-001"
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 5,
+            "total_lines": 7,
+            "context": "  References [1] Brown, B. 2018. TeX author-year source. Journal."
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "bib_source": "thebibliography",
+            "unknown_cite_keys": {},
+            "superscript_source": "cite-commands"
+          },
+          "citation_mode": "author-year",
+          "n_sentences": 1,
+          "n_claims": 1,
+          "n_references": 1,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 1,
+            "pct": 100.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **latex**\n- Citation mode: **author-year**\n- LaTeX bibliography from: `thebibliography`\n- Total sentences: **1**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **1**\n\n- Reference coverage: **1/1 (100.0%)** cited — 1 in prose\n\n## Bibliography cut point\n\n- Cut line: `5` of `7`\n- Context around cut:\n\n>   References [1] Brown, B. 2018. TeX author-year source. Journal.\n\n## Claim sentences found (numbered)\n\n1. This result follows from prior work (Brown 2018).  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "pdf_author_year_basic",
+    "input": "inputs/pdf_author_year_basic.pdf",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "pdf_author_year_basic.pdf",
+          "format": "pdf",
+          "citation_mode": "author-year",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "2967cdd7e82d6955ccf263a8aef497e05cfc873e61c3b2a530fd5e51b93021f8",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Prior work supports this conclusion \\(Taylor 2017\\) and the surrounding paragraph is intentionally verbose so the generated PDF has a healthy amount of readable text.More explanatory prose follows to satisfy the extraction quality gate while keeping the case semantically simple and stable for the golden fixture.ReferencesTaylor, T. 2017.",
+            "context_window": "Prior work supports this conclusion \\(Taylor 2017\\) and the surrounding paragraph is intentionally verbose so the generated PDF has a healthy amount of readable text.More explanatory prose follows to satisfy the extraction quality gate while keeping the case semantically simple and stable for the golden fixture.ReferencesTaylor, T. 2017. PDF author-year source.",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(Taylor 2017\\)",
+            "marker_numbers": [],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [],
+        "citations": [
+          {
+            "ref_id": null,
+            "ref_number": null,
+            "marker_raw": "(Taylor 2017\\)",
+            "candidate_ref_ids": [],
+            "claim_id": "claim-001"
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": null,
+            "total_lines": 1,
+            "context": "(no bibliography heading found at start of line)"
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "pdf_method": "stdlib",
+            "superscript_source": "text-heuristic"
+          },
+          "citation_mode": "author-year",
+          "n_sentences": 3,
+          "n_claims": 1,
+          "n_references": 0,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [
+            {
+              "marker_raw": "(Taylor 2017\\)",
+              "surname": "taylor",
+              "year": 2017,
+              "claim_id": "claim-001"
+            }
+          ],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 0,
+            "total": 0,
+            "pct": 0.0,
+            "in_prose": 0,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **pdf**\n- Citation mode: **author-year**\n- PDF extraction: `stdlib` (best-effort: check the sentences below)\n- Total sentences: **3**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **0**\n\n## Bibliography cut point\n\n- Cut line: `None` of `1`\n- Context around cut:\n\n> (no bibliography heading found at start of line)\n\n- **Orphan** citations (no entry in bibliography): **1**\n\n## ORPHAN citations (not in bibliography)\n\n- `(Taylor 2017\\)`\n\n## Claim sentences found (numbered)\n\n1. Prior work supports this conclusion \\(Taylor 2017\\) and the surrounding paragraph is intentionally verbose so the generated PDF has a healthy amount of readable text.More explanatory prose follows to satisfy the extraction quality gate while keeping the case semantically simple and stable for the golden fixture.ReferencesTaylor, T. 2017.  ⟵ 1 marker(s)\n2. PDF author-year source.\n3. Journal.\n"
+    }
+  },
+  {
+    "name": "md_inline_doi_auto",
+    "input": "inputs/md_inline_doi_auto.md",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "md_inline_doi_auto.md",
+          "format": "markdown",
+          "citation_mode": "inline-doi",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "16efc69252fe8fd4fe61a6ef79f4574c62c0f680225cd96f3dc5930f8665d5d3",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "The treatment reduces mortality (10.1038/s41586-022-05543-x).",
+            "context_window": "Draft The treatment reduces mortality (10.1038/s41586-022-05543-x).",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(10.1038/s41586-022-05543-x)",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "10.1038/s41586-022-05543-x",
+            "source_type": "article",
+            "source_kind": "article_like",
+            "source_type_confidence": "high",
+            "source_type_evidence": [
+              "strong_article_identifier"
+            ],
+            "indexability": "high",
+            "doi": "10.1038/s41586-022-05543-x",
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": null,
+            "year": null,
+            "bibliographic_parse": {
+              "reader": "generic-text",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "doi": {
+                  "value": "10.1038/s41586-022-05543-x",
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 26,
+                      "raw_value": "10.1038/s41586-022-05543-x"
+                    }
+                  ],
+                  "rule": "generic-doi-token"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": null,
+            "ay_year": null,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "ref_id": "ref-001",
+            "ref_number": 1,
+            "claim_id": "claim-001"
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": null,
+            "total_lines": 4,
+            "context": "(no bibliography heading found at start of line)"
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": null
+          },
+          "citation_mode": "inline-doi",
+          "n_sentences": 2,
+          "n_claims": 1,
+          "n_references": 1,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 1,
+            "pct": 100.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **markdown**\n- Citation mode: **inline-doi**\n- Total sentences: **2**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References synthesised from inline DOIs/arXiv ids (draft format, no bibliography): **1**\n\n- Reference coverage: **1/1 (100.0%)** cited — 1 in prose\n\n## Bibliography cut point\n\n- Cut line: `None` of `4`\n- Context around cut:\n\n> (no bibliography heading found at start of line)\n\n## Claim sentences found (numbered)\n\n1. Draft\n2. The treatment reduces mortality (10.1038/s41586-022-05543-x).  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "txt_inline_doi_forced",
+    "input": "inputs/txt_inline_doi_forced.txt",
+    "window": 1,
+    "citations_mode": "inline-doi",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "txt_inline_doi_forced.txt",
+          "format": "txt",
+          "citation_mode": "inline-doi",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "57e3a95875245f5ebac7e83fb2c1c5cd050ecf241c10771ca1285af7c188b97d",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Transformers reshaped NLP (arXiv:1706.03762).",
+            "context_window": "Transformers reshaped NLP (arXiv:1706.03762).",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(arXiv:1706.03762)",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "arXiv:1706.03762",
+            "source_type": "article",
+            "source_kind": "article_like",
+            "source_type_confidence": "high",
+            "source_type_evidence": [
+              "strong_article_identifier"
+            ],
+            "indexability": "high",
+            "doi": "10.48550/arXiv.1706.03762",
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": null,
+            "year": null,
+            "bibliographic_parse": {
+              "reader": "none",
+              "version": "1",
+              "status": "unrecognized",
+              "fields": {},
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "cited_coordinates": [
+              {
+                "kind": "repository",
+                "raw_value": "arXiv:1706.03762",
+                "normalized_value": "arXiv:1706.03762",
+                "rule_id": "explicit_arxiv",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 0,
+                    "raw_end": 16
+                  }
+                ]
+              }
+            ],
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": null,
+            "ay_year": null,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "ref_id": "ref-001",
+            "ref_number": 1,
+            "claim_id": "claim-001"
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": null,
+            "total_lines": 2,
+            "context": "(no bibliography heading found at start of line)"
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": null
+          },
+          "citation_mode": "inline-doi",
+          "n_sentences": 1,
+          "n_claims": 1,
+          "n_references": 1,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 1,
+            "pct": 100.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **txt**\n- Citation mode: **inline-doi**\n- Total sentences: **1**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References synthesised from inline DOIs/arXiv ids (draft format, no bibliography): **1**\n\n- Reference coverage: **1/1 (100.0%)** cited — 1 in prose\n\n## Bibliography cut point\n\n- Cut line: `None` of `2`\n- Context around cut:\n\n> (no bibliography heading found at start of line)\n\n## Claim sentences found (numbered)\n\n1. Transformers reshaped NLP (arXiv:1706.03762).  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "pdf_scanned_ocr_stub",
+    "input": "inputs/pdf_scanned_ocr_stub.pdf",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": "OCR recovered claim [1].\n\nReferences\n\n[1] OCR Source. Journal. 2020.\n",
+    "ocr_stub_method": "stubbed",
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "pdf_scanned_ocr_stub.pdf",
+          "format": "pdf",
+          "citation_mode": "numeric",
+          "ocr": true,
+          "ocr_method": "ocr:stubbed",
+          "sha256": "fa4d22ea65a3210f36d7206ce09bac51b3d95ae5ed5285fb89b6ad5250dfe964",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "OCR recovered claim [1].",
+            "context_window": "OCR recovered claim [1].",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "[1]",
+            "marker_numbers": [
+              1
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "OCR Source. Journal. 2020.",
+            "source_type": "unknown",
+            "source_kind": "unknown",
+            "source_type_confidence": "low",
+            "source_type_evidence": [],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": null,
+            "year": 2020,
+            "bibliographic_parse": {
+              "reader": "none",
+              "version": "1",
+              "status": "unrecognized",
+              "fields": {},
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "ocr",
+            "ay_year": 2020,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "claim_id": "claim-001",
+            "ref_id": "ref-001",
+            "ref_number": 1
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 2,
+            "total_lines": 6,
+            "context": "OCR recovered claim [1].  References  [1] OCR Source. Journal. 2020."
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "pdf_method": "ocr:stubbed",
+            "ocr": true,
+            "ocr_lang": "eng",
+            "superscript_source": "text-heuristic"
+          },
+          "citation_mode": "numeric",
+          "n_sentences": 1,
+          "n_claims": 1,
+          "n_references": 1,
+          "n_markers": 1,
+          "ambiguities": [],
+          "orphans": [],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 1,
+            "pct": 100.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **pdf**\n- Citation mode: **numeric**\n- PDF extraction: `ocr:stubbed` (best-effort: check the sentences below)\n- Total sentences: **1**\n- Claim sentences (with marker): **1**\n- Total markers: **1**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **1**\n\n- Reference coverage: **1/1 (100.0%)** cited — 1 in prose\n\n## Bibliography cut point\n\n- Cut line: `2` of `6`\n- Context around cut:\n\n> OCR recovered claim [1].  References  [1] OCR Source. Journal. 2020.\n\n## Claim sentences found (numbered)\n\n1. OCR recovered claim [1].  ⟵ 1 marker(s)\n"
+    }
+  },
+  {
+    "name": "md_bulleted_refs",
+    "input": "inputs/md_bulleted_refs.md",
+    "window": 1,
+    "citations_mode": "auto",
+    "ocr_stub_text": null,
+    "ocr_stub_method": null,
+    "expected": {
+      "result": {
+        "manuscript": {
+          "id": "ms-PLACEHOLDER",
+          "filename": "md_bulleted_refs.md",
+          "format": "markdown",
+          "citation_mode": "author-year",
+          "ocr": false,
+          "ocr_method": null,
+          "sha256": "cebc4c5a9eddb0c8c5d742fa3c3aed6236fed650bd0ba258f986875f817b3c12",
+          "parser_version": "cv-parser/0.4",
+          "uploaded_at": "TIMESTAMP"
+        },
+        "claims": [
+          {
+            "id": "claim-001",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Important findings reported (WHO 2021) and also (Jones 2019).",
+            "context_window": "Manuscript Important findings reported (WHO 2021) and also (Jones 2019).",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(WHO 2021)",
+            "marker_numbers": [],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          },
+          {
+            "id": "claim-002",
+            "manuscript_id": "ms-PLACEHOLDER",
+            "sentence": "Important findings reported (WHO 2021) and also (Jones 2019).",
+            "context_window": "Manuscript Important findings reported (WHO 2021) and also (Jones 2019).",
+            "section": null,
+            "char_start": null,
+            "char_end": null,
+            "marker_raw": "(Jones 2019)",
+            "marker_numbers": [
+              2
+            ],
+            "is_multisource": false,
+            "claim_scope": "sentence"
+          }
+        ],
+        "references": [
+          {
+            "id": "ref-001",
+            "ref_number": 1,
+            "raw_entry": "World Health Organization. (2021). Global report on disease prevention. Geneva: WHO Press.",
+            "source_type": "unknown",
+            "source_kind": "report_like",
+            "source_type_confidence": "medium",
+            "source_type_evidence": [
+              "publisher_name",
+              "institution_or_report_marker"
+            ],
+            "indexability": "low",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": "Global report on disease prevention",
+            "year": 2021,
+            "bibliographic_parse": {
+              "reader": "generic-text",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "title": {
+                  "value": "Global report on disease prevention",
+                  "spans": [
+                    {
+                      "start": 35,
+                      "end": 70,
+                      "raw_value": "Global report on disease prevention"
+                    }
+                  ],
+                  "rule": "generic-title-heuristic"
+                },
+                "year": {
+                  "value": 2021,
+                  "spans": [
+                    {
+                      "start": 28,
+                      "end": 32,
+                      "raw_value": "2021"
+                    }
+                  ],
+                  "rule": "common-extractor:unique-literal-value"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "world",
+            "ay_year": 2021,
+            "ay_suffix": ""
+          },
+          {
+            "id": "ref-002",
+            "ref_number": 2,
+            "raw_entry": "Jones, K. (2019). Another paper. Another Journal, 5(1), 45-60.",
+            "source_type": "article",
+            "source_kind": "article_like",
+            "source_type_confidence": "high",
+            "source_type_evidence": [
+              "journal_volume_issue_pages"
+            ],
+            "indexability": "high",
+            "doi": null,
+            "pmid": null,
+            "isbn": null,
+            "issn": null,
+            "url": null,
+            "title": "Another paper",
+            "year": 2019,
+            "bibliographic_parse": {
+              "reader": "apa-journal",
+              "version": "1",
+              "status": "parsed",
+              "fields": {
+                "authors": {
+                  "value": [
+                    "Jones, K."
+                  ],
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 9,
+                      "raw_value": "Jones, K."
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "title": {
+                  "value": "Another paper",
+                  "spans": [
+                    {
+                      "start": 18,
+                      "end": 31,
+                      "raw_value": "Another paper"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "journal": {
+                  "value": "Another Journal",
+                  "spans": [
+                    {
+                      "start": 33,
+                      "end": 48,
+                      "raw_value": "Another Journal"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "year": {
+                  "value": 2019,
+                  "spans": [
+                    {
+                      "start": 11,
+                      "end": 15,
+                      "raw_value": "2019"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "volume": {
+                  "value": "5",
+                  "spans": [
+                    {
+                      "start": 50,
+                      "end": 51,
+                      "raw_value": "5"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "pages": {
+                  "value": "45-60",
+                  "spans": [
+                    {
+                      "start": 56,
+                      "end": 61,
+                      "raw_value": "45-60"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "issue": {
+                  "value": "1",
+                  "spans": [
+                    {
+                      "start": 52,
+                      "end": 53,
+                      "raw_value": "1"
+                    }
+                  ],
+                  "rule": "apa-journal"
+                },
+                "first_author": {
+                  "value": "Jones",
+                  "spans": [
+                    {
+                      "start": 0,
+                      "end": 5,
+                      "raw_value": "Jones"
+                    }
+                  ],
+                  "rule": "apa-journal:surname-before-comma"
+                }
+              },
+              "conflicts": []
+            },
+            "fulltext_status": "pending",
+            "provided_source": null,
+            "accessed_at": null,
+            "authors": [
+              "Jones, K."
+            ],
+            "first_author": "Jones",
+            "journal": "Another Journal",
+            "volume": "5",
+            "issue": "1",
+            "pages": "45-60",
+            "cited_coordinates": [
+              {
+                "kind": "container",
+                "raw_value": "Another Journal",
+                "normalized_value": "Another Journal",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 33,
+                    "raw_end": 48
+                  }
+                ]
+              },
+              {
+                "kind": "volume",
+                "raw_value": "5",
+                "normalized_value": "5",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 50,
+                    "raw_end": 51
+                  }
+                ]
+              },
+              {
+                "kind": "issue",
+                "raw_value": "1",
+                "normalized_value": "1",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 52,
+                    "raw_end": 53
+                  }
+                ]
+              },
+              {
+                "kind": "article_page_range",
+                "raw_value": "45-60",
+                "normalized_value": "45-60",
+                "rule_id": "volume_issue_locator",
+                "extractor_version": "cited-coordinates/v2",
+                "spans": [
+                  {
+                    "raw_start": 56,
+                    "raw_end": 61
+                  }
+                ]
+              }
+            ],
+            "manuscript_id": "ms-PLACEHOLDER",
+            "ay_surname": "jones",
+            "ay_year": 2019,
+            "ay_suffix": ""
+          }
+        ],
+        "citations": [
+          {
+            "ref_id": null,
+            "ref_number": null,
+            "marker_raw": "(WHO 2021)",
+            "candidate_ref_ids": [],
+            "claim_id": "claim-001"
+          },
+          {
+            "ref_id": "ref-002",
+            "ref_number": 2,
+            "claim_id": "claim-002"
+          }
+        ],
+        "ambiguities": [],
+        "table_only_citations": [],
+        "table_citations_verified": false,
+        "_debug": {
+          "bibliography_cut": {
+            "cut_line_index": 4,
+            "total_lines": 9,
+            "context": "Important findings reported (WHO 2021) and also (Jones 2019).  References  - World Health Organization. (2021). Global report on disease prevention. Geneva: WHO Press."
+          },
+          "table_citations_verified": false,
+          "extract": {
+            "superscript_source": null
+          },
+          "citation_mode": "author-year",
+          "n_sentences": 2,
+          "n_claims": 2,
+          "n_references": 2,
+          "n_markers": 2,
+          "ambiguities": [],
+          "orphans": [
+            {
+              "marker_raw": "(WHO 2021)",
+              "surname": "who",
+              "year": 2021,
+              "claim_id": "claim-001"
+            }
+          ],
+          "suppressed_markers": [],
+          "missegmented_recovered": [],
+          "table_only_citations": [],
+          "reference_coverage": {
+            "cited": 1,
+            "total": 2,
+            "pct": 50.0,
+            "in_prose": 1,
+            "in_tables": 0,
+            "uncited": [
+              1
+            ],
+            "warning": null,
+            "fatal": false
+          },
+          "pdf_links": null
+        }
+      },
+      "debug_md": "# Parser debug view (§11)\n\n- Format: **markdown**\n- Citation mode: **author-year**\n- Total sentences: **2**\n- Claim sentences (with marker): **2**\n- Total markers: **2**  (claims ≠ markers: adjacent markers merge into one group = 1 claim; marker groups separated by prose = separate claims)\n- References in bibliography: **2**\n\n- Reference coverage: **1/2 (50.0%)** cited — 1 in prose\n- ⚠️ **Cited nowhere — not in prose, not in a table: 1** — [1]\n\n## Bibliography cut point\n\n- Cut line: `4` of `9`\n- Context around cut:\n\n> Important findings reported (WHO 2021) and also (Jones 2019).  References  - World Health Organization. (2021). Global report on disease prevention. Geneva: WHO Press.\n\n- **Orphan** citations (no entry in bibliography): **1**\n\n## ORPHAN citations (not in bibliography)\n\n- `(WHO 2021)`\n\n## Claim sentences found (numbered)\n\n1. Manuscript\n2. Important findings reported (WHO 2021) and also (Jones 2019).  ⟵ 2 marker(s)\n"
+    }
+  }
+]

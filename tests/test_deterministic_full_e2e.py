@@ -89,7 +89,7 @@ def test_complete_local_pipeline_persists_terminal_evidence_and_regenerates_repo
     input_path.write_text(
         "A deterministic local claim is cited here [1].\n\n"
         "References\n"
-        "[1] Smith J. Deterministic source. 2020.\n",
+        "[1] Smith J. Deterministic source. Example Journal 2020;1:1-2.\n",
         encoding="utf-8",
     )
     repo = RunRepository.create(
@@ -121,6 +121,7 @@ def test_complete_local_pipeline_persists_terminal_evidence_and_regenerates_repo
     repo.close()
 
     def resolve_locally(reference):
+        assert reference["title"] == "Deterministic source"
         return current_resolution(reference, {
             "ref_id": reference["id"],
             "status": "resolved",

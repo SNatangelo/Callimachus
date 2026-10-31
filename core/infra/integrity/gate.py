@@ -353,7 +353,7 @@ class RunIntegrityGate:
                 "content store override reason requires the debug override flag"
             )
         try:
-            checked = self.client.check_content_store()
+            checked = self.client.check_content_store(run_dir)
         except AuthorityError as exc:
             raise IntegrityGateError(
                 f"content store authority preflight failed: {exc}"
@@ -544,6 +544,9 @@ class RunIntegrityGate:
                 ) from exc
             finally:
                 repo.close()
+            # The restored database predates the checkpoint's local mirror.
+            # Reconcile it before consumers inspect committed input files.
+            self.preflight(run_dir)
         return result
 
     def commit_transition(self, run_dir: str, lease_id: str) -> dict[str, Any]:

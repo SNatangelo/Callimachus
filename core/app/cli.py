@@ -61,10 +61,10 @@ arguments.
 
 Documentation
 -------------
-  Complete guide: docs/guide/README.md
-  CLI reference:  docs/guide/02-cli-reference.md
-  Keys and credentials: docs/guide/10-keys-and-credentials.md
-  Environment labels: docs/guide/11-environment-reference.md
+  Complete guide: docs/reference/README.md
+  CLI reference:  docs/reference/02-cli-reference.md
+  Keys and credentials: docs/reference/10-keys-and-credentials.md
+  Environment labels: docs/reference/11-environment-reference.md
 
 Exit codes
 ----------
@@ -88,6 +88,7 @@ DEFAULT_CHALLENGE_MODE_CHOICES = (
     "off",
     "queue",
     "browser_challenge",
+    "institutional",
     "interactive_challenge",
     "interactive",
     "playwright",

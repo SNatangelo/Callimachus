@@ -22,6 +22,7 @@ import sqlite3
 import threading
 import time
 import unicodedata
+import urllib.parse
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -79,6 +80,9 @@ from .unit_progress_storage import (
     list_completions as _list_integrity_unit_completions,
 )
 from .phase_event_storage import insert_phase_event, read_phase_event
+from .network_permission_storage import (
+    append_decision as _append_network_permission_decision,
+)
 from .resolve_attempt_storage import (
     read_resolve_attempts as _read_resolve_attempts,
     replace_resolve_attempts as _replace_resolve_attempts,
@@ -880,6 +884,39 @@ class RunRepository:
         ).fetchone()
         return None if row is None else _run_session_record(row)
 
+    def mark_exited_driver_interrupted(
+        self, *, session_id: str, pid: int, host: str,
+    ) -> bool:
+        """Reconcile a driver whose exact owned process has already exited.
+
+        The caller must establish that the process has exited and retain the
+        session identity captured while it was running.  Do not infer death
+        from a stale heartbeat.  Matching and updating under one write
+        transaction prevents closing a newer driver's session.
+        """
+        if not session_id or pid <= 0 or not host:
+            return False
+        now = _now()
+        with self._write_transaction():
+            updated = self._conn.execute(
+                """UPDATE run_sessions SET status='interrupted', ended_at=?
+                   WHERE session_id=? AND pid=? AND host=?
+                     AND status='active' AND ended_at IS NULL
+                     AND NOT EXISTS (
+                       SELECT 1 FROM run_sessions other
+                       WHERE other.status='active' AND other.ended_at IS NULL
+                         AND other.session_id != ?
+                     )""",
+                (now, session_id, pid, host, session_id),
+            )
+            if updated.rowcount != 1:
+                return False
+            self._conn.execute(
+                "UPDATE run SET status='interrupted', updated_at=? WHERE status='active'",
+                (now,),
+            )
+            return True
+
     def detect_interrupted_run(self, *, stale_after_seconds: int) -> bool:
         active = self.get_active_session()
         if active is None:
@@ -1014,6 +1051,17 @@ class RunRepository:
         return [_phase_event_record(self._conn, row) for row in self._conn.execute(
             "SELECT * FROM phase_events ORDER BY event_id"
         )]
+
+    def append_network_permission(
+        self, event: dict[str, Any], *, session_id: str | None = None,
+    ) -> int:
+        """Persist the operator decision before the consent broker grants access."""
+        with self._write_transaction():
+            decision_id = _append_network_permission_decision(
+                self._conn, event, session_id=session_id, created_at=_now(),
+            )
+        self._schema_version = require_current_schema_structure(self._conn)
+        return decision_id
 
     def replace_parse_payload(
         self,
@@ -2794,9 +2842,11 @@ class RunRepository:
         file_format: str | None = None,
         extraction_flags: list[str] | None = None,
         extraction_method: str | None = None,
+        arxiv_version: JsonDict | None = None,
         ) -> None:
         source_text_id = _validate_identifier("source_text_id", source_text_id)
         ref_id = _validate_identifier("ref_id", ref_id)
+        arxiv_version_json = _arxiv_version_json(arxiv_version)
         now = _now()
         with self._write_transaction():
             self._conn.execute(
@@ -2812,8 +2862,8 @@ class RunRepository:
                   source_text_id, ref_id, identity_key, tier, origin, stored_path, sha256,
                   char_count, source_ref, mapping, match_signal, match_score,
                   identity_status, identity_note, content_version, provenance_relation,
-                  supplied_by, supplied_via, file_format, extraction_method, recorded_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  supplied_by, supplied_via, file_format, extraction_method, arxiv_version_json, recorded_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source_text_id,
@@ -2836,6 +2886,7 @@ class RunRepository:
                     _clean_text(supplied_via),
                     _clean_text(file_format),
                     _clean_text(extraction_method),
+                    arxiv_version_json,
                     now,
                 ),
             )
@@ -2850,7 +2901,8 @@ class RunRepository:
         content_version: str | None = None, provenance_relation: str | None = None,
         supplied_by: str | None = None, supplied_via: str | None = None,
         file_format: str | None = None, extraction_flags: list[str] | None = None,
-        extraction_method: str | None = None) -> str:
+        extraction_method: str | None = None,
+        arxiv_version: JsonDict | None = None) -> str:
         """Persist the exact source row before publishing its run-local asset."""
         source_text_id = _validate_identifier("source_text_id", source_text_id)
         ref_id = _validate_identifier("ref_id", ref_id)
@@ -2861,6 +2913,7 @@ class RunRepository:
             raise ValueError("source text sha256 must be a lowercase SHA-256 hex digest")
         self._materialization_path(_clean_text(stored_path) or "")
         flags = normalize_source_flags(extraction_flags)
+        arxiv_version_json = _arxiv_version_json(arxiv_version)
         intent_id = "intent-" + uuid.uuid4().hex
         now = _now()
         with self._write_transaction():
@@ -2868,14 +2921,14 @@ class RunRepository:
                 """INSERT INTO source_text_materialization_intents(
                 intent_id,source_text_id,ref_id,identity_key,tier,origin,stored_path,sha256,char_count,
                 source_ref,mapping,match_signal,match_score,identity_status,identity_note,content_version,
-                provenance_relation,supplied_by,supplied_via,file_format,extraction_method,prepared_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                provenance_relation,supplied_by,supplied_via,file_format,extraction_method,arxiv_version_json,prepared_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (intent_id, source_text_id, ref_id, _clean_text(identity_key) or "",
                  _clean_text(tier) or "", _clean_text(origin) or "", _clean_text(stored_path) or "",
                  sha256, char_count, _clean_text(source_ref), _clean_text(mapping), _clean_text(match_signal),
                  match_score, _clean_text(identity_status), _clean_text(identity_note), _clean_text(content_version),
                  _clean_text(provenance_relation), _clean_text(supplied_by), _clean_text(supplied_via),
-                 _clean_text(file_format), _clean_text(extraction_method), now),
+                 _clean_text(file_format), _clean_text(extraction_method), arxiv_version_json, now),
             )
             self._conn.execute(
                 "INSERT INTO source_text_materialization_intent_flag_states(intent_id,is_null,flag_count) VALUES(?,?,?)",
@@ -2971,9 +3024,9 @@ class RunRepository:
             self._conn.execute(
                 """INSERT INTO source_texts(source_text_id,ref_id,identity_key,tier,origin,stored_path,sha256,char_count,
                 source_ref,mapping,match_signal,match_score,identity_status,identity_note,content_version,provenance_relation,
-                supplied_by,supplied_via,file_format,extraction_method,recorded_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                tuple(row[name] for name in ("source_text_id", "ref_id", "identity_key", "tier", "origin", "stored_path", "sha256", "char_count", "source_ref", "mapping", "match_signal", "match_score", "identity_status", "identity_note", "content_version", "provenance_relation", "supplied_by", "supplied_via", "file_format", "extraction_method")) + (now,),
+                supplied_by,supplied_via,file_format,extraction_method,arxiv_version_json,recorded_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                tuple(row[name] for name in ("source_text_id", "ref_id", "identity_key", "tier", "origin", "stored_path", "sha256", "char_count", "source_ref", "mapping", "match_signal", "match_score", "identity_status", "identity_note", "content_version", "provenance_relation", "supplied_by", "supplied_via", "file_format", "extraction_method", "arxiv_version_json")) + (now,),
             )
             replace_source_flags(self._conn, row["source_text_id"], None if state["is_null"] else flags)
             self._conn.execute("INSERT INTO source_text_materialization_outcomes(intent_id,outcome,recorded_at) VALUES(?,?,?)", (row["intent_id"], "registered", now))
@@ -2990,6 +3043,7 @@ class RunRepository:
                 AND i.ref_id=st.ref_id AND i.tier=st.tier AND i.origin=st.origin
                 AND i.stored_path=st.stored_path AND i.sha256=st.sha256
                 AND i.char_count=st.char_count
+                AND i.arxiv_version_json IS st.arxiv_version_json
             ) ORDER BY st.source_text_id"""
         ).fetchall()
         for row in rows:
@@ -3209,6 +3263,8 @@ class RunRepository:
                 entry["identity_note"] = row.identity_note
             if row.content_version is not None:
                 entry["content_version"] = row.content_version
+            if row.arxiv_version is not None:
+                entry["arxiv_version"] = row.arxiv_version
             if row.provenance_relation is not None:
                 entry["provenance_relation"] = row.provenance_relation
             if row.supplied_by is not None:
@@ -3844,6 +3900,7 @@ class RunRepository:
                 )
 
                 gate_task = {
+                    "source_tier": snapshot["source_tier"],
                     "reference": snapshot["reference"],
                     "source_identity_evidence": {
                         **snapshot["source_identity"],
@@ -4800,6 +4857,112 @@ def _clean_text(value: Any) -> str | None:
     if "\x00" in text:
         text = text.replace("\x00", "\uFFFD")
     return text
+
+
+_ARXIV_SOURCE_ID_RE = re.compile(
+    r"(?:\d{4}\.\d{4,5}|[a-z][a-z0-9.-]*(?:\.[a-z]{2})?/\d{7})"
+)
+
+
+def _arxiv_version_value(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if type(value) is not dict:
+        raise ValueError("source arxiv_version must be an object or null")
+    required = {"arxiv_id", "version", "versioned_url", "version_evidence"}
+    optional = {"version_date", "latest_version", "latest_observation"}
+    if not required <= set(value) or set(value) - required - optional:
+        raise ValueError("source arxiv_version has an invalid field set")
+    arxiv_id = value["arxiv_id"]
+    if (
+        type(arxiv_id) is not str
+        or arxiv_id != arxiv_id.lower()
+        or not _ARXIV_SOURCE_ID_RE.fullmatch(arxiv_id)
+    ):
+        raise ValueError("source arxiv_version.arxiv_id is invalid")
+    version = value["version"]
+    if type(version) is not int or version <= 0:
+        raise ValueError("source arxiv_version.version must be a positive integer")
+    expected_url = f"https://arxiv.org/pdf/{arxiv_id}v{version}"
+    if value["versioned_url"] != expected_url:
+        raise ValueError("source arxiv_version.versioned_url is not canonical")
+    if type(value["version_evidence"]) is not str or value["version_evidence"] not in {
+        "document_header", "versioned_source_url",
+    }:
+        raise ValueError("source arxiv_version.version_evidence is invalid")
+    version_date = value.get("version_date")
+    if version_date is not None:
+        if type(version_date) is not str:
+            raise ValueError("source arxiv_version.version_date must be a date or null")
+        try:
+            parsed_date = datetime.strptime(version_date, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError("source arxiv_version.version_date must be ISO YYYY-MM-DD") from exc
+        if parsed_date.isoformat() != version_date:
+            raise ValueError("source arxiv_version.version_date must be canonical")
+    if value["version_evidence"] == "versioned_source_url" and version_date is not None:
+        raise ValueError("versioned source URL cannot establish an arXiv version date")
+    has_latest_version = "latest_version" in value
+    has_latest_observation = "latest_observation" in value
+    if has_latest_version != has_latest_observation:
+        raise ValueError("source arxiv_version latest version and observation must be paired")
+    result = {
+        "arxiv_id": arxiv_id,
+        "version": version,
+        "version_date": version_date,
+        "versioned_url": expected_url,
+        "version_evidence": value["version_evidence"],
+    }
+    if has_latest_version:
+        latest_version = value["latest_version"]
+        observation = value["latest_observation"]
+        if type(latest_version) is not int or latest_version < version:
+            raise ValueError("source arxiv_version.latest_version is invalid")
+        if type(observation) is not dict or set(observation) != {"request_url", "response_sha256"}:
+            raise ValueError("source arxiv_version.latest_observation has an invalid field set")
+        request_url = observation["request_url"]
+        response_sha256 = observation["response_sha256"]
+        if type(request_url) is not str or type(response_sha256) is not str:
+            raise ValueError("source arxiv_version.latest_observation fields must be strings")
+        parsed_url = urllib.parse.urlparse(request_url)
+        query = urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True)
+        if (
+            parsed_url.scheme != "https"
+            or parsed_url.netloc.lower() != "export.arxiv.org"
+            or parsed_url.path != "/api/query"
+            or parsed_url.params
+            or parsed_url.fragment
+            or query != [("id_list", arxiv_id)]
+        ):
+            raise ValueError("source arxiv_version.latest_observation must be the exact unversioned arXiv id_list query")
+        if not re.fullmatch(r"[0-9a-f]{64}", response_sha256):
+            raise ValueError("source arxiv_version.latest_observation response hash is invalid")
+        result["latest_version"] = latest_version
+        result["latest_observation"] = {
+            "request_url": request_url,
+            "response_sha256": response_sha256,
+        }
+    return result
+
+
+def _arxiv_version_json(value: Any) -> str | None:
+    normalized = _arxiv_version_value(value)
+    if normalized is None:
+        return None
+    return json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _arxiv_version_from_json(value: str | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+        normalized = _arxiv_version_value(parsed)
+        if normalized is None or _arxiv_version_json(normalized) != value:
+            raise ValueError("source arxiv_version JSON is not canonical")
+        return normalized
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("source arxiv_version JSON is invalid") from exc
 
 
 def _bibliographic_parse_json(ref: JsonDict) -> str | None:
@@ -7340,6 +7503,7 @@ def _source_text_record(row, conn: sqlite3.Connection) -> SourceTextRecord:
         file_format=row["file_format"],
         extraction_flags=read_source_flags(conn, row["source_text_id"]),
         extraction_method=row["extraction_method"],
+        arxiv_version=_arxiv_version_from_json(row["arxiv_version_json"]),
         recorded_at=row["recorded_at"],
     )
 
@@ -7939,6 +8103,7 @@ def _source_text_dict(row: SourceTextRecord | None) -> JsonDict | None:
         "identity_status": row.identity_status,
         "identity_note": row.identity_note,
         "content_version": row.content_version,
+        "arxiv_version": row.arxiv_version,
         "extraction_flags": row.extraction_flags,
         "extraction_method": row.extraction_method,
         "recorded_at": row.recorded_at,

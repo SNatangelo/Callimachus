@@ -11,6 +11,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from typing import Any, Mapping
 
 from core.infra.integrity import signing as _signing
@@ -192,29 +193,48 @@ def write_html_report(
         raise
 
 
-def verify_html_report(run_dir: str, *, require_signature: bool = False) -> dict[str, Any]:
+def verify_html_report(
+    run_dir: str,
+    *,
+    require_signature: bool = False,
+    cancel_check: Callable[[], None] | None = None,
+) -> dict[str, Any]:
     """Verify the optional HTML companion against its Markdown report and live run data."""
+    def check_cancelled() -> None:
+        if cancel_check is not None:
+            cancel_check()
+
+    check_cancelled()
     root = os.path.abspath(run_dir)
-    base = verify_run.verify(root, require_signature=require_signature)
+    base = verify_run.verify(
+        root, require_signature=require_signature, cancel_check=cancel_check,
+    )
+    check_cancelled()
     failures = list(base.get("failures") or ())
     path = os.path.join(root, "report.html")
     if not os.path.exists(path):
         failures.append("report.html missing")
         return {"ok": False, "failures": failures, "base_gate": base}
     try:
+        check_cancelled()
         with open(path, encoding="utf-8", newline="") as stream:
             html = stream.read()
+        check_cancelled()
         body = strip_html_seal(html)
         meta = parse_html_seal(html)
         if meta["schema"] != SEAL_SCHEMA or meta["format"] != "html" or meta["renderer"] != RENDERER_VERSION:
             failures.append("report.html seal declares an unsupported format")
         with open(os.path.join(root, "report.md"), "rb") as stream:
             report_md_bytes = stream.read()
+        check_cancelled()
         if meta["report_md_sha256"] != _sha256_bytes(report_md_bytes):
             failures.append("report.html binding does not match current report.md")
         run_projection = load_run_projection(root)
+        check_cancelled()
         projection = build_human_report_projection(run_projection)
+        check_cancelled()
         rendered = render_human_report(projection, locale=meta["locale"], theme=meta["theme"])
+        check_cancelled()
         if meta["projection_sha256"] != rendered.projection_sha256:
             failures.append("report.html binding does not match current run projection")
         if dict(meta["asset_sha256"]) != dict(rendered.asset_sha256):
@@ -236,4 +256,5 @@ def verify_html_report(run_dir: str, *, require_signature: bool = False) -> dict
             failures.append("report.html signature is invalid")
     except (OSError, ValueError) as exc:
         failures.append(f"report.html verification failed: {exc}")
+    check_cancelled()
     return {"ok": not failures, "failures": failures, "base_gate": base}

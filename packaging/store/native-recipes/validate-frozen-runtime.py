@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/validate-frozen-runtime.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Validate the rebuilt Store payload with exact official framework CRT bytes in an isolated copy."""
 import ctypes
 from ctypes import wintypes

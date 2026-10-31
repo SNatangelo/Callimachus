@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.fetch.storage import content_store, fetch_store
-from core.fetch.extraction import fetch_html, ocr as fetch_ocr, pdf as fetch_pdf
+from core.fetch.extraction import fetch_html, ocr as fetch_ocr, pdf as fetch_pdf, source_pdf
 from core.parse import extract as parse_extract
 from core.parse import source_text
 from core.resolve import sources, user_sources
@@ -622,7 +622,7 @@ def _ingest_entry(
                     "ref_number": view.get("ref_number"),
                 }
             html_meta = fetch_html.meta_map(raw_html)
-        text, fmt, extraction_meta = parse_extract.extract_text(str(entry.path))
+        text, fmt, extraction_meta = source_pdf.extract_text(str(entry.path), run_dir)
     except Exception as exc:
         message = str(exc)
         if "challenge" in message.casefold() or "login" in message.casefold():
@@ -1075,13 +1075,13 @@ def ocr_scan_id(ref_id: str, scan_token: str, sha256: str) -> str:
     ).hexdigest()
 
 
-def pdf_requires_ocr(path: str | os.PathLike[str]) -> bool:
+def pdf_requires_ocr(
+    path: str | os.PathLike[str], *, run_dir: str | None = None,
+) -> bool:
     """Check a PDF text layer without invoking OCR or changing run state."""
     try:
         parse_extract.probe_file(str(path))
-        text, _method, _meta = parse_extract.extract_text(
-            str(path), manuscript_ocr=False,
-        )
+        text, _method, _meta = source_pdf.extract_text(str(path), run_dir)
     except Exception:
         return True
     return not fetch_pdf._quality(text) or (

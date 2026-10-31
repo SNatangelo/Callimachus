@@ -7,6 +7,8 @@ from __future__ import annotations
 import ast
 import json
 import os
+import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +33,31 @@ DISCOVERED_PACKAGES = (
     "core.verify.researchers",
     "core.style",
 )
+KEYRING_BACKENDS = {
+    "win32": "keyring.backends.Windows",
+    "darwin": "keyring.backends.macOS",
+    "linux": "keyring.backends.SecretService",
+}
+
+
+def _stage_settings_defaults() -> Path:
+    """Stage the source settings inventory without an env-file runtime name."""
+    source = ROOT / ".env.example"
+    destination = BUILD_ROOT / "settings.defaults"
+    if not source.is_file():
+        raise RuntimeError(f"required release resource is missing: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    return destination
+
+
+def _keyring_backend_module() -> str:
+    try:
+        return KEYRING_BACKENDS[sys.platform]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"desktop keyring backend is unsupported on {sys.platform}"
+        ) from exc
 
 
 def _discovered_modules() -> tuple[str, ...]:
@@ -94,18 +121,108 @@ def _metadata() -> Path:
     return destination
 
 
+
+def _macos_signing_identity() -> str | None:
+    """Select a persistent certificate; ad-hoc builds require explicit test opt-in."""
+    if sys.platform != "darwin":
+        return None
+    identity = os.environ.get("CALLIMACHUS_MACOS_SIGNING_IDENTITY", "").strip()
+    if identity:
+        if not re.fullmatch(r"[0-9A-Fa-f]{40}", identity):
+            raise RuntimeError("CALLIMACHUS_MACOS_SIGNING_IDENTITY must be a certificate SHA-1 fingerprint")
+        return identity.upper()
+    if os.environ.get("CALLIMACHUS_MACOS_ALLOW_ADHOC") == "1":
+        return None
+    raise RuntimeError(
+        "A persistent macOS signing certificate is required. Set "
+        "CALLIMACHUS_MACOS_SIGNING_IDENTITY to its SHA-1 fingerprint. "
+        "Ad-hoc builds are only available with CALLIMACHUS_MACOS_ALLOW_ADHOC=1 "
+        "and do not qualify Keychain access across updates."
+    )
+
+
+def _finalize_macos_bundle() -> None:
+    """Set the supported macOS release and reseal the completed app bundle."""
+    if sys.platform != "darwin":
+        return
+    identity = _macos_signing_identity()
+    app_bundle = BUILD_ROOT / "dist" / "Callimachus.app"
+    info_plist = app_bundle / "Contents" / "Info.plist"
+    try:
+        with info_plist.open("rb") as source:
+            info = plistlib.load(source)
+    except (OSError, plistlib.InvalidFileException) as exc:
+        raise RuntimeError(f"macOS application metadata is missing or invalid: {info_plist}") from exc
+    if not isinstance(info, dict):
+        raise RuntimeError(f"macOS application metadata is not a dictionary: {info_plist}")
+    info["LSMinimumSystemVersion"] = "14.4"
+    with info_plist.open("wb") as destination:
+        plistlib.dump(info, destination, fmt=plistlib.FMT_XML, sort_keys=False)
+    # V8 in Playwright's Node needs executable memory under hardened runtime.
+    # Keep these exceptions on Node, never on the main application or Qt.
+    node = app_bundle / "Contents" / "Frameworks" / "playwright" / "driver" / "node"
+    if not node.is_file() or not node.resolve().is_relative_to(app_bundle.resolve()):
+        raise RuntimeError("the bundled Playwright Node runtime is missing or escapes the app")
+    subprocess.run(
+        [
+            "codesign", "--force", "--sign", identity or "-",
+            "--options", "runtime", "--timestamp=none",
+            "--entitlements", str(ROOT / "packaging" / "assets" / "macos-playwright-node.entitlements.plist"),
+            str(node),
+        ],
+        check=True, timeout=120,
+    )
+    subprocess.run(
+        [
+            "codesign", "--force", "--sign", identity or "-",
+            "--preserve-metadata=identifier,entitlements,flags",
+            str(app_bundle),
+        ],
+        check=True, timeout=120,
+    )
+    subprocess.run(
+        ["codesign", "--verify", "--deep", "--strict", str(app_bundle)],
+        check=True, timeout=120,
+    )
+
+
+def _finalize_linux_bundle() -> None:
+    """Keep the public Linux command as a libc-checking launcher."""
+    if sys.platform != "linux":
+        return
+    bundle = BUILD_ROOT / "dist" / "Callimachus"
+    executable = bundle / "Callimachus"
+    internal_executable = bundle / "Callimachus.bin"
+    launcher_source = ROOT / "packaging" / "linux-launcher.sh"
+    if not executable.is_file():
+        raise RuntimeError(f"Linux application executable is missing: {executable}")
+    if internal_executable.exists():
+        raise RuntimeError(f"Linux internal executable already exists: {internal_executable}")
+    if not launcher_source.is_file():
+        raise RuntimeError(f"Linux application launcher is missing: {launcher_source}")
+
+    executable.replace(internal_executable)
+    internal_executable.chmod(internal_executable.stat().st_mode | 0o111)
+    shutil.copyfile(launcher_source, executable)
+    executable.chmod(0o755)
+
+
 def build_arguments() -> list[str]:
+    signing_identity = _macos_signing_identity()
     metadata = _metadata()
     notices_path = BUILD_ROOT / "THIRD-PARTY-NOTICES"
     if notices_path.exists():
         shutil.rmtree(notices_path)
     notices = collect(notices_path)
     data = [
-        (ROOT / ".env.example", "."),
+        (_stage_settings_defaults(), "."),
         (ROOT / "DEPLOYMENT.md", "."),
         (ROOT / "LICENSE", "."),
         (ROOT / "VERSION", "."),
-        (ROOT / "docs" / "guide", "docs/guide"),
+        (ROOT / "docs" / "README.md", "docs"),
+        (ROOT / "docs" / "reference", "docs/reference"),
+        (ROOT / "docs" / "user", "docs/user"),
+        (ROOT / "docs" / "legal", "docs/legal"),
         (ROOT / "docs" / "deployment", "docs/deployment"),
         (ROOT / "docs" / "architecture", "docs/architecture"),
         (ROOT / "core" / "parse" / "parsers.json", "core/parse"),
@@ -131,6 +248,8 @@ def build_arguments() -> list[str]:
         "--paths", str(ROOT),
         "--exclude-module", "tkinter",
         "--exclude-module", "_tkinter",
+        "--exclude-module", "keyrings.alt",
+        "--copy-metadata", "keyring",
         "--collect-all", "rapidocr",
         "--collect-all", "pypdfium2",
         "--collect-all", "onnxruntime",
@@ -139,6 +258,7 @@ def build_arguments() -> list[str]:
     ]
     for module in _dispatch_modules():
         arguments.extend(("--hidden-import", module))
+    arguments.extend(("--hidden-import", _keyring_backend_module()))
     for module in _discovered_modules():
         arguments.extend(("--hidden-import", module))
     for source, destination in data:
@@ -149,6 +269,13 @@ def build_arguments() -> list[str]:
             raise RuntimeError(f"macOS application icon is missing: {icon}")
         arguments.extend(("--icon", str(icon)))
         arguments.extend(("--windowed", "--osx-bundle-identifier", "science.callimachus.desktop"))
+        if signing_identity is not None:
+            arguments.extend(("--codesign-identity", signing_identity))
+            if os.environ.get("CALLIMACHUS_MACOS_SELF_SIGNED") == "1":
+                entitlements = ROOT / "packaging" / "assets" / "macos-self-signed.entitlements.plist"
+                if not entitlements.is_file():
+                    raise RuntimeError("self-signed macOS entitlements are missing")
+                arguments.extend(("--osx-entitlements-file", str(entitlements)))
     elif sys.platform == "win32":
         icon = ROOT / "packaging" / "assets" / "Callimachus.ico"
         if not icon.is_file():
@@ -231,6 +358,8 @@ def main() -> None:
     )
     verify_notice_inventory(packaged_notices)
     shutil.copy2(ROOT / "LICENSE", distribution / "LICENSE")
+    _finalize_macos_bundle()
+    _finalize_linux_bundle()
 
 
 if __name__ == "__main__":

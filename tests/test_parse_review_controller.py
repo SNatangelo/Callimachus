@@ -58,16 +58,18 @@ def test_parse_review_controller_projects_readable_closed_choices(tmp_path):
 def test_parse_review_controller_admits_operator_choice_through_gate(tmp_path, monkeypatch):
     target_hash = _paused_parse_run(tmp_path)
     calls = []
+    resolutions = []
 
     class Gate:
         def admit_task_answer(self, run_dir, task_id, payload, *, mirror_checkpoint):
             calls.append((run_dir, task_id, payload, mirror_checkpoint))
             return {"answer_id": "answer-1"}
 
-    monkeypatch.setattr(
-        "core.app.parse_review.resolve_existing",
-        lambda *_args, **_kwargs: SimpleNamespace(gate=Gate()),
-    )
+    def resolve(*args, **kwargs):
+        resolutions.append((args, kwargs))
+        return SimpleNamespace(gate=Gate())
+
+    monkeypatch.setattr("core.app.parse_review.resolve_existing", resolve)
     controller = ParseReviewController(str(tmp_path))
     answer = controller.submit_decision(
         "review", {
@@ -77,6 +79,15 @@ def test_parse_review_controller_admits_operator_choice_through_gate(tmp_path, m
     )
 
     assert answer == {"answer_id": "answer-1"}
+    assert resolutions == [(
+        (str(tmp_path), None),
+        {
+            "activation_only": True,
+            "activate_worker": False,
+            "mirror_audit_records": False,
+            "allow_local_downgrade": True,
+        },
+    )]
     assert calls == [(
         str(tmp_path), "review", {
             "action": "select_reference", "target_sha256": target_hash,

@@ -213,6 +213,19 @@ def date_anchored_title(text: str, *, _allow_comma_author_prefix: bool = False) 
     anchor = _DATE_PAREN_RE.search(text)
     if anchor is None:
         return None
+    if not anchor.group("edition"):
+        # A source-bounded journal tuple outranks this generic date anchor.
+        # Its venue and volume must not become an invented book/news title.
+        from core.parse.citation_coordinates import extract_cited_coordinates
+        from core.parse.parsing_common import _closed_journal_title_extent
+
+        year_match = re.search(r"(?:1[6-9]|20)\d{2}", anchor.group(0))
+        if year_match is not None:
+            extent = _closed_journal_title_extent(
+                text, int(year_match.group()), extract_cited_coordinates(text, None),
+            )
+            if extent is not None and extent[0] is None:
+                return None
     head = text[:anchor.start()]
     # Modern compact journal citations put the journal before volume and page,
     # unlike Bluebook's volume-reporter-page order. Do not treat that tuple as

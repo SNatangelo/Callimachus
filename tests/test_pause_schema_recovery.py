@@ -13,9 +13,7 @@ from core.app.runtime import tasks as runtime_tasks
 from core.infra.db import RunRepository
 from core.infra.db.phase_event_storage import normalize_phase_event
 from tests.test_recovery_regressions import make_run
-from tests.test_source_identity_attestation_phase import (
-    _run_with_unverified_fulltext, _answer_identity,
-)
+from tests.test_source_identity_attestation_phase import _run_with_unverified_fulltext
 
 
 @pytest.mark.parametrize('slot', ['fetch', 'research', 'verify', 'parse_review'])
@@ -37,6 +35,7 @@ def test_real_pause_persists_all_supported_slots(tmp_path, slot):
 
 
 def test_verify_identity_pause_and_resume_without_mocking_pause(tmp_path):
+    """Verify advances while an unadmitted source remains unverified."""
     with mock.patch.dict("os.environ", {}):
         run = _run_with_unverified_fulltext(tmp_path)
     repo = RunRepository.open(run)
@@ -45,14 +44,16 @@ def test_verify_identity_pause_and_resume_without_mocking_pause(tmp_path):
     with mock.patch.object(verify_phase._sources, 'document_identity_probe',
                            return_value={'decision': 'inconclusive'}), \
          mock.patch.object(verify_phase, '_execute_claim_evidence_tasks') as execute:
-        assert verify_phase.phase_verify({'run_dir': run}) == 10
-        execute.assert_not_called()
-        _answer_identity(run, 'keep_unverified')
         assert verify_phase.phase_verify({'run_dir': run}) == 'web_research'
+        execute.assert_called_once()
     repo = RunRepository.open_readonly(run)
     try:
-        assert repo.list_phase_events()[-1].payload['slot'] == 'verify'
-        assert all(t.status == 'applied' for t in repo.list_tasks(slot='verify'))
+        assert repo.get_task('verify:c1:r1:fulltext_complete') is None
+        pair = repo.get_verification_pair_state(
+            claim_id='c1', ref_id='r1', scope='fulltext_complete',
+        )
+        assert pair['status'] == 'uncertain'
+        assert pair['terminal_cause'] == 'bibliographic_identity_not_corroborated'
     finally:
         repo.close()
 
@@ -74,7 +75,7 @@ def test_pause_validation_stays_strict(count):
 
 @pytest.mark.skipif(os.name != "posix", reason="external integrity authority requires POSIX")
 def test_pause_event_is_checkpointed_inside_authority_transition(tmp_path):
-    from tests._integrity_fixtures import _gate, _run
+    from tests.infra.integrity.test_gate import _gate, _run
     gate, protected = _gate(tmp_path)
     run = _run(protected)
     gate.enroll(str(run))

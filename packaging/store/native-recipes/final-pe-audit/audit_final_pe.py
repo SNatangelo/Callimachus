@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/final-pe-audit/audit_final_pe.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Audit final frozen Store payload PE imports, toolset linkers, and runtime provenance."""
 from __future__ import annotations
 import ast

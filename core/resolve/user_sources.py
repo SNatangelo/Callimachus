@@ -346,16 +346,19 @@ def corroborate_user(ref: dict, text: str, metadata: dict | None = None) -> tupl
     title_candidates.extend(metadata.get("alternate_titles") or [])
     if metadata.get("title"):
         title_candidates.append(metadata["title"])
-    body = re.split(r"(?i)\b(?:references|bibliography)\b", identity_text, maxsplit=1)[0]
-    got = sources._tokens(body)
+    visible_identity_text = sources._identity_visible_text(identity_text)
+    body = re.split(r"(?i)\b(?:references|bibliography)\b", visible_identity_text, maxsplit=1)[0]
+    got = sources._identity_distinctive_tokens(body)
     overlap = max(
-        (len(set(sources._tokens(title)) & got) / max(len(sources._tokens(title)), 1)
+        (len(sources._identity_distinctive_tokens(title) & got)
+         / max(len(sources._identity_distinctive_tokens(title)), 1)
          for title in title_candidates if title),
         default=0.0,
     )
-    author = str(ref.get("ay_surname") or "").casefold()
+    author_phrase = sources._identity_comparison_phrase(str(ref.get("ay_surname") or ""))
     year = str(ref.get("year") or "")
-    author_ok = not author or bool(re.search(rf"(?<!\w){re.escape(author)}(?!\w)", body, re.I))
+    body_phrase = sources._identity_comparison_phrase(body)
+    author_ok = not author_phrase or f" {author_phrase} " in f" {body_phrase} "
     year_ok = not year or re.search(rf"(?<!\d){re.escape(year)}(?!\d)", body)
     if overlap >= 0.75 and author_ok and year_ok:
         return "title_author_year", round(overlap, 3), None

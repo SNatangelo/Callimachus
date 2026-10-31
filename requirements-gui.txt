@@ -5,3 +5,7 @@
 # Google Chrome is an external prerequisite and is never downloaded here.
 PySide6
 playwright
+# Frozen production builds use the operating system's credential vault.
+keyring==25.7.0
+# keyring's built-in Freedesktop Secret Service backend needs SecretStorage.
+SecretStorage==3.5.0; sys_platform == "linux"

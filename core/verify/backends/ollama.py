@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Ollama backend — local and cloud chat."""
 import os
+import ipaddress
+from urllib.parse import urlsplit, urlunsplit
 
 from core.verify.backends._registry import BackendSpec, register
 from core.verify.backends._chat_transport import (
@@ -20,9 +22,28 @@ def _ollama_timeout() -> int:
 
 ENV_OLLAMA_HOST = "OLLAMA_HOST"
 ENV_OLLAMA_API_KEY = "OLLAMA_API_KEY"
+ENV_OLLAMA_MODEL = "OLLAMA_MODEL"
 ENV_LLM_SEED = "CITATION_VERIFIER_LLM_SEED"
 _DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 _DEFAULT_OLLAMA_CLOUD_HOST = "https://ollama.com"
+
+
+def normalize_ollama_host(host: str) -> str:
+    """Interpret Ollama's native bare/bind host as a client endpoint."""
+    if not isinstance(host, str) or not host.strip() or any(char.isspace() or ord(char) < 32 for char in host):
+        raise ValueError("Invalid Ollama host")
+    bare = "://" not in host
+    parsed = urlsplit("http://" + host if bare else host)
+    hostname, port = parsed.hostname, parsed.port
+    if parsed.scheme not in {"http", "https"} or not hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        raise ValueError("Invalid Ollama host")
+    hostname = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(hostname, hostname)
+    if bare and port is None:
+        port = 11434
+    authority = f"[{hostname}]" if ":" in hostname else hostname
+    if port is not None:
+        authority += f":{port}"
+    return urlunsplit((parsed.scheme, authority, parsed.path.rstrip("/"), "", ""))
 
 
 def _sampling_options(max_tokens: int) -> dict:
@@ -42,15 +63,41 @@ def _available() -> bool:
                 or (os.environ.get(ENV_OLLAMA_API_KEY) or "").strip())
 
 
+def _is_loopback_host(host: str) -> bool:
+    try:
+        parsed = urlsplit(normalize_ollama_host(host))
+        if parsed.scheme != "http" or parsed.username or parsed.password or not parsed.hostname:
+            return False
+        return parsed.hostname.lower() == "localhost" or ipaddress.ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def _call_ollama_api(system: str, user: str, model: str, max_tokens: int = 3000) -> str:
-    api_key = (credential_value(ENV_OLLAMA_API_KEY) or "").strip()
+    return _call_ollama(system, user, model, max_tokens, allow_api_key=True)
+
+
+def _call_ollama_local(system: str, user: str, model: str, max_tokens: int = 3000) -> str:
+    if (credential_value(ENV_OLLAMA_API_KEY) or "").strip():
+        from core.verify.backends.errors import ConfigError
+        raise ConfigError("ollama_local does not accept an API key")
+    host = (os.environ.get(ENV_OLLAMA_HOST) or _DEFAULT_OLLAMA_HOST).strip()
+    if not _is_loopback_host(host):
+        from core.verify.backends.errors import ConfigError
+        raise ConfigError("ollama_local requires a loopback host")
+    return _call_ollama(system, user, model, max_tokens, allow_api_key=False)
+
+
+def _call_ollama(system: str, user: str, model: str, max_tokens: int, *, allow_api_key: bool) -> str:
+    api_key = (credential_value(ENV_OLLAMA_API_KEY) or "").strip() if allow_api_key else ""
     host = (os.environ.get(ENV_OLLAMA_HOST) or "").strip()
     if not host:
         host = _DEFAULT_OLLAMA_CLOUD_HOST if api_key else _DEFAULT_OLLAMA_HOST
-    # Normalise bare host:port to http://host:port so urlopen can parse it
-    if "://" not in host:
-        host = "http://" + host
-    host = host.rstrip("/")
+    try:
+        host = normalize_ollama_host(host)
+    except ValueError:
+        from core.verify.backends.errors import ConfigError
+        raise ConfigError("The configured Ollama host is invalid.", backend="ollama") from None
     direct_cloud = bool(api_key and host.lower().startswith(_DEFAULT_OLLAMA_CLOUD_HOST))
     model_name = model
     if direct_cloud and model_name:
@@ -101,10 +148,29 @@ def _call_ollama_api(system: str, user: str, model: str, max_tokens: int = 3000)
 register(BackendSpec(
     name="ollama",
     env_key=ENV_OLLAMA_API_KEY,
+    env_model=ENV_OLLAMA_MODEL,
     available=_available,
     call=_call_ollama_api,
     auto_priority=60,
     codex_priority=40,
     claude_code_priority=60,
     antigravity_priority=50,
+))
+
+
+register(BackendSpec(
+    name="ollama_local",
+    env_key="",
+    env_model=ENV_OLLAMA_MODEL,
+    available=lambda: (
+        not (os.environ.get(ENV_OLLAMA_API_KEY) or "").strip()
+        and bool((os.environ.get(ENV_OLLAMA_HOST) or "").strip()
+                 or (os.environ.get(ENV_OLLAMA_MODEL) or "").strip())
+        and _is_loopback_host((os.environ.get(ENV_OLLAMA_HOST) or _DEFAULT_OLLAMA_HOST).strip())
+    ),
+    call=_call_ollama_local,
+    auto_priority=60,
+    codex_priority=45,
+    claude_code_priority=65,
+    antigravity_priority=55,
 ))

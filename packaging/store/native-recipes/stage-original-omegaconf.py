@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/stage-original-omegaconf.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 import argparse, hashlib, json, shutil
 from pathlib import Path
 

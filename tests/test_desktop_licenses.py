@@ -46,45 +46,94 @@ def test_critical_wheels_have_real_notice_files(distribution, expected):
 
 
 def test_collect_copies_notices_and_records_versions(monkeypatch, tmp_path):
-    packages = {
-        name: metadata.distribution(name)
-        for name in ("pypdfium2", "onnxruntime", "playwright")
-    }
+    packages = {}
+    notice_files = {}
+    for name, version, relative_names in (
+        ("pypdfium2", "5.0.0.93", ("build_licenses/pdfium.txt", "licenses/LICENSE.txt")),
+        ("onnxruntime", "1.29.0", ("ThirdPartyNotices.txt", "LICENSE.txt")),
+        ("playwright", "1.62.0", ("ThirdPartyNotices.txt", "LICENSE.txt")),
+    ):
+        distribution = SimpleNamespace(
+            version=version, metadata={"Name": name, "License": "MIT"}, files=[],
+        )
+        packages[name] = distribution
+        notice_files[name] = []
+        for relative_name in relative_names:
+            source = tmp_path / "wheel-files" / name / relative_name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("notice text", encoding="utf-8")
+            notice_files[name].append((Path(relative_name), source))
+    for name, version in (
+        ("PySide6", "6.12.0"), ("PySide6_Essentials", "6.12.0"),
+        ("PySide6_Addons", "6.12.0"), ("shiboken6", "6.12.0"),
+        ("PySide6_Pdf", "6.12.0.140"), ("PySide6_WebEngine", "6.12.0.140"),
+    ):
+        normalized = NOTICES._normalize(name)
+        packages[normalized] = SimpleNamespace(
+            version=version,
+            metadata={"Name": name, "License": "LGPL-3.0-only"},
+            files=[],
+        )
+        notice_files[name] = []
     monkeypatch.setattr(NOTICES, "_distributions", lambda: packages)
+    monkeypatch.setattr(
+        NOTICES, "_notice_files",
+        lambda distribution: notice_files[distribution.metadata["Name"]],
+    )
     license_body = b"license text\n" * 200
     monkeypatch.setattr(NOTICES, "QT_TERMS", {"LGPL-3.0-only.txt": hashlib.sha256(license_body).hexdigest()})
     monkeypatch.setattr(NOTICES.urllib.request, "urlopen", lambda *_args, **_kwargs: io.BytesIO(license_body))
     destination = NOTICES.collect(tmp_path / "notices")
     inventory = json.loads((destination / "index.json").read_text(encoding="utf-8"))
-    assert {item["name"].lower() for item in inventory} == set(packages)
+    assert {NOTICES._normalize(str(item["name"])) for item in inventory} == set(packages)
     assert (destination / "Qt-PySide6" / "LGPL-3.0-only.txt").is_file()
+    for name, version in (
+        ("PySide6_Pdf", "6.12.0.140"), ("PySide6_WebEngine", "6.12.0.140"),
+    ):
+        assert (destination / f"{NOTICES._normalize(name)}-{version}" / "LGPL-3.0-only.txt").is_file()
     assert list(destination.rglob("*pdfium.txt"))
     assert list(destination.rglob("ThirdPartyNotices.txt"))
 
 
 def test_missing_pdfium_notices_fails_closed(monkeypatch, tmp_path):
-    packages = {"onnxruntime": metadata.distribution("onnxruntime"),
-                "playwright": metadata.distribution("playwright")}
+    packages = {
+        name: SimpleNamespace(
+            version="1.0", metadata={"Name": name, "License": "MIT"}, files=[],
+        )
+        for name in ("onnxruntime", "playwright")
+    }
     monkeypatch.setattr(NOTICES, "_distributions", lambda: packages)
     with pytest.raises(RuntimeError, match="pdfium"):
         NOTICES.collect(tmp_path / "notices")
 
 
 def test_authors_file_alone_does_not_satisfy_license_requirement(monkeypatch, tmp_path):
-    fake = SimpleNamespace(version="1.0", metadata={"Name": "fake"})
-    packages = {
-        name: metadata.distribution(name)
-        for name in ("pypdfium2", "onnxruntime", "playwright")
-    }
+    fake = SimpleNamespace(version="1.0", metadata={"Name": "fake"}, files=[])
+    packages = {}
+    notice_inventory = {}
+    for name in ("pypdfium2", "onnxruntime", "playwright"):
+        packages[name] = SimpleNamespace(
+            version="1.0", metadata={"Name": name, "License": "MIT"}, files=[],
+        )
+        notice_inventory[name] = []
+        relative_names = (
+            ("build_licenses/pdfium.txt", "LICENSE.txt") if name == "pypdfium2"
+            else ("ThirdPartyNotices.txt", "LICENSE.txt")
+        )
+        for relative_name in relative_names:
+            source = tmp_path / "wheel-files" / name / relative_name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("notice text", encoding="utf-8")
+            notice_inventory[name].append((Path(relative_name), source))
     packages["fake"] = fake
+    notice_inventory["fake"] = []
     authors = tmp_path / "AUTHORS"
     authors.write_text("Contributors\n", encoding="utf-8")
-    actual_notice_files = NOTICES._notice_files
 
     def notice_files(distribution):
         if distribution is fake:
             return [(Path("fake-1.0.dist-info/AUTHORS"), authors)]
-        return actual_notice_files(distribution)
+        return notice_inventory[distribution.metadata["Name"]]
 
     monkeypatch.setattr(NOTICES, "_distributions", lambda: packages)
     monkeypatch.setattr(NOTICES, "_notice_files", notice_files)
@@ -446,8 +495,15 @@ def test_pyinstaller_analysis_binary_inventory_is_not_empty(tmp_path):
     assert NOTICES._bundled_binaries(analysis) == [("native.so", source.resolve())]
 
 
-@pytest.mark.parametrize("version", ["6.11.2", "6.12.0"])
-def test_qt_documents_use_pinned_series_and_reject_wrong_version(monkeypatch, version):
+@pytest.mark.parametrize(("platform", "version", "accepted"), [
+    ("win32", "6.12.0", True), ("win32", "6.11.3", False),
+    ("linux", "6.12.0", True), ("linux", "6.11.3", False),
+    ("darwin", "6.12.0", True), ("darwin", "6.11.3", False),
+])
+def test_qt_documents_use_pinned_series_and_reject_wrong_version(
+    monkeypatch, platform, version, accepted,
+):
+    monkeypatch.setattr(NOTICES.sys, "platform", platform)
     requested = []
     body = f"<h1>Qt {version}</h1>".encode()
 
@@ -456,30 +512,41 @@ def test_qt_documents_use_pinned_series_and_reject_wrong_version(monkeypatch, ve
         return io.BytesIO(body)
 
     monkeypatch.setattr(NOTICES.urllib.request, "urlopen", fetch)
-    if version == NOTICES.QT_VERSION:
+    if accepted:
         assert NOTICES._fetch_qt_document("licenses-used-in-qt.html") == body
     else:
-        with pytest.raises(RuntimeError, match="not for 6.11.2"):
+        with pytest.raises(RuntimeError, match=f"not for {NOTICES._qt_version()}"):
             NOTICES._fetch_qt_document("licenses-used-in-qt.html")
-    assert requested == ["https://doc.qt.io/qt-6.11/licenses-used-in-qt.html"]
+    assert requested == [NOTICES._qt_doc_source() + "licenses-used-in-qt.html"]
+    assert NOTICES._qt_source().endswith(f"v{NOTICES._qt_version()}/LICENSES/")
+    assert NOTICES._qt_gfdl_source().endswith(
+        f"v{NOTICES._qt_version()}/LICENSES/GFDL-1.3-no-invariants-only.txt"
+    )
 
 
-def test_qt_attributions_include_component_license_pages(monkeypatch, tmp_path):
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_qt_attributions_include_component_license_pages(monkeypatch, tmp_path, platform):
+    monkeypatch.setattr(NOTICES.sys, "platform", platform)
     notices = tmp_path / "notices"
     notices.mkdir()
     (notices / "index.json").write_text("[]", encoding="utf-8")
     analysis = tmp_path / "Analysis-00.toc"
     analysis.write_text("[]", encoding="utf-8")
-    monkeypatch.setattr(NOTICES.metadata, "distribution", lambda _name: SimpleNamespace(version="6.11.2"))
+    monkeypatch.setattr(
+        NOTICES.metadata, "distribution",
+        lambda _name: SimpleNamespace(version=NOTICES._qt_version()),
+    )
     monkeypatch.setattr(NOTICES, "_bundled_binaries", lambda _toc: [
         ("PySide6/Qt/lib/libQt6Core.so.6", tmp_path / "libQt6Core.so.6"),
     ])
-    index = (b'<h1>Qt 6.11.2</h1><h2 id="qt-core">Qt Core</h2>'
-             b'<div class="table"><table class="annotated">'
-             b'<a href="qtcore-attribution-zlib.html">zlib</a></table>')
+    index = (
+        f'<h1>Qt {NOTICES._qt_version()}</h1><h2 id="qt-core">Qt Core</h2>'.encode()
+        + b'<div class="table"><table class="annotated">'
+        + b'<a href="qtcore-attribution-zlib.html">zlib</a></table>'
+    )
     documents = {
         "licenses-used-in-qt.html": index,
-        "qtcore-attribution-zlib.html": b"<h1>Qt 6.11.2 zlib license text</h1>",
+        "qtcore-attribution-zlib.html": f"<h1>Qt {NOTICES._qt_version()} zlib license text</h1>".encode(),
     }
     monkeypatch.setattr(NOTICES, "_fetch_qt_document", documents.__getitem__)
     monkeypatch.setattr(NOTICES.urllib.request, "urlopen", lambda *_args, **_kwargs: io.BytesIO(b"GNU Free Documentation License"))
@@ -488,8 +555,21 @@ def test_qt_attributions_include_component_license_pages(monkeypatch, tmp_path):
 
     inventory = json.loads((notices / "index.json").read_text(encoding="utf-8"))
     assert inventory[-1]["name"] == "Qt third-party attributions"
+    assert inventory[-1]["version"] == NOTICES._qt_version()
     assert "qtcore-attribution-zlib.html" in inventory[-1]["files"]
     assert (notices / "Qt-PySide6" / "attributions" / "qtcore-attribution-zlib.html").is_file()
+
+
+def test_qt_attributions_reject_a_pyside_version_for_another_platform(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(NOTICES.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        NOTICES.metadata, "distribution",
+        lambda _name: SimpleNamespace(version="6.11.3"),
+    )
+    with pytest.raises(RuntimeError, match="PySide6 version changed"):
+        NOTICES.add_qt_attributions(tmp_path / "notices", tmp_path / "Analysis-00.toc")
 
 
 def test_unreviewed_qt_module_fails_closed(tmp_path):

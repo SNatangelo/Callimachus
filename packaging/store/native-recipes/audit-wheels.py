@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/audit-wheels.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 import hashlib,json,zipfile
 from pathlib import Path
 import pefile

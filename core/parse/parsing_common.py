@@ -1410,6 +1410,28 @@ def _is_title_fragment(part: str) -> bool:
     return len(clean.split()) >= 2
 
 
+_GENERIC_TITLE_IDENTIFIER_PREFIX_RE = re.compile(
+    r"^(?:https?://|(?:doi\s*:\s*)?10\.\d{4,9}/\S+|"
+    r"ISBN\b\s*[:.]?\s*(?=[0-9Xx][0-9Xx \-]{8,16}(?:\b|$))|"
+    r"arXiv\s*[:\s]+\d{4}\.\d{4,5}(?:v\d+)?|"
+    r"CoRR\s*,?\s*abs/\d{4}\.\d{4,5})",
+    re.IGNORECASE,
+)
+
+
+def _starts_with_reference_identifier(text: str) -> bool:
+    """Return whether a candidate begins with citation metadata, not title text."""
+    clean = (text or "").strip(" \t\r\n,;.")
+    return bool(_GENERIC_TITLE_IDENTIFIER_PREFIX_RE.match(clean))
+
+
+def _is_generic_identifier_or_year_candidate(text: str) -> bool:
+    clean = (text or "").strip(" \t\r\n,;.")
+    return _starts_with_reference_identifier(clean) or bool(
+        re.fullmatch(r"(?:19|20)\d{2}[a-z]?", clean, re.IGNORECASE)
+    )
+
+
 # Nature-style lists join the last co-author with "&": "... Kumar, A. & Evans, B.
 # Title...".  ``_split_prose_entry_parts`` masks the period after an initial only
 # when a capital follows, and "&" is not one, so the split lands there and the
@@ -1510,12 +1532,81 @@ _VANCOUVER_TERMINAL_INITIAL_HEAD_RE = re.compile(
     r"^\s*(?:" + _VANCOUVER_TERMINAL_INITIAL_AUTHOR_RE + r",\s+)+"
     r"(?:et\s+al\.\s+|" + _VANCOUVER_TERMINAL_INITIAL_AUTHOR_RE + r"\.\s+)"
 )
+_VANCOUVER_SINGLE_TERMINAL_INITIAL_HEAD_RE = re.compile(
+    r"^\s*[A-ZÀ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]+\s+[A-ZÀ-Þ]\.\s+"
+)
+# A surname-plus-initial prefix can end inside a given-name-first author list
+# (``Quoc V. Le and Jane Doe``); preserve that full-name continuation for the
+# prose splitter instead of treating the remainder as a title.
+_VANCOUVER_SINGLE_INITIAL_CONTINUATION_NAME = (
+    r"[A-ZÀ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]+"
+)
+_VANCOUVER_SINGLE_INITIAL_AUTHOR_CONTINUATION_RE = re.compile(
+    rf"^\s*{_VANCOUVER_SINGLE_INITIAL_CONTINUATION_NAME}"
+    rf"(?:\s+{_VANCOUVER_SINGLE_INITIAL_CONTINUATION_NAME}){{0,2}}"
+    r"(?:\s*,\s*(?:(?i:and)\s+)?|\s*&\s*|\s+(?i:and)\s+)"
+    rf"{_VANCOUVER_SINGLE_INITIAL_CONTINUATION_NAME}"
+    rf"(?:\s+{_VANCOUVER_SINGLE_INITIAL_CONTINUATION_NAME}){{1,2}}"
+    r"(?:\s*,\s*(?:(?i:and)\s+)?"
+    rf"{_VANCOUVER_SINGLE_INITIAL_CONTINUATION_NAME}"
+    rf"(?:\s+{_VANCOUVER_SINGLE_INITIAL_CONTINUATION_NAME}){{1,2}})*"
+    r"\.\s+"
+)
+_VANCOUVER_SINGLE_TERMINAL_INITIAL_PREPRINT_TAIL_RE = re.compile(
+    r"(?P<title>.+?)\.\s+"
+    r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ0-9 .&'’()\-]{1,100}?\s+"
+    r"(?i:preprint),?\s+(?:19|20)\d{2}"
+    r"(?:\.\s*(?i:doi):\s*10\.\d{4,9}/\S+)?\.?\s*$"
+)
+_VANCOUVER_SINGLE_TERMINAL_INITIAL_ARTICLE_TAIL_RE = re.compile(
+    r"(?P<title>.+?)\.\s+"
+    r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ0-9 .&'’()\-]{1,100}?\s+"
+    r"(?:19|20)\d{2};\d{1,4}(?:\([^)]*\))?:"
+    r"[A-Za-z]?\d+(?:\s*[-–—−‐‑]\s*[A-Za-z]?\d+)?"
+    r"(?:\.\s*(?i:doi):\s*10\.\d{4,9}/\S+)?"
+    r"\.?\s*$"
+)
+_VANCOUVER_SINGLE_TERMINAL_INITIAL_WEB_TAIL_RE = re.compile(
+    r"(?P<title>.+?)\.\s+"
+    r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ0-9 .&'’()\-]{1,100}?\s+"
+    r"(?:19|20)\d{2}\.\s+"
+    r"(?i:https?://)\S+"
+    r"(?:\s+\(\s*(?i:accessed)\s+[^()\r\n]+\))?\.?\s*$"
+)
+_VANCOUVER_SINGLE_TERMINAL_INITIAL_BOOK_TAIL_RE = re.compile(
+    r"(?P<title>.+?),\s+"
+    r"[A-ZÀ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.\-]{2,}"
+    r"(?:\s+[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’.\-]+)*(?:,\s*[A-Z]{2})?"
+    r":\s*[A-Z][A-Za-zÀ-ÖØ-öø-ÿ0-9&'’().\- ]{1,100}?\.\s+"
+    r"(?i:ISBN)\s*[:.]?\s*[\dXx\-]{10,17}\s*;\s*"
+    r"(?:19|20)\d{2}\b"
+    r"(?:,\s*(?i:pp?\.?)\s+[\d, \-–—−‐‑]+)?\.?\s*$"
+)
 _VANCOUVER_TERMINAL_INITIAL_COMPACT_ARTICLE_TAIL_RE = re.compile(
     r"(?P<title>.+?)\."
     r"(?P<venue>[A-Z][A-Za-zÀ-ÖØ-öø-ÿ .&'’()\-]{1,100}?)"
     r"(?P<year>(?:19|20)\d{2});"
     r"(?P<volume>\d{1,4})\((?P<issue>[A-Za-z0-9/]+)\):"
     r"(?P<pages>\d{1,9}\s*[-–—−‐‑]\s*\d{1,9})\.?\s*$"
+)
+_VANCOUVER_UNDOTTED_INITIAL_NAME = (
+    r"[A-ZÀ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]*"
+)
+_VANCOUVER_UNDOTTED_INITIAL_AUTHOR = (
+    rf"(?:{_VANCOUVER_UNDOTTED_INITIAL_NAME}"
+    rf"(?:\s+{_VANCOUVER_UNDOTTED_INITIAL_NAME}){{0,2}}\s+[A-ZÀ-Þ]{{1,4}}"
+    rf"|{_VANCOUVER_UNDOTTED_INITIAL_NAME}\s+[A-ZÀ-Þ]{{1,4}}\s+"
+    rf"{_VANCOUVER_UNDOTTED_INITIAL_NAME})"
+)
+_VANCOUVER_UNDOTTED_INITIAL_TERMINAL_HEAD_RE = re.compile(
+    r"^\s*(?:" + _VANCOUVER_UNDOTTED_INITIAL_AUTHOR + r"\.?\s*,\s+){1,19}"
+    + _VANCOUVER_UNDOTTED_INITIAL_AUTHOR + r"\.\s+"
+)
+_VANCOUVER_TERMINAL_YEAR_TITLE_TAIL_RE = re.compile(
+    r"(?P<title>.+?)\s+(?:19|20)\d{2}[a-z]?\.?"
+    r"(?:\s+(?i:doi:\s*10\.\d{4,9}/\S+))?"
+    r"\.?\s*$",
+    re.IGNORECASE,
 )
 
 
@@ -1531,6 +1622,30 @@ def _match_vancouver_terminal_initial_compact_article(raw: str | None) -> re.Mat
     )
 
 
+def _strip_vancouver_terminal_doi_url(text: str) -> str:
+    """Remove only a terminal DOI URL so closed citation tails can be checked."""
+    match = re.search(
+        r"\s+(?i:https?://(?:dx\.)?doi\.org/10\.\d{4,9}/\S+)\s*$",
+        text or "",
+    )
+    return text[:match.start()].rstrip() if match else text
+
+
+def _extract_vancouver_undotted_terminal_year_title(raw: str) -> str | None:
+    """Read a title after a closed comma-separated, undotted-initial author list."""
+    author_head = _VANCOUVER_UNDOTTED_INITIAL_TERMINAL_HEAD_RE.match(raw or "")
+    if author_head is None:
+        return None
+    tail = _strip_vancouver_terminal_doi_url(raw[author_head.end():])
+    match = _VANCOUVER_TERMINAL_YEAR_TITLE_TAIL_RE.fullmatch(tail)
+    if match is None:
+        return None
+    title = _trim_title_tail(match.group("title"))
+    if len(title.split()) < 2 or _starts_with_reference_identifier(title):
+        return None
+    return title
+
+
 def _extract_vancouver_terminal_initial_title(raw: str) -> str | None:
     """Recover a title after a Vancouver author block ending in an initial.
 
@@ -1540,8 +1655,40 @@ def _extract_vancouver_terminal_initial_title(raw: str) -> str | None:
     making the journal appear to be the first title-shaped part.  This narrow
     complete-shape extractor retains the title directly from the raw entry.
     """
-    match = _VANCOUVER_TERMINAL_INITIAL_HEAD_RE.match(raw or "")
+    raw = raw or ""
+    undotted_title = _extract_vancouver_undotted_terminal_year_title(raw)
+    if undotted_title:
+        return undotted_title
+    match = _VANCOUVER_TERMINAL_INITIAL_HEAD_RE.match(raw)
     if not match:
+        single_author_head = _VANCOUVER_SINGLE_TERMINAL_INITIAL_HEAD_RE.match(raw)
+        if not single_author_head:
+            return None
+        tail = raw[single_author_head.end():]
+        if _VANCOUVER_SINGLE_INITIAL_AUTHOR_CONTINUATION_RE.match(tail):
+            return None
+        article_tail = _strip_vancouver_terminal_doi_url(tail)
+        single_article = _VANCOUVER_SINGLE_TERMINAL_INITIAL_ARTICLE_TAIL_RE.fullmatch(
+            article_tail
+        )
+        if single_article:
+            title = _trim_title_tail(single_article.group("title"))
+            if len(title.split()) >= 2 and not _starts_with_reference_identifier(title):
+                return title
+        for closed_tail in (
+            _VANCOUVER_SINGLE_TERMINAL_INITIAL_PREPRINT_TAIL_RE,
+            _VANCOUVER_SINGLE_TERMINAL_INITIAL_WEB_TAIL_RE,
+            _VANCOUVER_SINGLE_TERMINAL_INITIAL_BOOK_TAIL_RE,
+        ):
+            single_author_article = closed_tail.fullmatch(tail)
+            if single_author_article:
+                title = _trim_title_tail(single_author_article.group("title"))
+                return (
+                    title
+                    if len(title.split()) >= 2
+                    and not _starts_with_reference_identifier(title)
+                    else None
+                )
         return None
     tail = raw[match.end():]
     # A parenthesized date immediately after this closed author head belongs to
@@ -2582,10 +2729,21 @@ def _extract_comma_year_volume_title(raw: str) -> str | None:
     return title if len(title.split()) >= 2 else None
 
 
+_CORPORATE_NUMBERED_REPORT_RE = re.compile(
+    r"^\s*(?P<authors>(?:[A-Z][\w'’&/-]*\s+|(?:of|and|the|for|in|on)\s+){1,8}"
+    r"(?:Group|Committee|Commission|Council|Agency|Institute|Organization|Organisation|Authority))"
+    r"\.\s+(?P<title>[A-Z][A-Z0-9-]{1,15}\s+(?:19|20)\d{2}[-–]\d{1,4}:\s+[^\r\n]+?)"
+    r"\.\s+(?P<year>(?:19|20)\d{2})\.?\s*$"
+)
+
+
 def _extract_title_heuristic(raw: str, *, chicago_hanging: bool = False) -> str | None:
     """Best-effort title extraction from a prose bibliography entry."""
     if not raw:
         return None
+    report = _CORPORATE_NUMBERED_REPORT_RE.fullmatch(raw)
+    if report:
+        return report.group("title")
     colon_family, colon_title = _closed_colon_author_title(raw)
     if colon_family:
         return colon_title
@@ -2736,6 +2894,8 @@ def _extract_title_heuristic(raw: str, *, chicago_hanging: bool = False) -> str 
     # Skip the first segment (author block), check the next 1-2 segments.
     for part_index, part in enumerate(parts[1:5], start=1):
         part = _strip_trailing_coauthor(part)
+        if _is_generic_identifier_or_year_candidate(part):
+            continue
         # ``(in press)``/``(forthcoming)``/``(n.d.)`` can be the first
         # segment after the author block.  They are dates, never titles.
         if re.fullmatch(
@@ -2754,11 +2914,17 @@ def _extract_title_heuristic(raw: str, *, chicago_hanging: bool = False) -> str 
             and part_index + 1 == len(parts) - 1
             and _CLOSED_TERMINAL_VENUE_YEAR_VOLUME_RE.fullmatch(parts[part_index + 1])
         ):
-            return _trim_title_tail(part)
+            candidate = _trim_title_tail(part)
+            if not _is_generic_identifier_or_year_candidate(candidate):
+                return candidate
         # Try to extract the title portion before the first year occurrence.
         if len(toks) >= 4:
             title_part = _split_before_year(part)
-            if title_part and len(title_part.split()) >= 2:
+            if (
+                title_part
+                and len(title_part.split()) >= 2
+                and not _is_generic_identifier_or_year_candidate(title_part)
+            ):
                 return _trim_title_tail(title_part)
     return None
 
@@ -3498,7 +3664,7 @@ def _merge_hyphen_wraps(text: str) -> str:
 # that next marker and silently loses the reference.
 _NUM_SEPARATOR = r"(?:[^\S\r\n]+|[^\S\r\n]*\r?\n(?=[^\S\r\n]*[\"“‘']?[^\W\d_]))"
 _NUM_MARKER = (
-    rf"(?:\[(\d+)\](?:\.)?{_NUM_SEPARATOR}"
+    rf"(?:\[(\d+)\](?:\.)?(?:{_NUM_SEPARATOR}|(?=[\"“‘']?[^\W\d_]))"
     rf"|\((\d+)\){_NUM_SEPARATOR}"
     rf"|(\d+)[.)]{_NUM_SEPARATOR}"
     r"|(\d+)(?=[A-Z]\.))"
@@ -4903,11 +5069,12 @@ def _select_biblio_heading_index(lines: list[str]) -> int | None:
     later real list, including a one-entry list, remains selected.
     """
     candidates = []
+    heading_re = parser_text.bibliography_heading_re()
     for index, line in enumerate(lines):
         stripped = re.sub(
             r"^[\s■▪●•◆□▶*·]+", "", line
         ).strip().lower().rstrip(":.")
-        if stripped in parser_text.BIBLIOGRAPHY_HEADINGS:
+        if heading_re.fullmatch(stripped):
             candidates.append(index)
     if not candidates:
         return None
@@ -5100,6 +5267,8 @@ def _scoped_list_boundary(
     for index in range(start, len(lines)):
         if _scoped_bibliography_heading(lines, index) is not None:
             return index
+        if parser_text.bibliography_heading_re().fullmatch(lines[index].strip()):
+            return index
         explicit = _explicit_scope_heading(lines[index])
         if explicit is not None:
             return index
@@ -5165,6 +5334,25 @@ def _split_scoped_bibliographies(text: str) -> tuple[str, str, dict, list[dict]]
     for start, end in removed:
         for index in range(start, end):
             body_lines[index] = ""
+    # A trailing document-wide list is not part of the last chapter's scope.
+    # Retain its sources independently, without inventing chapter ownership for
+    # its local labels. Keep line positions intact for sentence provenance.
+    global_heading = _select_biblio_heading_index(body_lines)
+    if global_heading is not None and global_heading >= max(end for _, end in removed):
+        start = global_heading + 1
+        global_lines = body_lines[start:]
+        if _region_has_bibliography_entry(global_lines):
+            end_offset = _find_biblio_end_index(global_lines)
+            end = start + end_offset if end_offset is not None else len(lines)
+            blocks.append({
+                "scope": None,
+                "kind": "document",
+                "label": None,
+                "section": None,
+                "text": "\n".join(body_lines[start:end]).strip("\n"),
+            })
+            for index in range(global_heading, end):
+                body_lines[index] = ""
     body = "\n".join(body_lines)
     biblio = "\n\n".join(block["text"] for block in blocks)
     first_line = min(start for start, _ in removed)
@@ -6426,7 +6614,9 @@ def _truncate_bleed(raw_entries: list[str]) -> list[str]:
     return result
 
 
-def _merge_standalone_doi_url(refs: list[dict]) -> list[dict]:
+def _merge_standalone_doi_url(
+    refs: list[dict], *, merge_identifier_only_entries: bool = True,
+) -> list[dict]:
     """Fold entries that are just a bare DOI/URL (split off by PDF text
     extraction) back into the preceding reference, and discard empty entries.
 
@@ -6441,7 +6631,7 @@ def _merge_standalone_doi_url(refs: list[dict]) -> list[dict]:
             or raw.startswith("http://doi.org/")
             or re.match(r"^10\.\d{4,9}/", raw)
         )
-        if is_doi_url and merged:
+        if is_doi_url and merged and merge_identifier_only_entries:
             prev = merged[-1]
             _clean_merge = re.sub(r"\s*[–—-]\s*", "-", raw)
             prev["raw_entry"] = (prev["raw_entry"] or "") + "  " + raw
@@ -6513,6 +6703,33 @@ def _structurally_complete_entry(text: str) -> bool:
         return False
     return ({"journal", "pages"} <= set(fields)
             or {"publisher", "place"} <= set(fields))
+
+
+def _has_clear_numbered_entry_shape(text: str) -> bool:
+    """Require a complete source shape or an explicit standalone identifier."""
+    text = text.strip()
+    if not text:
+        return False
+    if _structurally_complete_entry(text):
+        return True
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return False
+    if re.fullmatch(
+        r"(?:(?:doi:\s*)?10\.\d{4,9}/\S+|https?://\S+|ISBN[:\s]+[\dXx -]+)",
+        text, re.I,
+    ):
+        return True
+    reference = _make_reference(1, text)
+    return (
+        bool(reference.get("title"))
+        and reference.get("year") is not None
+        and reference.get("source_type_confidence") in {"medium", "high"}
+        and bool(reference.get("source_type_evidence"))
+        and _looks_authoryear_ref_start(
+            lines[0], lines[1] if len(lines) > 1 else "",
+        )
+    )
 
 
 def _split_structural_line_entries(text: str) -> list[str] | None:
@@ -6600,6 +6817,13 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
     entry_re = re.compile(r"(?m)^\s*" + _NUM_MARKER)
     matches = list(entry_re.finditer(text))
     refs = []
+    numbered_chunks = [
+        _trim_interposed_block(
+            text[match.end():matches[index + 1].start()
+                 if index + 1 < len(matches) else len(text)]
+        )
+        for index, match in enumerate(matches)
+    ]
     # If the matched numbers don't look like a real reference-numbering
     # sequence (e.g. they are page numbers or years split across PDF lines),
     # fall through to the author-year path.
@@ -6626,12 +6850,23 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
                         text.splitlines()
                     )
                 )
-        elif len(matches) >= 5:
-            # Check for a consecutive-ish sequence
-            nums = [_entry_num(m) for m in matches[:10]]
-            gaps = sum(1 for a, b in zip(nums, nums[1:]) if b - a not in (1, 2))
-            if gaps <= 1:
-                _numbered_ref_ok = True
+        else:
+            if len(matches) >= 5:
+                # Check for a consecutive-ish sequence
+                nums = [_entry_num(m) for m in matches[:10]]
+                gaps = sum(1 for a, b in zip(nums, nums[1:]) if b - a not in (1, 2))
+                if gaps <= 1:
+                    _numbered_ref_ok = True
+            if not _numbered_ref_ok and matches:
+                # A short list may start above 20. Accept its literal labels only
+                # in source order and when each marker has a readable source shape.
+                # Unordered high markers can be wrapped locators in author-year
+                # entries, even when later text in each chunk looks bibliographic.
+                candidate_numbers = [_entry_num(match) for match in matches]
+                _numbered_ref_ok = (
+                    all(a <= b for a, b in zip(candidate_numbers, candidate_numbers[1:]))
+                    and all(_has_clear_numbered_entry_shape(chunk) for chunk in numbered_chunks)
+                )
     if not _numbered_ref_ok:
         matches = []
     if not matches:
@@ -6665,40 +6900,49 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
     _last_num = _entry_num(matches[0])
     seen_numbers = {_last_num}
     duplicate_numbers: set[int] = set()
-    for m in matches[1:]:
+    for match_index, m in enumerate(matches[1:], start=1):
         n = _entry_num(m)
-        following = text[m.end():]
+        following = numbered_chunks[match_index]
         following_lines = [line.strip() for line in following.splitlines() if line.strip()]
         date_only_continuation = bool(
             preserve_entry_labels
             and following_lines
             and _SCOPED_DATE_CONTINUATION_RE.fullmatch(following_lines[0])
         )
-        if preserve_entry_labels and n in seen_numbers:
-            next_match = next(
-                (candidate for candidate in matches if candidate.start() > m.start()),
-                None,
-            )
-            end = next_match.start() if next_match is not None else len(text)
-            evidence = text[m.end():end]
-            evidence_lines = [line.strip() for line in evidence.splitlines() if line.strip()]
-            if (
-                evidence_lines
-                and not _SCOPED_DATE_CONTINUATION_RE.fullmatch(evidence_lines[0])
-                and (
-                    _looks_authoryear_ref_start(
-                        evidence_lines[0],
-                        evidence_lines[1] if len(evidence_lines) > 1 else "",
-                    )
-                    or re.search(r"\b(?:10\.\d{4,9}/\S+|https?://\S+|ISBN[:\s])", evidence_lines[0], re.I)
+        if n in seen_numbers:
+            if preserve_entry_labels:
+                next_match = next(
+                    (candidate for candidate in matches if candidate.start() > m.start()),
+                    None,
                 )
-            ):
-                duplicate_numbers.add(n)
-                kept.append(m)
+                end = next_match.start() if next_match is not None else len(text)
+                evidence = text[m.end():end]
+                evidence_lines = [line.strip() for line in evidence.splitlines() if line.strip()]
+                if (
+                    evidence_lines
+                    and not _SCOPED_DATE_CONTINUATION_RE.fullmatch(evidence_lines[0])
+                    and (
+                        _looks_authoryear_ref_start(
+                            evidence_lines[0],
+                            evidence_lines[1] if len(evidence_lines) > 1 else "",
+                        )
+                        or re.search(r"\b(?:10\.\d{4,9}/\S+|https?://\S+|ISBN[:\s])", evidence_lines[0], re.I)
+                    )
+                ):
+                    duplicate_numbers.add(n)
+                    kept.append(m)
+            elif _has_clear_numbered_entry_shape(following):
+                raise ValueError(f"duplicate numbered bibliography label {n}")
             continue
         if date_only_continuation:
             continue
         if _last_num < n <= _last_num + 3:
+            kept.append(m)
+            _last_num = n
+            seen_numbers.add(n)
+        elif n > _last_num + 3 and _has_clear_numbered_entry_shape(following):
+            # Gaps can occur in a bibliography that contains only cited sources.
+            # Keep a larger label only when its own chunk has a clear source shape.
             kept.append(m)
             _last_num = n
             seen_numbers.add(n)
@@ -6732,4 +6976,4 @@ def default_parse_references(biblio: str, meta=None) -> list[dict]:
     if preserve_entry_labels and isinstance(meta, dict):
         meta["_scoped_duplicate_local_numbers"] = sorted(duplicate_numbers)
         meta["_scoped_entry_sources"] = entry_sources
-    return _merge_standalone_doi_url(refs)
+    return _merge_standalone_doi_url(refs, merge_identifier_only_entries=False)

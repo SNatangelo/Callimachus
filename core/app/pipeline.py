@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 
 from core.fetch.storage import content_store
 from core.resolve import sources
@@ -147,6 +148,16 @@ def _cache_gate(run_dir: str, ref: dict, resolution: dict) -> dict | None:
         resolve_result=resolution,
     )
     if not cached:
+        return None
+    current_abstract = resolution.get("abstract")
+    if (
+        cached.get("tier") == "abstract"
+        and isinstance(current_abstract, str)
+        and current_abstract
+        and cached.get("sha256") != hashlib.sha256(current_abstract.encode("utf-8")).hexdigest()
+    ):
+        # Resolver identity proof applies to the current abstract's exact bytes.
+        # A cache hit must not displace fresh text with an older abstract.
         return None
     # Fulltext is not possible (e.g. conference abstract with fulltext_exists=False)
     # — accept whatever tier is already cached.

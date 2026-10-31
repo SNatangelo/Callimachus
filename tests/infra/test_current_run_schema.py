@@ -35,7 +35,15 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 def test_fresh_current_schema_omits_removed_verification_objects(tmp_path):
     repo = _repo(tmp_path)
     try:
-        assert SCHEMA_VERSION == 115
+        assert SCHEMA_VERSION == 118
+        assert "arxiv_version_json" in {
+            row[1] for row in repo._conn.execute("PRAGMA table_info(source_texts)")
+        }
+        assert "arxiv_version_json" in {
+            row[1] for row in repo._conn.execute(
+                "PRAGMA table_info(source_text_materialization_intents)"
+            )
+        }
         assert "identity_attested" in {
             row[1] for row in repo._conn.execute("PRAGMA table_info(task_fetch_answers)")
         }
@@ -86,6 +94,8 @@ def test_fresh_current_schema_omits_removed_verification_objects(tmp_path):
         assert _table_exists(repo._conn, "credential_inventory_snapshots")
         assert _table_exists(repo._conn, "credential_inventory_entries")
         assert _table_exists(repo._conn, "credential_transport_observations")
+        assert _table_exists(repo._conn, "network_permission_decisions")
+        assert _table_exists(repo._conn, "network_permission_decision_addresses")
         assert _table_exists(repo._conn, "completed_remediation_provenance")
         triggers = {
             row[0] for row in repo._conn.execute(
@@ -95,6 +105,12 @@ def test_fresh_current_schema_omits_removed_verification_objects(tmp_path):
         assert {
             "completed_remediation_provenance_no_update",
             "completed_remediation_provenance_no_delete",
+            "network_permission_decisions_no_update",
+            "network_permission_decisions_no_delete",
+            "network_permission_decisions_insert_guard",
+            "network_permission_decision_addresses_no_update",
+            "network_permission_decision_addresses_no_delete",
+            "network_permission_decision_addresses_insert_guard",
             "source_text_materialization_intents_no_update",
             "source_text_materialization_outcomes_no_update",
             "source_text_materialization_invalidations_no_update",

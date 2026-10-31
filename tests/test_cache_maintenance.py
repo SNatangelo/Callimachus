@@ -141,7 +141,7 @@ def test_authority_recovery_restores_cache_after_paired_checkpoint_failure(
         FileAuthority,
         RunIntegrityGate,
     )
-    from tests._integrity_fixtures import _DirectClient
+    from tests.infra.integrity.test_gate import _DirectClient
 
     protected_root = tmp_path / "protected"
     authority_root = tmp_path / "authority"

@@ -1,9 +1,13 @@
+# tests/test_desktop_projection.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 from __future__ import annotations
 
 import hashlib
 import json
 import os
 import sqlite3
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -51,9 +55,68 @@ def _ledger_hash(label: str) -> str:
     return hashlib.sha256(label.encode("utf-8")).hexdigest()
 
 
-def _append_accepted_pair(repo, *, ref_id: str, claim_id: str) -> None:
+def test_pair_activity_requires_a_started_live_dispatch_and_stays_scoped(tmp_path):
+    repo = _repo(tmp_path)
+    states = [{"claim_id": f"c{n}", "ref_id": f"r{n}",
+               "scope": "fulltext_complete", "status": "open"} for n in (1, 2)]
+    try:
+        for n in (1, 2):
+            request = {
+                "logical_request_id": f"q{n}", "claim_id": f"c{n}", "ref_id": f"r{n}",
+                "scope": "fulltext_complete", "candidate_cycle": 1, "stage": "support_gate",
+                **{name: "a" * 64 for name in (
+                    "payload_hash", "source_hash", "context_hash", "retrieval_hash",
+                    "prompt_hash", "model_hash", "policy_hash",
+                )}, "created_at": "2026-10-22T00:00:00Z",
+            }
+            attempt = {
+                "dispatch_attempt_id": f"a{n}", "logical_request_id": f"q{n}",
+                "provider_id": "synthetic", "model_id": "synthetic-model",
+                "credential_id": "synthetic:credentialless", "lane_id": "synthetic-lane",
+                "credential_cursor": 0, "model_draw_index": 0,
+                "selection_hash": "b" * 64, "pacing_hash": "c" * 64,
+                "global_interval_ms": 0, "model_interval_ms": 0,
+                "queued_at": "2026-10-22T00:00:00Z", "leased_at": "2026-10-22T00:00:00Z",
+                "created_at": "2026-10-22T00:00:00Z",
+            }
+            for table, row in (("llm_logical_requests", request), ("llm_dispatch_attempts", attempt)):
+                repo._conn.execute(
+                    f"INSERT INTO {table} ({','.join(row)}) VALUES ({','.join('?' for _ in row)})",
+                    tuple(row.values()),
+                )
+            repo._conn.execute("INSERT INTO llm_dispatch_leases VALUES (?,?,'live',?)",
+                               (f"q{n}", f"a{n}", "2026-10-22T00:00:00Z"))
+        assert not any(pair["in_progress"] for pair in desktop_projection._verification_pair_views(repo, states))
+        repo._conn.commit()
+        before = load_run_overview(str(tmp_path))
+        repo._conn.execute("INSERT INTO llm_dispatch_events VALUES ('e1','q1','a1','started',?)",
+                           ("2026-10-22T00:00:01Z",))
+        repo._conn.commit()
+        after = load_run_overview(str(tmp_path))
+        assert after["verification_activity_revision"] > before["verification_activity_revision"]
+        assert after["progress_counts"] == before["progress_counts"]
+        assert after["phase_progress"] == before["phase_progress"]
+        pairs = desktop_projection._verification_pair_views(repo, states)
+        assert [pair["in_progress"] for pair in pairs] == [True, False]
+        assert pairs[0]["status"] == "open" and pairs[0]["jury1_outcome"] is None
+        assert not desktop_projection._verification_pair_views(repo, states[:1], ref_ids=["r2"])[0]["in_progress"]
+        # Even a stale live lease cannot paint a completed call as still active.
+        repo._conn.execute("INSERT INTO llm_dispatch_events VALUES ('e2','q1','a1','completed',?)",
+                           ("2026-10-22T00:00:02Z",))
+        assert not any(pair["in_progress"] for pair in desktop_projection._verification_pair_views(repo, states))
+    finally:
+        repo.close()
+
+
+def _append_accepted_pair(
+    repo, *, ref_id: str, claim_id: str, jury2_answer: bool | None = True,
+    resolution: str = "jury2_accepted", assurance: str = "passed",
+    status: str = "accepted",
+    candidate_id: str | None = None, candidate_cycle: int = 1,
+    terminalize: bool = True, jury2_reason: str = "verified",
+) -> None:
     scope = "fulltext_complete"
-    candidate_id = f"candidate-{ref_id}"
+    candidate_id = candidate_id or f"candidate-{ref_id}"
     source_hash = _ledger_hash(f"source-{ref_id}")
     context_hash = _ledger_hash(f"context-{ref_id}")
     retrieval_hash = _ledger_hash(f"retrieval-{ref_id}")
@@ -74,12 +137,12 @@ def _append_accepted_pair(repo, *, ref_id: str, claim_id: str) -> None:
         },
     }
     origin = {
-        "logical_request_id": f"request-{ref_id}",
+        "logical_request_id": f"request-{candidate_id}",
         "claim_id": claim_id,
         "ref_id": ref_id,
         "scope": scope,
         "candidate_id": None,
-        "candidate_cycle": 1,
+        "candidate_cycle": candidate_cycle,
         "stage": "support_gate",
         "payload": origin_payload,
         "payload_hash": payload_fingerprint(
@@ -143,7 +206,7 @@ def _append_accepted_pair(repo, *, ref_id: str, claim_id: str) -> None:
         claim_id=claim_id,
         ref_id=ref_id,
         scope=scope,
-        candidate_cycle=1,
+        candidate_cycle=candidate_cycle,
         origin_logical_request_id=origin["logical_request_id"],
         record=record,
     )
@@ -154,7 +217,7 @@ def _append_accepted_pair(repo, *, ref_id: str, claim_id: str) -> None:
     }
     jury2_request = {
         **origin,
-        "logical_request_id": f"jury2-{ref_id}",
+        "logical_request_id": f"jury2-{candidate_id}",
         "candidate_id": candidate_id,
         "stage": "jury2",
         "payload": jury2_payload,
@@ -173,31 +236,34 @@ def _append_accepted_pair(repo, *, ref_id: str, claim_id: str) -> None:
         event_type="guard_accepted",
         payload={"guard_result": {"accepted": True}, "cause": None},
     )
-    adapter.append_candidate_event(
-        event_id=f"{candidate_id}:jury2",
-        candidate_id=candidate_id,
-        event_type="jury2_yes",
-        payload={
-            "answer": True,
-            "reason": "verified",
-            "provider_confidence": None,
-            "logical_request_id": jury2_request["logical_request_id"],
-            "jury2_payload_hash": jury2_request["payload_hash"],
-        },
-    )
+    if jury2_answer is not None:
+        adapter.append_candidate_event(
+            event_id=f"{candidate_id}:jury2",
+            candidate_id=candidate_id,
+            event_type="jury2_yes" if jury2_answer else "jury2_no",
+            payload={
+                "answer": jury2_answer,
+            "reason": jury2_reason if jury2_answer else "not established",
+                "provider_confidence": None,
+                "logical_request_id": jury2_request["logical_request_id"],
+                "jury2_payload_hash": jury2_request["payload_hash"],
+            },
+        )
+    if not terminalize:
+        return
     adapter.append_candidate_event(
         event_id=f"{candidate_id}:terminal",
         candidate_id=candidate_id,
         event_type="terminal",
-        payload={"resolution": "jury2_accepted", "assurance": "passed"},
+        payload={"resolution": resolution, "assurance": assurance},
     )
     assert repo.claim_verification_pair_terminal(
         claim_id=claim_id,
         ref_id=ref_id,
         scope=scope,
-        status="accepted",
+        status=status,
         outcome="supports",
-        cause="jury2_accepted",
+        cause=resolution,
         call_id=candidate_id,
     )
 
@@ -292,6 +358,30 @@ def test_history_classifies_only_explicit_schema_rejections(tmp_path, monkeypatc
     assert rows["broken"]["unavailable_reason"] == "unavailable"
 
 
+def test_history_keeps_saved_reports_when_the_database_is_missing_or_unreadable(tmp_path):
+    root = tmp_path / "runs"
+    for name in ("report-only", "broken-database"):
+        run = root / name
+        run.mkdir(parents=True)
+        (run / "report.html").write_text("<html>Saved historical report</html>", encoding="utf-8")
+    broken_db = root / "broken-database" / "run.sqlite"
+    broken_db.write_bytes(b"not a sqlite database")
+
+    inventories = (
+        desktop_projection.discover_run_briefs(str(root)),
+        discover_run_summaries(str(root)),
+        desktop_projection.load_history_page(str(root), offset=0, limit=10)["rows"],
+    )
+    for rows in inventories:
+        assert {Path(row["run_dir"]).name for row in rows} == {"report-only", "broken-database"}
+        for row in rows:
+            assert row["available"] is False
+            assert row["report_html_present"] is True
+            assert Path(row["report_html_path"]) == Path(row["run_dir"]) / "report.html"
+    assert broken_db.read_bytes() == b"not a sqlite database"
+    assert not (root / "report-only" / "run.sqlite").exists()
+
+
 def test_cache_inventory_lists_only_reusable_parsed_texts(tmp_path, monkeypatch):
     state = tmp_path / "state"
     run = tmp_path / "runs" / "one"
@@ -309,6 +399,28 @@ def test_cache_inventory_lists_only_reusable_parsed_texts(tmp_path, monkeypatch)
     assert inventory["items"][0]["availability"] == "abstract"
     assert inventory["items"][0]["contents"][0]["file_present"] is True
     assert "source_ref" not in inventory["items"][0]["contents"][0]
+
+
+@pytest.mark.parametrize("recorded_title", [None, "Non identificato", "2025", "ISBN: 978-0-674-00360-6"])
+def test_cache_inventory_uses_citation_label_without_rewriting_recorded_title(
+    tmp_path, monkeypatch, recorded_title,
+):
+    state = tmp_path / "state"
+    run = tmp_path / "runs" / "one"
+    environ = {content_store.ENV_STATE_DIR: str(state)}
+    monkeypatch.setenv(content_store.ENV_STATE_DIR, str(state))
+    ref = {
+        "title": recorded_title, "year": 1990, "isbn": "978-0-674-00360-6",
+        "raw_entry": "Bruner J. Acts of Meaning: Four Lectures on Mind and Culture. 1990.",
+    }
+    content_store.record_parsed_text(str(run), ref, "fulltext", "user", "The supplied book text.")
+
+    inventory = load_cache_inventory(str(run), environ=environ)
+
+    assert "acts of meaning" in inventory["items"][0]["title"].lower()
+    store_db = Path(content_store.storage_root(str(run), environ)) / content_store.DB_FILENAME
+    with sqlite3.connect(store_db.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+        assert conn.execute("SELECT title FROM works").fetchone()[0] == recorded_title
 
 
 def test_jury1_outcome_is_projected_only_for_a_valid_jury2_acceptance():
@@ -458,6 +570,43 @@ def test_run_overview_matches_full_snapshot_without_projecting_inventory(tmp_pat
     assert "verification_pairs" not in overview
 
 
+def test_run_projections_classify_exclusive_pending_identity_reviews(tmp_path, monkeypatch):
+    pending_by_run = {
+        "none": [],
+        "identity": [
+            SimpleNamespace(task_kind="source_identity_attestation", slot="verify"),
+            SimpleNamespace(task_kind="source_identity_attestation", slot="verify"),
+        ],
+        "mixed": [
+            SimpleNamespace(task_kind="source_identity_attestation", slot="verify"),
+            SimpleNamespace(task_kind="fetch", slot="fetch"),
+        ],
+    }
+    run_dirs = {}
+    for run_id in pending_by_run:
+        run_dir = tmp_path / run_id
+        repo = _repo(run_dir, run_id)
+        repo.close()
+        run_dirs[run_id] = run_dir
+
+    monkeypatch.setattr(
+        RunRepository, "list_pending_tasks",
+        lambda repo, **_kwargs: pending_by_run[repo.get_run().run_id],
+    )
+    monkeypatch.setattr(
+        desktop_projection, "build_source_inventory",
+        lambda *_args, **_kwargs: {"references": []},
+    )
+
+    for run_id, expected in (("none", False), ("identity", True), ("mixed", False)):
+        projections = (
+            load_run_brief(str(run_dirs[run_id])),
+            load_run_snapshot(str(run_dirs[run_id])),
+            load_run_overview(str(run_dirs[run_id])),
+        )
+        assert all(row["identity_review_only"] is expected for row in projections)
+
+
 def test_source_pages_are_bounded_ordered_and_pair_scoped(tmp_path, monkeypatch):
     repo = _repo(tmp_path, "pages")
     try:
@@ -567,7 +716,22 @@ def test_source_page_keeps_accepted_verdict_projection_scoped(tmp_path, monkeypa
     detail = load_source_detail(str(tmp_path), "r1")
 
     assert detail is not None
-    assert detail["verification_pairs"] == [expected]
+    assert detail["verification_pairs"] == [{
+        **expected,
+        "claim_text": "Claim 1.",
+        "citation_marker": "[1]",
+        "jury1_record": {
+            "outcome": "supports",
+            "explanation": "The source states the claim.",
+            "evidence": [{
+                "quotation": "Quoted source evidence.",
+                "source_text": "Quoted source evidence.",
+                "raw_start": 0,
+                "raw_end": len("Quoted source evidence."),
+            }],
+        },
+        "jury2_record": {"result": "accepted", "reason": "verified"},
+    }]
     assert scoped_reads == [["r1"], ["r1"]]
 
 
@@ -624,7 +788,7 @@ def test_latest_brief_uses_durable_update_time_without_loading_snapshot(tmp_path
 
     def pending_tasks_for_latest(repo, *, slot=None):
         if repo._run_dir == str(newer.resolve()):
-            return [SimpleNamespace(task_id="pending-fetch")]
+            return [SimpleNamespace(task_id="pending-fetch", task_kind="fetch", slot="fetch")]
         return original_list_pending_tasks(repo, slot=slot)
 
     monkeypatch.setattr(RunRepository, "close", tracked_close)
@@ -731,3 +895,91 @@ def test_source_detail_is_scoped_and_snapshot_can_omit_fetch_attempts(tmp_path, 
         not item["fetch"]["attempts"] for item in snapshot["source_inventory"]
     )
     assert load_source_detail(str(tmp_path), "missing") is None
+
+
+def test_source_detail_keeps_open_and_jury2_off_pairs_honest(tmp_path):
+    repo = _repo(tmp_path, "jury-status-detail")
+    try:
+        references = []
+        claims = []
+        citations = []
+        for number in (1, 2, 3):
+            reference = _make_reference(
+                number, f"Doe. Source {number}. Journal (2020).",
+            )
+            reference["id"] = f"r{number}"
+            references.append(reference)
+            claims.append({
+                "id": f"c{number}", "sentence": f"Claim {number}.",
+                "marker_raw": f"[{number}]",
+            })
+            citations.append({"claim_id": f"c{number}", "ref_id": f"r{number}"})
+        repo.replace_parse_payload(claims=claims, references=references, citations=citations)
+        repo.ensure_verification_pair(
+            claim_id="c1", ref_id="r1", scope="fulltext_complete",
+        )
+        _append_accepted_pair(
+            repo, ref_id="r2", claim_id="c2", jury2_answer=None,
+            resolution="jury2_off", assurance="not_evaluated",
+        )
+        _append_accepted_pair(
+            repo, ref_id="r3", claim_id="c3", jury2_answer=False,
+            resolution="jury2_rejected_nonbinding", assurance="contested",
+            status="uncertain",
+        )
+    finally:
+        repo.close()
+
+    open_detail = load_source_detail(str(tmp_path), "r1")
+    off_detail = load_source_detail(str(tmp_path), "r2")
+    rejected_detail = load_source_detail(str(tmp_path), "r3")
+
+    assert open_detail is not None
+    assert open_detail["verification_pairs"][0]["jury1_record"] is None
+    assert open_detail["verification_pairs"][0]["jury2_record"] == {
+        "result": "pending", "reason": None,
+    }
+    assert off_detail is not None
+    off_pair = off_detail["verification_pairs"][0]
+    assert off_pair["jury1_record"]["outcome"] == "supports"
+    assert off_pair["jury2_record"] == {
+        "result": "not_evaluated", "reason": None,
+    }
+    assert rejected_detail is not None
+    rejected_pair = rejected_detail["verification_pairs"][0]
+    assert rejected_pair["jury2_record"] == {
+        "result": "rejected", "reason": "not established",
+    }
+
+
+def test_source_detail_does_not_borrow_jury2_yes_from_another_candidate(tmp_path):
+    repo = _repo(tmp_path, "winner-bound-jury-detail")
+    try:
+        reference = _make_reference(1, "Doe. Source. Journal (2020).")
+        reference["id"] = "r1"
+        repo.replace_parse_payload(
+            claims=[{"id": "c1", "sentence": "Claim one.", "marker_raw": "[1]"}],
+            references=[reference],
+            citations=[{"claim_id": "c1", "ref_id": "r1"}],
+        )
+        _append_accepted_pair(
+            repo, ref_id="r1", claim_id="c1", candidate_id="other-candidate",
+            candidate_cycle=1, terminalize=False,
+            jury2_reason="Acceptance from another candidate.",
+        )
+        _append_accepted_pair(
+            repo, ref_id="r1", claim_id="c1", candidate_id="selected-winner",
+            candidate_cycle=2, jury2_answer=None,
+        )
+    finally:
+        repo.close()
+
+    detail = load_source_detail(str(tmp_path), "r1")
+
+    assert detail is not None
+    pair = detail["verification_pairs"][0]
+    assert pair["status"] == "accepted"
+    assert pair["terminal_cause"] == "jury2_accepted"
+    assert pair["winner_call_id"] == "selected-winner"
+    assert pair["jury1_record"]["explanation"] == "The source states the claim."
+    assert pair["jury2_record"] == {"result": "pending", "reason": None}

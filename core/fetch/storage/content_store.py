@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+from core.shared.filesystem_paths import io_path, logical_path
+
 
 ENV_STATE_DIR = "CITATION_VERIFIER_STATE_DIR"
 DB_FILENAME = "content.sqlite"
@@ -49,6 +51,13 @@ SCHEMA_VERSION = 4
 TIERS = ("fulltext", "abstract", "web")
 TIER_RANK = {"web": 1, "abstract": 2, "fulltext": 3}
 IDENTITY_SCHEMES = ("doi", "pmid", "isbn", "url", "title_author_year", "raw_entry")
+_USER_LIBRARY_EXTENSIONS = {
+    "pdf": ".pdf",
+    "docx": ".docx",
+    "latex": ".tex",
+    "txt": ".txt",
+    "markdown": ".md",
+}
 _WORD = re.compile(r"[a-z0-9]+")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 _DOI_URL_RE = re.compile(r"^https?://(?:dx\.)?doi\.org/", re.I)
@@ -184,8 +193,23 @@ def _slug(text: str | None, *, max_len: int = 48) -> str:
     return out[:max_len] or "item"
 
 
-def _safe_filename(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "_", name or "file")
+def _user_library_extension(path: str, file_format: str | None) -> str:
+    canonical = _USER_LIBRARY_EXTENSIONS.get((file_format or "").lower())
+    if canonical is not None:
+        return canonical
+    suffix = os.path.splitext(os.path.basename(path))[1]
+    suffix = re.sub(r"[^A-Za-z0-9.]", "", suffix)[:12].lower()
+    if len(suffix) < 2 or not suffix.startswith("."):
+        return ".bin"
+    return suffix
+
+
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(io_path(path), "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _canon_doi(value: str | None) -> str | None:
@@ -744,38 +768,96 @@ def archive_user_original(
     supplied_via: str,
     file_format: str | None = None,
     move: bool = True,
+    environ: dict[str, str] | None = None,
 ) -> dict | None:
-    if not src_path or not os.path.exists(src_path):
+    if not src_path:
+        return None
+    abs_src = str(logical_path(src_path, resolve=False))
+    abs_src_io = io_path(abs_src)
+    if not os.path.exists(abs_src_io):
         return None
     if _primary_identity(ref) is None:
         return None
-    conn = _connect(run_dir)
+    conn = _connect(run_dir, environ)
     try:
         work_id, identity_key = _upsert_work(conn, ref)
-        category, fmt = _infer_file_category(src_path, file_format)
-        lib_root = user_library_dir(run_dir, category)
-        os.makedirs(lib_root, exist_ok=True)
-        abs_src = os.path.abspath(src_path)
+        category, fmt = _infer_file_category(abs_src, file_format)
+        lib_root = str(logical_path(user_library_dir(run_dir, category, environ), resolve=False))
+        os.makedirs(io_path(lib_root), exist_ok=True)
+        source_sha256 = _sha256_file(abs_src)
+        identity_sha256 = hashlib.sha256(identity_key.encode("utf-8")).hexdigest()
+        pair_sha256 = hashlib.sha256(
+            f"{identity_sha256}{source_sha256}".encode("ascii")
+        ).hexdigest()
+        extension = _user_library_extension(abs_src, fmt)
+        generated_dest_path = os.path.join(lib_root, f"{pair_sha256}{extension}")
         try:
             common = os.path.commonpath([abs_src, lib_root])
         except ValueError:
             common = ""
-        if common == os.path.abspath(lib_root):
-            dest_path = abs_src
-        else:
-            stem = _slug(identity_key, max_len=24)
-            base = _safe_filename(os.path.basename(src_path))
-            dest_name = f"{stem}_{base}"
-            dest_path = os.path.join(lib_root, dest_name)
-            if not os.path.exists(dest_path):
-                if move:
-                    shutil.move(abs_src, dest_path)
-                else:
-                    shutil.copyfile(abs_src, dest_path)
-        relpath = os.path.relpath(dest_path, storage_root(run_dir)).replace("\\", "/")
+        source_is_library = common == lib_root
+        dest_path = abs_src if source_is_library else generated_dest_path
+        storage_root_logical = str(
+            logical_path(storage_root(run_dir, environ), resolve=False)
+        )
+        relpath = os.path.relpath(dest_path, storage_root_logical).replace("\\", "/")
+        existing_owner = conn.execute(
+            "SELECT library_item_id, work_id FROM library_items WHERE stored_relpath = ?",
+            (relpath,),
+        ).fetchone()
+        preserve_source = False
+        if (
+            source_is_library
+            and existing_owner is not None
+            and existing_owner["work_id"] != work_id
+        ):
+            # An existing library file remains attached to its original work.
+            dest_path = generated_dest_path
+            relpath = os.path.relpath(dest_path, storage_root_logical).replace("\\", "/")
+            existing_owner = conn.execute(
+                "SELECT library_item_id, work_id FROM library_items WHERE stored_relpath = ?",
+                (relpath,),
+            ).fetchone()
+            preserve_source = True
+        if existing_owner is not None and existing_owner["work_id"] != work_id:
+            raise ValueError("user-library destination is already owned by another work")
         item_id = "lib-" + hashlib.sha256(
             f"{work_id}|{relpath}".encode("utf-8")
         ).hexdigest()[:20]
+        if existing_owner is not None and existing_owner["library_item_id"] != item_id:
+            raise ValueError("user-library destination has a conflicting item identity")
+        dest_path_io = io_path(dest_path)
+        if os.path.exists(dest_path_io):
+            if _sha256_file(dest_path) != source_sha256:
+                raise ValueError("user-library destination contains different file bytes")
+            if dest_path != abs_src and _sha256_file(abs_src) != source_sha256:
+                raise ValueError("source file changed while being archived")
+        elif dest_path != abs_src:
+            created_dest = False
+            try:
+                with open(abs_src_io, "rb") as source_handle:
+                    try:
+                        dest_handle = open(dest_path_io, "xb")
+                    except FileExistsError as exc:
+                        raise ValueError(
+                            "user-library destination appeared during archival"
+                        ) from exc
+                    created_dest = True
+                    with dest_handle:
+                        shutil.copyfileobj(source_handle, dest_handle, 1024 * 1024)
+                if _sha256_file(dest_path) != source_sha256:
+                    raise ValueError("source file changed while being archived")
+                if _sha256_file(abs_src) != source_sha256:
+                    raise ValueError("source file changed while being archived")
+            except Exception:
+                if created_dest:
+                    try:
+                        os.remove(dest_path_io)
+                    except OSError:
+                        pass
+                raise
+            if move and not preserve_source:
+                os.remove(abs_src_io)
         now = _now()
         with conn:
             conn.execute(
@@ -795,7 +877,7 @@ def archive_user_original(
                     item_id,
                     work_id,
                     relpath,
-                    os.path.basename(src_path),
+                    os.path.basename(abs_src),
                     fmt,
                     "user",
                     supplied_via,
@@ -882,6 +964,7 @@ def record_parsed_text(
     extraction_method: str | None = None,
     extraction_flags: list[str] | None = None,
     preparation: dict | None = None,
+    environ: dict[str, str] | None = None,
 ) -> dict | None:
     if tier not in TIERS:
         raise ValueError(f"unsupported tier: {tier}")
@@ -897,12 +980,12 @@ def record_parsed_text(
         preparation.get("preparation_flags") if "preparation_flags" in preparation else None,
         "preparation_flags",
     )
-    conn = _connect(run_dir)
+    conn = _connect(run_dir, environ)
     try:
         work_id, identity_key = _upsert_work(conn, ref)
         sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
         category, fmt = _infer_file_category(source_ref, file_format)
-        cache_root = parsed_cache_dir(run_dir, tier)
+        cache_root = parsed_cache_dir(run_dir, tier, environ)
         os.makedirs(cache_root, exist_ok=True)
         content_id = "txt-" + hashlib.sha256(
             f"{work_id}|{tier}|{origin}|{source_ref or ''}|{content_version or ''}".encode("utf-8")
@@ -919,7 +1002,7 @@ def record_parsed_text(
             if hashlib.sha256(existing.encode("utf-8")).hexdigest() != sha256:
                 with open(dest_path, "w", encoding="utf-8") as f:
                     f.write(text)
-        relpath = os.path.relpath(dest_path, storage_root(run_dir)).replace("\\", "/")
+        relpath = os.path.relpath(dest_path, storage_root(run_dir, environ)).replace("\\", "/")
         now = _now()
         preparation_version = str(preparation.get("preparation_version") or "") or None
         before_chars = preparation.get("before_bibliography_char_count")
@@ -1274,6 +1357,7 @@ def find_reusable_parsed_text(
     *,
     tiers: tuple[str, ...] | list[str] | None = None,
     resolve_result: dict | None = None,
+    environ: dict[str, str] | None = None,
 ) -> dict | None:
     aliases = identity_aliases_for_ref(ref)
     if str(ref.get("source_kind") or "").casefold() == "chapter_like":
@@ -1284,7 +1368,7 @@ def find_reusable_parsed_text(
         aliases = [alias for alias in aliases if alias[0] in {"doi", "pmid", "url"}]
     if not aliases:
         return None
-    conn = _connect(run_dir)
+    conn = _connect(run_dir, environ)
     try:
         placeholders = ",".join("?" for _ in aliases)
         params = [alias_key for _scheme, alias_key in aliases]
@@ -1314,7 +1398,7 @@ def find_reusable_parsed_text(
             """,
             params,
         ).fetchall()
-        root = storage_root(run_dir)
+        root = storage_root(run_dir, environ)
         for row in rows:
             abs_path = os.path.join(root, row["stored_relpath"])
             if not os.path.exists(abs_path):

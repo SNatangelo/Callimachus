@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Callimachus — Blu</title>
+  <desc id="desc">The original Stardos Stencil C from the Callimachus wordmark, preserved exactly and centered on a vivid blue app tile.</desc>
+  <defs>
+    <linearGradient id="blue" x1="96" y1="32" x2="386" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4389DF"/>
+      <stop offset="0.42" stop-color="#2D68BD"/>
+      <stop offset="0.72" stop-color="#2457A6"/>
+      <stop offset="1" stop-color="#174187"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="180" y1="32" x2="332" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0.08"/>
+      <stop offset="0.72" stop-color="#123368" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#102C5B" stop-opacity="0.38"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="100" fill="url(#blue)"/>
+  <rect x="33" y="33" width="446" height="446" rx="99" stroke="url(#edge)" stroke-width="2"/>
+  <path d="M1047 1352Q1083 1352 1106 1405H1194V905H1126Q1086 943 1055.0 1029.5Q1024 1116 1004.0 1166.0Q984 1216 954 1258Q888 1351 771 1367V1449Q897 1437 1013 1365Q1034 1352 1047 1352ZM771 65Q991 65 1084 285Q1116 361 1130 467L1225 444Q1194 211 1082.0 95.5Q970 -20 771 -30ZM688 -30Q417 -16 252 183Q86 384 86 711Q86 1029 258 1238Q427 1444 688 1452V1368Q467 1347 394 1013Q367 889 367.0 715.5Q367 542 394.0 427.0Q421 312 466 237Q548 98 688 71Z" transform="translate(117.115384615385 406.643724696356) scale(0.211875843455 -0.211875843455)" fill="#FFFDF6"/>
+</svg>

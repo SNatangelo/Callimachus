@@ -169,7 +169,7 @@ def _selectors(raw: str | None, name: str, known: frozenset[str]) -> frozenset[s
     if raw is None or not raw.strip():
         return frozenset()
     result = frozenset(_csv(raw, name))
-    if any(item.count(":") != 1 or item not in known for item in result):
+    if any(":" not in item or item not in known for item in result):
         raise ConfigError(f"{name} contains an unknown provider:model")
     return result
 

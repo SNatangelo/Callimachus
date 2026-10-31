@@ -84,6 +84,7 @@ def _call_openai_api(system: str, user: str, model: str, max_tokens: int = 1500)
 register(BackendSpec(
     name="openai",
     env_key=ENV_OPENAI_KEY,
+    env_model="OPENAI_MODEL",
     available=_available,
     call=_call_openai_api,
     supports_tools=True,

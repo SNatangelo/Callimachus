@@ -1,6 +1,8 @@
 # .gitignore
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
+.DS_Store
+*.local
 
 # Environment / secrets — never commit
 .env
@@ -13,11 +15,55 @@
 core/storage/
 core/content_store/
 /runs/
+/browser_profiles/
+/benchmarks/
 
-# Python / packaging / test output
+# Python
 __pycache__/
+*.pyc
+
+# Test paper / manuscript files — not part of the codebase
+Paper test/
+
+.claude/
+.codex/
+/.agents/skills/
+.codex-owned-files.md
 .pytest_cache/
-.venv/
-build/
-.t/
-/run/
+
+# Temporary regression runs and their recovered source documents
+*-regression-codex/
+*-regression-codex-*/
+*-with-config/
+*-tmp-codex/
+PARSER_REWORK_PLAN.md
+
+# Local project memory and temporary planning
+/knowledge/
+/piani/
+/tests_tenere/
+/VERIFY_V25_SEMANTIC_CONTRACT_RESET_PLAN.md
+
+# Generated developer and verification artefacts
+/graphify-out/
+/.verify-out/
+/.pytest-tmp/
+/pytest-of-*/
+/.codex-tmp/
+/citation-verifier-test-*/
+
+# In-repository worktree containers
+/.worktrees/
+/build/desktop/
+/codex-worktrees/
+/claude-worktrees/
+/worktree-archive-*/
+/.deps/
+/.local-review/
+/.pytest-tmp-*/
+
+# Local design proposals, reviews and test PDFs; excluded from pull requests.
+/docs/design/atlante-2.0/
+
+# Preserved local native toolchains and verified dependency artifacts
+/build-cache/

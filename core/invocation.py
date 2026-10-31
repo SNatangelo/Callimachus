@@ -10,7 +10,7 @@ import re
 import shlex
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 
@@ -75,6 +75,10 @@ def run_prefix(
     platform_name = sys.platform if platform_name is None else platform_name
     executable = sys.executable if executable is None else executable
     if getattr(sys, "frozen", False):
+        if platform_name.startswith("linux"):
+            linux_executable = PurePosixPath(executable)
+            if linux_executable.name == "Callimachus.bin":
+                executable = str(linux_executable.with_name("Callimachus"))
         return _shell_command((executable,), platform_name)
     project_root = (
         Path(__file__).resolve().parent.parent

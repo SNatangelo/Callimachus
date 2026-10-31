@@ -8,10 +8,24 @@ from __future__ import annotations
 
 import http.cookiejar
 import os
+from pathlib import Path
 import re
 import ssl
 import urllib.parse
 import urllib.request
+
+try:
+    from .public_http import (
+        PublicOnlyHTTPHandler,
+        PublicOnlyHTTPSHandler,
+        PublicOnlyURLHandler,
+    )
+except ImportError:
+    from public_http import (
+        PublicOnlyHTTPHandler,
+        PublicOnlyHTTPSHandler,
+        PublicOnlyURLHandler,
+    )
 
 try:
     import certifi as _certifi
@@ -29,14 +43,19 @@ ENV_HTTP_PROFILE = _profiles.ENV_HTTP_PROFILE
 HTTP_PROFILE_CHOICES = tuple(_profiles.discover_names())
 DEFAULT_HTTP_PROFILE = _profiles.DEFAULT_PROFILE
 
-# Browser-like default. Chrome 149.0.7827.102 was the current stable Windows desktop
-# release when this default was introduced on 2026-06-19.
-DEFAULT_BROWSER_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/149.0.7827.102 Safari/537.36"
-)
-DEFAULT_API_USER_AGENT = "CitationVerifier/1.0"
+def _callimachus_user_agent() -> str:
+    try:
+        version_path = Path(__file__).resolve().parents[3] / "VERSION"
+        version = version_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("Callimachus VERSION is unavailable") from exc
+    if not version:
+        raise RuntimeError("Callimachus VERSION is empty")
+    return "Mozilla/5.0 (compatible; Callimachus/" + version + "; +https://callimachus.science)"
+
+
+DEFAULT_BROWSER_USER_AGENT = _callimachus_user_agent()
+DEFAULT_API_USER_AGENT = DEFAULT_BROWSER_USER_AGENT
 DEFAULT_ACCEPT_LANGUAGE = "en-US,en;q=0.9,it-IT;q=0.8,it;q=0.7"
 
 _PROVIDER_CREDENTIAL_HEADERS = frozenset({
@@ -204,10 +223,13 @@ def _trusted_ssl_context():
 
 
 def _build_consent_opener():
-    handlers: list[object] = [_ConsentCookieRedirectHandler()]
+    handlers: list[object] = [
+        PublicOnlyURLHandler(),
+        _ConsentCookieRedirectHandler(),
+        PublicOnlyHTTPHandler(),
+    ]
     trusted_context = _trusted_ssl_context()
-    if trusted_context is not None:
-        handlers.append(urllib.request.HTTPSHandler(context=trusted_context))
+    handlers.append(PublicOnlyHTTPSHandler(context=trusted_context))
     return urllib.request.build_opener(*handlers)
 
 
@@ -229,10 +251,11 @@ def build_session_opener():
     """
     jar = http.cookiejar.CookieJar()
     handlers: list[object] = [
+        PublicOnlyURLHandler(),
         _ConsentCookieRedirectHandler(),
         urllib.request.HTTPCookieProcessor(jar),
+        PublicOnlyHTTPHandler(),
     ]
     trusted_context = _trusted_ssl_context()
-    if trusted_context is not None:
-        handlers.append(urllib.request.HTTPSHandler(context=trusted_context))
+    handlers.append(PublicOnlyHTTPSHandler(context=trusted_context))
     return urllib.request.build_opener(*handlers)

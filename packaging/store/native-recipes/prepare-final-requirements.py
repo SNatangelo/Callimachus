@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/prepare-final-requirements.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 import json
 from pathlib import Path
 root=Path(__file__).resolve().parent

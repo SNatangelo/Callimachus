@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/build-opencv-portable.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Run upstream OpenCV packaging with the activated portable Ninja compiler."""
 import os,runpy,sys
 from pathlib import Path

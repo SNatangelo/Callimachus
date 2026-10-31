@@ -14,6 +14,17 @@ from core.verify.backends.errors import cli_failure_error, cli_timeout_error
 ENV_HOST_COMMAND = "CITATION_VERIFIER_LLM_HOST_COMMAND"
 
 
+def parse_host_command(command: str, *, windows: bool | None = None) -> list[str]:
+    """Parse the configured command consistently for checks and execution."""
+    if windows is None:
+        windows = os.name == "nt"
+    args = shlex.split(command, posix=not windows)
+    if windows:
+        args = [arg[1:-1] if len(arg) >= 2 and arg[0] == arg[-1] == '"' else arg
+                for arg in args]
+    return args
+
+
 def _available() -> bool:
     return bool((os.environ.get(ENV_HOST_COMMAND) or "").strip())
 
@@ -37,7 +48,7 @@ def _call_host_command(system: str, user: str, model: str | None, max_tokens: in
         "system": system,
         "user": user,
     }
-    args = shlex.split(command, posix=(os.name != "nt"))
+    args = parse_host_command(command)
     timeout = llm_tools_timeout() if allow_tools else llm_timeout()
     try:
         p = subprocess.run(

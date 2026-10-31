@@ -7,6 +7,14 @@ Importing this package never imports a GUI toolkit.  The deterministic core is
 therefore usable on headless installations without optional GUI dependencies.
 """
 
-from .guided_fetch_viewmodel import GuidedFetchViewModel
-
 __all__ = ["GuidedFetchViewModel"]
+
+
+def __getattr__(name: str):
+    """Load optional desktop models only when their public export is used."""
+    if name == "GuidedFetchViewModel":
+        from .guided_fetch_viewmodel import GuidedFetchViewModel
+
+        globals()[name] = GuidedFetchViewModel
+        return GuidedFetchViewModel
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -26,8 +26,13 @@ from .credential_observation_storage import (
     CREDENTIAL_OBSERVATION_TRIGGERS,
 )
 from .verify_setting_storage import VERIFY_SETTING_DDL
+from .institutional_access_storage import DDL as INSTITUTIONAL_ACCESS_DDL
+from .network_permission_storage import (
+    NETWORK_PERMISSION_DDL,
+    NETWORK_PERMISSION_TRIGGERS,
+)
 
-SCHEMA_VERSION = 115
+SCHEMA_VERSION = 118
 
 
 SCHEMA_SQL = """
@@ -1308,6 +1313,7 @@ CREATE TABLE IF NOT EXISTS source_texts (
     supplied_via TEXT,
     file_format TEXT,
     extraction_method TEXT,
+    arxiv_version_json TEXT,
   recorded_at TEXT NOT NULL
 );
 
@@ -1343,7 +1349,7 @@ CREATE TABLE IF NOT EXISTS source_text_materialization_intents (
   source_ref TEXT, mapping TEXT, match_signal TEXT, match_score REAL,
   identity_status TEXT, identity_note TEXT, content_version TEXT,
   provenance_relation TEXT, supplied_by TEXT, supplied_via TEXT,
-  file_format TEXT, extraction_method TEXT, prepared_at TEXT NOT NULL
+  file_format TEXT, extraction_method TEXT, arxiv_version_json TEXT, prepared_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS source_text_materialization_intent_flag_states (
   intent_id TEXT PRIMARY KEY REFERENCES source_text_materialization_intents(intent_id) ON DELETE CASCADE,
@@ -2398,17 +2404,20 @@ CREATE TABLE IF NOT EXISTS performance_spans (
 SCHEMA_SQL += (
     "\n" + ATTEMPT_DDL + "\n" + INTEGRITY_DDL
     + "\n" + TASK_ANSWER_PROVENANCE_DDL + "\n" + UNIT_PROGRESS_DDL
+    + "\n" + INSTITUTIONAL_ACCESS_DDL
     + "\n" + RESOLVE_TRANSPORT_DDL
     + "\n" + INSTITUTIONAL_SEARCH_PROVENANCE_DDL
     + "\n" + INSTITUTIONAL_SEARCH_PROVENANCE_TRIGGERS
     + "\n" + FETCH_TRANSPORT_DDL
     + "\n" + CREDENTIAL_OBSERVATION_DDL
+    + "\n" + NETWORK_PERMISSION_DDL
 )
 
 APPEND_ONLY_TRIGGERS_SQL = (
     INTEGRITY_TRIGGERS_SQL
     + UNIT_PROGRESS_TRIGGERS_SQL
     + CREDENTIAL_OBSERVATION_TRIGGERS
+    + NETWORK_PERMISSION_TRIGGERS
     + """
 CREATE TRIGGER IF NOT EXISTS run_config_snapshot_no_update BEFORE UPDATE ON run_config_snapshot BEGIN SELECT RAISE(ABORT, 'run config snapshot is immutable'); END;
 CREATE TRIGGER IF NOT EXISTS run_config_snapshot_no_delete BEFORE DELETE ON run_config_snapshot BEGIN SELECT RAISE(ABORT, 'run config snapshot is immutable'); END;

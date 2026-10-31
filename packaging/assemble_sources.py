@@ -17,13 +17,17 @@ MANIFEST = ROOT / "packaging" / "release-sources.json"
 CONSTRAINTS = ROOT / "packaging" / "release-constraints.txt"
 
 
-def _pinned_versions(constraints: Path) -> dict[str, str]:
-    pins: dict[str, str] = {}
+def _pinned_versions(constraints: Path) -> dict[str, frozenset[str]]:
+    pins: dict[str, set[str]] = {}
     for line in constraints.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"^([A-Za-z0-9_.-]+)==([A-Za-z0-9_.-]+)(?:;|$)", line.strip())
+        match = re.match(
+            r"^([A-Za-z0-9_.-]+)==([A-Za-z0-9_.-]+)(?:;|$)", line.strip(),
+        )
         if match:
-            pins[match.group(1).lower()] = match.group(2)
-    return pins
+            # Source offers include every platform-specific exact pin.
+            package = re.sub(r"[-_.]+", "-", match.group(1)).lower()
+            pins.setdefault(package, set()).add(match.group(2))
+    return {package: frozenset(versions) for package, versions in pins.items()}
 
 
 def source_entries(manifest: Path = MANIFEST, constraints: Path = CONSTRAINTS) -> list[dict[str, str]]:
@@ -55,7 +59,9 @@ def source_entries(manifest: Path = MANIFEST, constraints: Path = CONSTRAINTS) -
                 or Path(filename).name != filename or filename in {"", ".", ".."}
                 or not url.startswith("https://")
                 or not re.fullmatch(r"[0-9a-f]{64}", digest)
-                or pins.get(dependency.lower()) != package_version):
+                or package_version not in pins.get(
+                    re.sub(r"[-_.]+", "-", dependency).lower(), frozenset(),
+                )):
             raise RuntimeError(f"invalid or unpinned release source: {item!r}")
         names.add(name)
         files.add(filename)

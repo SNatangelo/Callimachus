@@ -842,23 +842,76 @@ def _try_store_fulltext(
     identity_extract_method: str | None = None,
     extraction_flags: list[str] | None = None,
     redirect_chain: list | None = None,
+    arxiv_version_get=None,
 ) -> dict:
+    store_kwargs = {
+        "method": method,
+        "source_ref": source_ref,
+        "extract_method": extract_method,
+        "identity_extract_text": identity_extract_text,
+        "corroborate_text": corroborate_text,
+        "content_version": content_version,
+        "candidate_context": candidate_context,
+        "identity_extract_method": identity_extract_method,
+        "extraction_flags": extraction_flags,
+        "redirect_chain": redirect_chain,
+    }
+    if callable(arxiv_version_get):
+        store_kwargs["arxiv_version_get"] = arxiv_version_get
     return _fetch_store.try_store_fulltext(
         run_dir,
         ref,
         resolve_result,
         text,
-        method=method,
-        source_ref=source_ref,
-        extract_method=extract_method,
-        identity_extract_text=identity_extract_text,
-        corroborate_text=corroborate_text,
-        content_version=content_version,
-        candidate_context=candidate_context,
-        identity_extract_method=identity_extract_method,
-        extraction_flags=extraction_flags,
-        redirect_chain=redirect_chain,
+        **store_kwargs,
     )
+
+
+def _arxiv_version_get_callback(
+    *, run_dir: str | None, ref_id: str | None, fetch_context, deadline: float | None,
+):
+    """Build a traced provider GET callback for one reference's arXiv version check."""
+    provider_get = _provider_get_fn(
+        run_dir=run_dir,
+        ref_id=ref_id,
+        fetch_context=fetch_context,
+        deadline=deadline,
+    )
+
+    def get_arxiv_atom(request_url: str):
+        return provider_get(
+            request_url,
+            timeout=TIMEOUT_API,
+            profile="api",
+            accept="application/atom+xml",
+            include_effective_url=True,
+        )
+
+    return get_arxiv_atom
+
+
+def _arxiv_version_callback_kwargs(
+    ref: dict, resolve_result: dict, source_ref: str, callback,
+) -> dict:
+    """Pass the optional callback only for a reference or route with an arXiv ID."""
+    if not callable(callback):
+        return {}
+    values = [
+        source_ref,
+        ref.get("url"),
+        ref.get("doi"),
+        ref.get("raw_entry"),
+        resolve_result.get("doi"),
+    ]
+    resolved_identifier = resolve_result.get("resolved_identifier")
+    if isinstance(resolved_identifier, dict):
+        values.append(resolved_identifier.get("value"))
+    identifiers = resolve_result.get("identifiers")
+    if isinstance(identifiers, dict):
+        values.append(identifiers.get("arxiv_id"))
+    if not any(_fetch_store._arxiv_id(value) for value in values):
+        return {}
+    return {"arxiv_version_get": callback}
 
 
 def _trusted_springer_jats_identity_extract(
@@ -1075,7 +1128,8 @@ def _fetch_frozen_candidate(
 def _pipeline_deps(
     *, email: str | None, fetch_context=None, fetch_url=None,
     enqueue_landing_candidates=None, ref: dict | None = None,
-    run_dir: str | None = None,
+    run_dir: str | None = None, deadline: float | None = None,
+    arxiv_version_get=None,
 ):
     """Build the standard pipeline boundary, optionally with injected response I/O."""
     if fetch_url is None:
@@ -1095,6 +1149,28 @@ def _pipeline_deps(
                 run_dir=run_dir, fetch_context=fetch_context,
             )
         )
+    if arxiv_version_get is None:
+        arxiv_version_get = _arxiv_version_get_callback(
+            run_dir=run_dir,
+            ref_id=(ref or {}).get("id"),
+            fetch_context=fetch_context,
+            deadline=deadline,
+        )
+
+    def store_fulltext(*args, **kwargs):
+        if len(args) >= 3:
+            candidate_ref, resolve_result = args[1:3]
+            source_ref = kwargs.get("source_ref")
+            if (
+                isinstance(candidate_ref, dict)
+                and isinstance(resolve_result, dict)
+                and isinstance(source_ref, str)
+            ):
+                kwargs.update(_arxiv_version_callback_kwargs(
+                    candidate_ref, resolve_result, source_ref, arxiv_version_get,
+                ))
+        return _try_store_fulltext(*args, **kwargs)
+
     return _fetch_pipeline.FetchPipelineDeps(
         fetch_url=fetch_url,
         pdf_extract=_pdf.extract,
@@ -1119,7 +1195,7 @@ def _pipeline_deps(
         origin_for_method=_origin_for_method,
         extract_abstract_text=_extract_abstract_text,
         store_if_new_abstract=_store_if_new_abstract,
-        try_store_fulltext=_try_store_fulltext,
+        try_store_fulltext=store_fulltext,
         park_unreadable=_sources.park_unreadable,
         remember_challenge_host=(
             getattr(fetch_context, "remember_challenge_host", None)
@@ -1573,6 +1649,12 @@ def _fetch_fulltext_impl(
     _deadline = deadline if deadline is not None else (
         _started_at + _budget if _budget > 0 else None
     )
+    arxiv_version_get = _arxiv_version_get_callback(
+        run_dir=run_dir,
+        ref_id=rid,
+        fetch_context=fetch_context,
+        deadline=_deadline,
+    )
     cited_is_preprint = _citation_declares_preprint(cited_ref, resolve_result)
     preprint_fallback_eligible = _preprint_fallback_eligible(discovery_ref, email)
     # A cited preprint is itself the requested record.  Reserve a fallback tail
@@ -1660,13 +1742,14 @@ def _fetch_fulltext_impl(
                 }
             )
             continue
+        direct_source_ref = item.get("source_ref") or item.get("url") or "api"
         stored = _try_store_fulltext(
             run_dir,
             cited_ref,
             resolve_result,
             text,
             method=item.get("method") or "api",
-            source_ref=item.get("source_ref") or item.get("url") or "api",
+            source_ref=direct_source_ref,
             extract_method=item.get("extract_method") or "api",
             identity_extract_text=identity_extract_text,
             candidate_context=(
@@ -1674,6 +1757,9 @@ def _fetch_fulltext_impl(
                 if isinstance(item.get("identity_context"), dict) else None
             ),
             identity_extract_method=identity_extract_method,
+            **_arxiv_version_callback_kwargs(
+                cited_ref, resolve_result, direct_source_ref, arxiv_version_get,
+            ),
         )
         if stored["status"] == "stored":
             stored["failures"] = direct_failures
@@ -1869,7 +1955,9 @@ def _fetch_fulltext_impl(
     os.close(tmp_fd)
     try:
         deps = _pipeline_deps(
-            email=email, fetch_context=fetch_context, ref=discovery_ref, run_dir=run_dir,
+            email=email, fetch_context=fetch_context, ref=discovery_ref,
+            run_dir=run_dir, deadline=_deadline,
+            arxiv_version_get=arxiv_version_get,
         )
 
         # This adapter sees only Archive.org fallback I/O.  It preserves the

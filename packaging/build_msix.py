@@ -1,3 +1,6 @@
+# packaging/build_msix.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Build an unsigned Microsoft Store MSIX from the checked Windows x64 dist."""
@@ -40,6 +43,8 @@ FOUNDATION_NS = "http://schemas.microsoft.com/appx/manifest/foundation/windows10
 UAP_NS = "http://schemas.microsoft.com/appx/manifest/uap/windows10"
 RESCAP_NS = "http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
 MIN_WINDOWS_VERSION = "10.0.17763.0"
+APP_ICON_TARGET_SIZES = (16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 256)
+APP_ICON_ALTERNATE_FORMS = ("", "unplated", "lightunplated")
 
 _INSTALLER_HELPER_PATH = ROOT / "packaging" / "build_windows_installer.py"
 _INSTALLER_HELPER_NAME = "callimachus_windows_installer_helpers"
@@ -269,6 +274,30 @@ def _resolve_makeappx(value: str | Path | None) -> str:
     return executable
 
 
+def _resolve_makepri(value: str | Path | None, makeappx_executable: str) -> str:
+    if value is not None:
+        candidate = Path(value).expanduser()
+        if not candidate.is_file():
+            raise RuntimeError(f"MakePri executable was not found: {candidate}")
+        return str(candidate.resolve())
+    sibling = Path(makeappx_executable).parent / "makepri.exe"
+    if sibling.is_file():
+        return str(sibling.resolve())
+    executable = shutil.which("MakePri.exe") or shutil.which("makepri")
+    if executable is None:
+        raise RuntimeError("MakePri was not found; supply --makepri or install the Windows SDK")
+    return executable
+
+
+def _target_logo_assets() -> dict[str, int]:
+    return {
+        f"Square44x44Logo.targetsize-{size}"
+        f"{'_altform-' + form if form else ''}.png": size
+        for size in APP_ICON_TARGET_SIZES
+        for form in APP_ICON_ALTERNATE_FORMS
+    }
+
+
 def _stage_logo_assets(destination: Path) -> None:
     try:
         from PySide6.QtCore import Qt
@@ -283,7 +312,9 @@ def _stage_logo_assets(destination: Path) -> None:
         raise RuntimeError(f"MSIX logo source must preserve transparency: {LOGO_SOURCE}")
 
     destination.mkdir(parents=True, exist_ok=True)
-    for name, size in (("Square44x44Logo.png", 44), ("Square150x150Logo.png", 150), ("StoreLogo.png", 50)):
+    assets = {"Square44x44Logo.png": 44, "Square150x150Logo.png": 150, "StoreLogo.png": 50}
+    assets.update(_target_logo_assets())
+    for name, size in assets.items():
         canvas = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
         canvas.fill(Qt.GlobalColor.transparent)
         scaled = source.scaled(
@@ -299,6 +330,53 @@ def _stage_logo_assets(destination: Path) -> None:
         output = destination / name
         if not canvas.save(str(output), "PNG"):
             raise RuntimeError(f"could not write MSIX logo asset: {output}")
+
+
+def _stage_resource_index(package_root: Path, work_root: Path, makepri_executable: str) -> None:
+    """Index only visual assets, retaining their package-relative Assets paths."""
+    resource_root = work_root / "visual-resources"
+    resource_root.mkdir()
+    shutil.copytree(package_root / "Assets", resource_root / "Assets")
+    manifest = resource_root / "AppxManifest.xml"
+    shutil.copyfile(package_root / "AppxManifest.xml", manifest)
+    config = work_root / "priconfig.xml"
+    subprocess.run(
+        [makepri_executable, "createconfig", "/cf", str(config), "/dq", "en-US", "/pv", "10.0.0"],
+        cwd=ROOT, check=True, timeout=120,
+    )
+    tree = ET.parse(config)
+    for packaging in list(tree.getroot().findall("packaging")):
+        tree.getroot().remove(packaging)  # One self-contained PRI; no separate resource packs.
+    tree.write(config, encoding="utf-8", xml_declaration=True)
+    index = package_root / "resources.pri"
+    subprocess.run(
+        [makepri_executable, "new", "/pr", str(resource_root), "/cf", str(config),
+         "/mn", str(manifest), "/of", str(index)],
+        cwd=ROOT, check=True, timeout=120,
+    )
+    if not index.is_file() or index.stat().st_size == 0:
+        raise RuntimeError("MakePri did not produce a nonempty resources.pri")
+    dump = work_root / "resources.pri.xml"
+    subprocess.run(
+        [makepri_executable, "dump", "/if", str(index), "/of", str(dump), "/dt", "Detailed"],
+        cwd=ROOT, check=True, timeout=120,
+    )
+    document = ET.parse(dump)
+    candidates: set[str] = set()
+    for resource in document.getroot().iter():
+        if resource.tag.rsplit("}", 1)[-1] != "NamedResource":
+            continue
+        name = resource.get("name", "").replace("\\", "/").casefold()
+        uri = resource.get("uri", "").replace("\\", "/").casefold()
+        if name != "square44x44logo.png" and not name.endswith("/square44x44logo.png") and not uri.endswith("/files/assets/square44x44logo.png"):
+            continue
+        for value in resource.iter():
+            if value.text:
+                candidates.add(value.text.strip().replace("\\", "/").casefold())
+    expected = {f"assets/{name}".casefold() for name in _target_logo_assets()}
+    if not expected.issubset(candidates):
+        missing = ", ".join(sorted(expected - candidates))
+        raise RuntimeError(f"MakePri index is missing taskbar icon variants: {missing}")
 
 
 def _manifest_bytes(
@@ -383,6 +461,7 @@ def build(
     publisher_display_name: str,
     framework_appx: str | Path,
     makeappx: str | Path | None = None,
+    makepri: str | Path | None = None,
 ) -> Path:
     """Package the existing onedir distribution without signing or installing it."""
     if sys.platform != "win32":
@@ -397,6 +476,7 @@ def build(
     _validate_distribution()
     framework_version, _ = _framework_manifest(framework_appx)
     makeappx_executable = _resolve_makeappx(makeappx)
+    makepri_executable = _resolve_makepri(makepri, makeappx_executable)
 
     BUILD_ROOT.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="msix-build-", dir=BUILD_ROOT) as temporary:
@@ -414,6 +494,8 @@ def build(
             publisher_display_name=publisher_display_name,
             framework_version=framework_version,
         ))
+
+        _stage_resource_index(package_root, work_root, makepri_executable)
 
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         temporary_output = ARTIFACTS / f".Callimachus-{uuid.uuid4().hex}.msix"
@@ -448,6 +530,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--publisher-display-name", required=True, help="publisher display name from Partner Center")
     parser.add_argument("--framework-appx", required=True, type=Path, help="selected x64 Microsoft.VCLibs framework .appx")
     parser.add_argument("--makeappx", type=Path, help="MakeAppx executable path; otherwise search PATH")
+    parser.add_argument("--makepri", type=Path, help="MakePri executable path; otherwise beside MakeAppx or on PATH")
     return parser
 
 
@@ -460,6 +543,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         publisher_display_name=arguments.publisher_display_name,
         framework_appx=arguments.framework_appx,
         makeappx=arguments.makeappx,
+        makepri=arguments.makepri,
     ))
 
 

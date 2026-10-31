@@ -1,3 +1,6 @@
+# core/parse/reference_readers/semicolon_journal.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Semicolon-separated author list with year-volume-pages journal tail."""
 
 from __future__ import annotations

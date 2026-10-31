@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/freeze-store-native.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Freeze the Store channel with all framework CRT members externalized.
 
 Use upstream application packaging unchanged. Extend its external runtime set

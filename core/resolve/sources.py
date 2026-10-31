@@ -35,6 +35,9 @@ import tempfile
 import threading
 import unicodedata
 import urllib.parse
+import html as _html
+from html.parser import HTMLParser
+from datetime import date
 from collections.abc import Iterator, Set
 
 try:
@@ -254,7 +257,13 @@ def probe_title_is_usable(title: str | None) -> bool:
     text = str(title or "").strip()
     if not text or LOCATOR_TITLE_RE.match(text):
         return False
-    words = [word.lower() for word in _WORD.findall(text)]
+    words = []
+    for word in _identity_comparison_tokens(text):
+        if word in _IDENTITY_SCRIPT_MARKERS:
+            continue
+        letters = "".join(char for char in word if char.isalpha())
+        if len(letters) >= 3:
+            words.append(word)
     return len([word for word in words if word not in _TITLE_FUNCTION_WORDS]) >= 2
 
 
@@ -265,6 +274,213 @@ def _norm(s: str) -> str:
     # "convolu- tional" or "im- age" before token and phrase matching.
     text = re.sub(r"(?<=\w)-\s+(?=\w)", "", text)
     return text
+
+
+_IDENTITY_HTML_BLOCK_TAGS = frozenset({
+    "address", "article", "aside", "blockquote", "br", "dd", "div", "dl",
+    "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2",
+    "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol",
+    "p", "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead",
+    "tr", "ul",
+})
+_IDENTITY_HTML_HIDDEN_TAGS = frozenset({"head", "noscript", "script", "style", "template", "title"})
+_IDENTITY_INLINE_STYLE_TAGS = frozenset({"b", "em", "i", "strong"})
+_IDENTITY_HTML_TAGS = frozenset({
+    "a", "abbr", "acronym", "address", "area", "article", "aside", "audio", "b",
+    "base", "bdi", "bdo", "blockquote", "body", "br", "button", "canvas", "caption",
+    "cite", "code", "col", "colgroup", "data", "datalist", "dd", "del", "details",
+    "dfn", "dialog", "dir", "div", "dl", "dt", "em", "embed", "fieldset", "figcaption",
+    "figure", "font", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "head",
+    "header", "hgroup", "hr", "html", "i", "iframe", "img", "input", "ins", "kbd",
+    "label", "legend", "li", "link", "main", "map", "mark", "menu", "meta", "meter",
+    "nav", "noscript", "object", "ol", "optgroup", "option", "output", "p", "param",
+    "picture", "pre", "progress", "q", "rp", "rt", "ruby", "s", "samp", "script",
+    "search", "section", "select", "slot", "small", "source", "span", "strong", "style",
+    "sub", "summary", "sup", "table", "tbody", "td", "template", "textarea", "tfoot",
+    "th", "thead", "time", "title", "tr", "track", "u", "ul", "var", "video", "wbr",
+    # Crossref and publisher title markup also uses this small-caps wrapper.
+    "scp",
+}) | _IDENTITY_HTML_HIDDEN_TAGS
+_IDENTITY_SCRIPT_MARKERS = frozenset({
+    "subscriptopen", "subscriptclose", "superscriptopen", "superscriptclose",
+})
+
+
+def _identity_decode_data(value: str) -> str:
+    """Decode one additional entity layer and unwrap safe encoded title spans."""
+    decoded = _html.unescape(value)
+    for tag in ("scp", "span"):
+        pattern = re.compile(rf"<{tag}\b[^<>]*>(?P<body>[^<>]*)</{tag}\s*>", re.IGNORECASE)
+        decoded = pattern.sub(lambda match: match.group("body"), decoded)
+    return decoded
+
+
+class _IdentityVisibleHTMLParser(HTMLParser):
+    """Expose visible HTML text for identity comparisons without retaining markup."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._hidden_stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in _IDENTITY_HTML_HIDDEN_TAGS:
+            self._hidden_stack.append(tag)
+            return
+        if self._hidden_stack:
+            return
+        if tag in _IDENTITY_HTML_BLOCK_TAGS:
+            self.parts.append("\n")
+        elif tag in _IDENTITY_INLINE_STYLE_TAGS:
+            # The valid-style helper has already rendered complete supported
+            # wrappers. Anything still present is ambiguous and must remain
+            # distinguishable from a plain title.
+            self.parts.append(" unsupportedstyleopen ")
+        elif tag == "scp":
+            # Only a complete, bare small-caps pair is rendered before parsing.
+            self.parts.append(" unsupportedmarkupopen ")
+        elif tag == "sub":
+            self.parts.append(" subscriptopen ")
+        elif tag == "sup":
+            self.parts.append(" superscriptopen ")
+        elif tag not in _IDENTITY_HTML_TAGS and not attrs and "-" not in tag:
+            # Preserve an unfamiliar bare angle-bracketed word as visible input.
+            # This keeps literal comparisons such as ``a <comparison> b`` from
+            # silently turning into HTML tags during identity matching.
+            self.parts.append(f" {tag} ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._hidden_stack:
+            if tag in self._hidden_stack:
+                while self._hidden_stack:
+                    if self._hidden_stack.pop() == tag:
+                        break
+            return
+        if tag in _IDENTITY_HTML_BLOCK_TAGS:
+            self.parts.append("\n")
+        elif tag in _IDENTITY_INLINE_STYLE_TAGS:
+            self.parts.append(" unsupportedstyleclose ")
+        elif tag == "scp":
+            self.parts.append(" unsupportedmarkupclose ")
+        elif tag == "sub":
+            self.parts.append(" subscriptclose ")
+        elif tag == "sup":
+            self.parts.append(" superscriptclose ")
+        elif tag not in _IDENTITY_HTML_TAGS and "-" not in tag:
+            self.parts.append(f" {tag} ")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if not self._hidden_stack:
+            self.parts.append(data)
+
+
+def _identity_visible_text(value: str | None) -> str:
+    """Return a bounded, visible-text view used only by identity comparisons."""
+    original = str(value or "")
+    if "<" not in original and not re.search(r"&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]+);", original, re.IGNORECASE):
+        return original
+    try:
+        from .matching import _comparison_text_with_valid_inline_styles
+    except ImportError:  # pragma: no cover - direct execution fallback
+        from matching import _comparison_text_with_valid_inline_styles
+
+    value, _ = _comparison_text_with_valid_inline_styles(original)
+    # Crossref small-caps is a known plain-text style wrapper outside matching's
+    # supported i/em/b/strong styles. Strip only a complete, bare pair.
+    value = re.sub(r"<scp>([^<>]+)</scp\s*>", r"\1", value, flags=re.IGNORECASE)
+    parser = _IdentityVisibleHTMLParser()
+    parser.feed(value)
+    parser.close()
+    return "".join(_identity_decode_data(part) for part in parser.parts)
+
+
+def _is_latin_letter(char: str) -> bool:
+    return char.isalpha() and unicodedata.name(char, "").startswith("LATIN ")
+
+
+def _identity_normalized_text(value: str | None) -> str:
+    """Normalize a title comparison while preserving non-Latin combining marks."""
+    visible = unicodedata.normalize("NFKC", _identity_visible_text(value)).casefold()
+    folded: list[str] = []
+    previous_base_is_latin = False
+    for char in visible:
+        if unicodedata.category(char).startswith("M"):
+            if not previous_base_is_latin:
+                folded.append(char)
+            continue
+        decomposed = unicodedata.normalize("NFKD", char)
+        if (
+            decomposed
+            and _is_latin_letter(decomposed[0])
+            and all(unicodedata.category(item).startswith("M") for item in decomposed[1:])
+        ):
+            folded.append(decomposed[0])
+            previous_base_is_latin = True
+            continue
+        folded.extend(decomposed)
+        previous_base_is_latin = _is_latin_letter(decomposed[-1]) if decomposed else False
+    normalized = "".join(folded).replace("\u00ad", "")
+    return re.sub(r"(?<=\w)-\s+(?=\w)", "", normalized)
+
+
+def _identity_comparison_tokens(value: str | None) -> list[str]:
+    """Tokenize visible, Unicode-normalized text for title identity checks."""
+    tokens: list[str] = []
+    current: list[str] = []
+    for char in _identity_normalized_text(value):
+        category = unicodedata.category(char)
+        if char.isalnum() or (category.startswith("M") and current):
+            current.append(char)
+        elif current:
+            tokens.append("".join(current))
+            current = []
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def _identity_distinctive_tokens(value: str | None) -> set[str]:
+    """Match the existing distinctive-token policy with Unicode title words."""
+    result = set()
+    for token in _identity_comparison_tokens(value):
+        letters = "".join(char for char in token if char.isalpha())
+        if len(letters) >= 3 and token not in _STOP:
+            result.add(token)
+    return result
+
+
+def _identity_comparison_phrase(value: str | None) -> str:
+    return " ".join(_identity_comparison_tokens(value))
+
+
+_BIBLIOGRAPHY_HEADING_RE = re.compile(
+    r"^[ \t]*(?:(?:\d+(?:\.\d+)*|[A-Z])[.)]?[ \t]+)?"
+    r"(?:references|bibliography)"
+    r"(?:[ \t]*[:.][ \t]*.*|[ \t]+(?:\[\s*\d+\s*\]|\d+[.)]|"
+    r"[A-Z][\w'’.-]{1,40},).*)?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _bibliography_heading_position(text: str) -> int:
+    """Return a normalized-text offset only for a bibliography section heading."""
+    match = _BIBLIOGRAPHY_HEADING_RE.search(text or "")
+    if match is None:
+        return -1
+    return len(_phrase_text((text or "")[:match.start()]))
+
+
+def _identity_bibliography_heading_position(text: str) -> int:
+    """Return a visible-text title offset for an identity bibliography boundary."""
+    visible = _identity_visible_text(text)
+    match = _BIBLIOGRAPHY_HEADING_RE.search(visible)
+    if match is None:
+        return -1
+    return len(_identity_comparison_phrase(visible[:match.start()]))
 
 
 def _tokens(s: str) -> set:
@@ -354,13 +570,8 @@ def _phrase_text(s: str) -> str:
 
 
 def _title_key(text: str | None) -> str:
-    # ``matching`` imports this module, so defer the formatting-only comparison
-    # helper until a title key is actually requested. It removes only supported
-    # complete style wrappers and leaves their visible title words intact.
-    from .matching import _comparison_text_with_valid_inline_styles
-
-    visible_text, _ = _comparison_text_with_valid_inline_styles(str(text or ""))
-    return " ".join(re.findall(r"[a-z0-9]+", visible_text.lower()))
+    """Return a comparison-only key for visible title words."""
+    return " ".join(_identity_comparison_tokens(text))
 
 
 _CITATION_TITLE_TOKEN_RE = re.compile(
@@ -456,8 +667,8 @@ def _expected_probe_title_info(
     candidate = visible_probe_title(
         str(((candidate_context or {}).get("title")) or "").strip()
     )
-    parsed_tokens = len(_tokens(parsed))
-    matched_tokens = len(_tokens(matched))
+    parsed_tokens = len(_identity_distinctive_tokens(parsed))
+    matched_tokens = len(_identity_distinctive_tokens(matched))
     raw_entry_key = _title_key((ref or {}).get("raw_entry"))
     matched_key = _title_key(matched)
     parsed_key = _title_key(parsed)
@@ -513,8 +724,8 @@ def _expected_probe_title_info(
         parsed_key = _title_key(parsed)
         matched_key = _title_key(matched)
         repaired = repaired_page_range_title
-        repaired_tokens = _tokens(repaired) if repaired else set()
-        matched_token_set = _tokens(matched)
+        repaired_tokens = _identity_distinctive_tokens(repaired) if repaired else set()
+        matched_token_set = _identity_distinctive_tokens(matched)
         # Some extracted reference lists displace a journal page range to the
         # beginning of an otherwise intact title.  Remove only that closed
         # syntactic shape, and only when the primary resolution independently
@@ -595,8 +806,8 @@ def _resolved_title_is_citation_function_word_variant(
     citation_title: str, resolved_title: str
 ) -> bool:
     """Allow only the observed non-substantive citation/resolver title variants."""
-    citation_words = _phrase_words(citation_title)
-    resolved_words = _phrase_words(resolved_title)
+    citation_words = _identity_comparison_tokens(citation_title)
+    resolved_words = _identity_comparison_tokens(resolved_title)
     if len(citation_words) < 3 or len(resolved_words) < 3:
         return False
     if citation_words == resolved_words:
@@ -619,7 +830,7 @@ def _ordered_title_window(words: list[str], text: str) -> tuple[int, int | None]
     """
     if not words:
         return 0, None
-    got = _phrase_words(text)
+    got = _identity_comparison_tokens(text)
     def equivalent(expected: str, observed: str) -> bool:
         if expected == observed:
             return True
@@ -706,11 +917,11 @@ def _first_author_surname(ref: dict) -> str | None:
 
 
 def _title_is_isolated_in_head(expected_title: str, head_text: str) -> bool:
-    title_phrase = _phrase_text(expected_title)
+    title_phrase = _identity_comparison_phrase(expected_title)
     if not title_phrase:
         return False
     for raw_line in (head_text or "").splitlines()[:80]:
-        if _phrase_text(raw_line) == title_phrase:
+        if _identity_comparison_phrase(raw_line) == title_phrase:
             return True
     return False
 
@@ -746,8 +957,8 @@ def _layout_split_context_signals(
     if not context.get("context_conflict"):
         candidate_title = str(context.get("title") or "")
         expected_title = str(ref.get("title") or "")
-        title_tokens = _tokens(candidate_title)
-        expected_tokens = _tokens(expected_title)
+        title_tokens = _identity_distinctive_tokens(candidate_title)
+        expected_tokens = _identity_distinctive_tokens(expected_title)
         candidate_title_matches = bool(
             title_tokens
             and expected_tokens
@@ -804,8 +1015,9 @@ def document_identity_probe(
     # Superscript extraction can split an alphanumeric title token, e.g.
     # ``MobileNetV⟦SUP:2⟧``.  Reattach only an immediately adjacent numeric
     # marker; ordinary citation superscripts remain separate evidence noise.
-    text = re.sub(r"(?<=\w)⟦SUP:(\d+)⟧", r"\1", text)
-    title_tokens = _tokens(expected_title)
+    comparison_text = _identity_visible_text(text)
+    comparison_text = re.sub(r"(?<=\w)⟦SUP:(\d+)⟧", r"\1", comparison_text)
+    title_tokens = _identity_distinctive_tokens(expected_title)
     if not probe_title_is_usable(expected_title):
         # Nothing to check the document against.  This used to answer "confirmed",
         # which is confirmation by absence of evidence — the wrong direction for a
@@ -824,27 +1036,23 @@ def document_identity_probe(
             "author_ok": None,
         }
 
-    head_text = (text or "")[:DOCUMENT_IDENTITY_HEAD_CHARS]
+    head_text = comparison_text[:DOCUMENT_IDENTITY_HEAD_CHARS]
     front_matter_text = _front_matter_before_abstract(head_text)
-    head_tokens = _tokens(head_text)
+    head_tokens = _identity_distinctive_tokens(head_text)
     title_overlap = len(title_tokens & head_tokens) / len(title_tokens) if title_tokens else 0.0
-    title_phrase = _phrase_text(expected_title)
-    front_matter_phrase = _phrase_text(front_matter_text)
-    full_phrase = _phrase_text(text)
+    title_phrase = _identity_comparison_phrase(expected_title)
+    front_matter_phrase = _identity_comparison_phrase(front_matter_text)
+    full_phrase = _identity_comparison_phrase(comparison_text)
     title_position = full_phrase.find(title_phrase) if title_phrase else -1
     title_in_head = bool(title_phrase) and title_phrase in front_matter_phrase
-    references_positions = [
-        pos for pos in (full_phrase.find(" references "), full_phrase.find(" bibliography "))
-        if pos >= 0
-    ]
-    references_position = min(references_positions) if references_positions else -1
+    references_position = _identity_bibliography_heading_position(text)
     title_only_in_bibliography = (
         title_position >= 0
         and references_position >= 0
         and title_position > references_position
         and not title_in_head
     )
-    ordered_title_words = _phrase_words(expected_title)
+    ordered_title_words = _identity_comparison_tokens(expected_title)
     ordered_title_match, ordered_title_span = _ordered_title_window(ordered_title_words, head_text)
     ordered_title_ratio = (
         ordered_title_match / len(ordered_title_words) if ordered_title_words else 0.0
@@ -854,9 +1062,9 @@ def document_identity_probe(
     author_ok = None
     author_ok_front = None
     if surname:
-        surname_phrase = _phrase_text(surname)
-        author_ok = surname_phrase in _phrase_text(head_text)
-        author_ok_front = surname_phrase in _phrase_text(front_matter_text)
+        surname_phrase = _identity_comparison_phrase(surname)
+        author_ok = surname_phrase in _identity_comparison_phrase(head_text)
+        author_ok_front = surname_phrase in _identity_comparison_phrase(front_matter_text)
     dense_title_in_head = bool(
         ordered_title_words
         and ordered_title_match == len(ordered_title_words)
@@ -1040,8 +1248,8 @@ def manuscript_title_identity_probe(expected_title: str, text: str) -> dict:
             "reason": "no usable identifier-resolved title to probe",
         }
     front_matter = bounded_front_matter(text[:DOCUMENT_IDENTITY_HEAD_CHARS])
-    expected_phrase = _phrase_text(expected_title)
-    front_phrase = _phrase_text(front_matter)
+    expected_phrase = _identity_comparison_phrase(expected_title)
+    front_phrase = _identity_comparison_phrase(front_matter)
     if expected_phrase and expected_phrase in front_phrase:
         return {
             "ok": True,
@@ -1049,7 +1257,7 @@ def manuscript_title_identity_probe(expected_title: str, text: str) -> dict:
             "reason_code": "manuscript_title_confirmed_front_matter",
             "reason": "identifier-resolved title found in manuscript front matter",
         }
-    words = _phrase_words(expected_title)
+    words = _identity_comparison_tokens(expected_title)
     ordered_match, ordered_span = _ordered_title_window(words, front_matter)
     span_ratio = ordered_span / max(len(words), 1) if ordered_span is not None else None
     if (
@@ -1318,6 +1526,194 @@ def _source_text_id(entry: dict) -> str:
     key = f"{entry.get('ref_id')}|{entry.get('tier')}|{entry.get('origin')}|{entry.get('stored_as')}"
     return "src-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
+
+_ARXIV_ID = r"(?:\d{4}\.\d{4,5}|[a-z][a-z0-9.-]*(?:\.[a-z]{2})?/\d{7})"
+_ARXIV_ID_VERSION_RE = re.compile(rf"(?i)^({_ARXIV_ID})(?:v([1-9]\d*))?$")
+_ARXIV_HEADER_RE = re.compile(
+    rf"(?im)^\s*arxiv\s*:\s*({_ARXIV_ID})(?:v([1-9]\d*))?\b([^\r\n]*)"
+)
+_ARXIV_HEADER_BOUNDARY_RE = re.compile(
+    r"(?im)^\s*(?:#{1,6}\s*)?(?:(?:\d+(?:\.\d+)*|[ivxlcdm]+)[.)]?\s+)?"
+    r"(?:references|bibliography)\b"
+)
+
+
+def _bounded_arxiv_header_area(text: str) -> str:
+    """Include first-page abstract/body headers, but never the bibliography."""
+    prefix = text[:DOCUMENT_IDENTITY_HEAD_CHARS]
+    boundary = _ARXIV_HEADER_BOUNDARY_RE.search(prefix)
+    return prefix[:boundary.start()] if boundary else prefix
+
+
+def _arxiv_identifier(value) -> tuple[str, int | None] | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.lower().startswith("arxiv:"):
+        text = text[6:].strip()
+    match = _ARXIV_ID_VERSION_RE.fullmatch(text)
+    if not match:
+        return None
+    return match.group(1).lower(), int(match.group(2)) if match.group(2) else None
+
+
+def _arxiv_identifier_from_url(value) -> tuple[str, int | None] | None:
+    if not isinstance(value, str):
+        return None
+    parsed = urllib.parse.urlparse(value.strip())
+    if parsed.scheme.lower() not in {"http", "https"} or (parsed.hostname or "").lower() not in {
+        "arxiv.org", "www.arxiv.org",
+    }:
+        return None
+    match = re.fullmatch(r"/(?:pdf|abs|html)/(.+?)/?", parsed.path, re.I)
+    if not match:
+        return None
+    identifier = urllib.parse.unquote(match.group(1))
+    if identifier.lower().endswith(".pdf"):
+        identifier = identifier[:-4]
+    return _arxiv_identifier(identifier)
+
+
+def _arxiv_identifier_from_doi(value) -> tuple[str, int | None] | None:
+    if not isinstance(value, str):
+        return None
+    doi = value.strip()
+    doi = re.sub(r"(?i)^doi:\s*", "", doi)
+    doi = re.sub(r"(?i)^https?://(?:dx\.)?doi\.org/", "", doi)
+    match = re.fullmatch(r"(?i)10\.48550/arxiv\.(.+)", doi)
+    return _arxiv_identifier(match.group(1)) if match else None
+
+
+def _arxiv_ref_identifiers(ref: dict) -> set[tuple[str, int | None]]:
+    found = set()
+    for key in ("arxiv_id", "arxiv"):
+        item = _arxiv_identifier(ref.get(key))
+        if item:
+            found.add(item)
+    for key in ("doi", "url"):
+        item = _arxiv_identifier_from_doi(ref.get(key))
+        if item:
+            found.add(item)
+        item = _arxiv_identifier_from_url(ref.get(key))
+        if item:
+            found.add(item)
+    identifiers = ref.get("identifiers")
+    if isinstance(identifiers, dict):
+        identifiers = [
+            {"scheme": scheme, "value": value}
+            for scheme, value in identifiers.items()
+        ]
+    if isinstance(identifiers, (list, tuple)):
+        for identifier in identifiers:
+            if not isinstance(identifier, dict):
+                continue
+            scheme = str(identifier.get("scheme") or identifier.get("type") or "").lower()
+            value = identifier.get("value")
+            item = _arxiv_identifier(value) if scheme in {"arxiv", "arxiv_id"} else None
+            item = item or _arxiv_identifier_from_doi(value)
+            item = item or _arxiv_identifier_from_url(value)
+            if item:
+                found.add(item)
+    return found
+
+
+def _arxiv_header_date(value: str) -> str | None:
+    iso = re.search(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)", value)
+    if iso:
+        try:
+            return date.fromisoformat(iso.group(1)).isoformat()
+        except ValueError:
+            return None
+    month_numbers = {
+        name.lower(): number
+        for number, names in enumerate((
+            (), ("jan", "january"), ("feb", "february"), ("mar", "march"),
+            ("apr", "april"), ("may",), ("jun", "june"), ("jul", "july"),
+            ("aug", "august"), ("sep", "sept", "september"),
+            ("oct", "october"), ("nov", "november"), ("dec", "december"),
+        ))
+        for name in names
+    }
+    words = re.search(r"(?i)\b(\d{1,2})\s+([a-z]{3,9})\.?\s+(\d{4})\b", value)
+    if not words:
+        return None
+    month = month_numbers.get(words.group(2).lower())
+    if month is None:
+        return None
+    try:
+        return date(int(words.group(3)), month, int(words.group(1))).isoformat()
+    except ValueError:
+        return None
+
+
+def _arxiv_version_for_source(
+    ref: dict,
+    source_ref: str | None,
+    text: str,
+    *,
+    latest_version: int | None = None,
+    latest_observation: dict | None = None,
+) -> dict | None:
+    source_identifier = _arxiv_identifier_from_url(source_ref)
+    source_identifier = source_identifier or _arxiv_identifier(source_ref)
+    source_identifier = source_identifier or _arxiv_identifier_from_doi(source_ref)
+    ref_identifiers = _arxiv_ref_identifiers(ref)
+    ids = {item[0] for item in ref_identifiers}
+    if source_identifier:
+        ids.add(source_identifier[0])
+    if len(ids) != 1:
+        if latest_version is not None or latest_observation is not None:
+            raise ValueError("arXiv latest-version evidence requires one exact arXiv identifier")
+        return None
+    arxiv_id = next(iter(ids))
+    source_version = (
+        source_identifier[1]
+        if source_identifier is not None and source_identifier[0] == arxiv_id
+        else None
+    )
+    header_matches = [
+        (match.group(1).lower(), int(match.group(2)) if match.group(2) else None,
+         _arxiv_header_date(match.group(3)))
+        for match in _ARXIV_HEADER_RE.finditer(_bounded_arxiv_header_area(text))
+        if match.group(1).lower() == arxiv_id
+    ]
+    header_versions = {version for _identity, version, _date in header_matches if version is not None}
+    if len(header_versions) > 1:
+        if latest_version is not None or latest_observation is not None:
+            raise ValueError("arXiv latest-version evidence does not match a unique fetched version")
+        return None
+    header_version = next(iter(header_versions), None)
+    if source_version is not None and header_version is not None and source_version != header_version:
+        if latest_version is not None or latest_observation is not None:
+            raise ValueError("arXiv latest-version evidence does not match the fetched source version")
+        return None
+    version = header_version or source_version
+    if version is None:
+        if latest_version is not None or latest_observation is not None:
+            raise ValueError("arXiv latest-version evidence requires a fetched arXiv version")
+        return None
+    dates = {header_date for _identity, item_version, header_date in header_matches
+             if item_version == version and header_date is not None}
+    if len(dates) > 1:
+        return None
+    version_date = next(iter(dates), None)
+    evidence = "document_header" if header_version is not None else "versioned_source_url"
+    metadata = {
+        "arxiv_id": arxiv_id,
+        "version": version,
+        "version_date": version_date,
+        "versioned_url": f"https://arxiv.org/pdf/{arxiv_id}v{version}",
+        "version_evidence": evidence,
+    }
+    if (latest_version is None) != (latest_observation is None):
+        raise ValueError("arXiv latest version and observation must be supplied together")
+    if latest_version is not None:
+        if type(latest_version) is not int or latest_version <= 0:
+            raise ValueError("arXiv latest version must be a positive integer")
+        metadata["latest_version"] = latest_version
+        metadata["latest_observation"] = latest_observation
+    return metadata
+
 def load_manifest(run_dir: str) -> dict:
     repo = _repo_require(run_dir)
     try:
@@ -1349,6 +1745,7 @@ def save_manifest(run_dir: str, man: dict):
                 provenance_relation=entry.get("provenance_relation"),
                 extraction_flags=entry.get("extraction_flags"),
                 extraction_method=entry.get("extraction_method"),
+                arxiv_version=entry.get("arxiv_version"),
             )
     finally:
         repo.close()
@@ -1442,7 +1839,8 @@ def store_text(run_dir, ref, tier, origin, text, *, source_ref=None,
                content_version=None, provenance_relation=None, supplied_by=None,
                supplied_via=None, file_format=None,
                library_item_id=None, extraction_flags=None,
-               extraction_method=None) -> dict:
+               extraction_method=None, arxiv_latest_version: int | None = None,
+               arxiv_latest_observation: dict | None = None) -> dict:
     """Writes the normalised .txt under sources/parsed/ and records/updates the entry
     in the manifest. Returns the entry. Dedup by (ref_id, tier, origin): last write wins.
 
@@ -1465,6 +1863,15 @@ def store_text(run_dir, ref, tier, origin, text, *, source_ref=None,
         "mapping": mapping, "match_signal": signal, "match_score": score,
         "recorded_at": _now(),
     }
+    arxiv_version = _arxiv_version_for_source(
+        ref,
+        source_ref,
+        text,
+        latest_version=arxiv_latest_version,
+        latest_observation=arxiv_latest_observation,
+    )
+    if arxiv_version is not None:
+        entry["arxiv_version"] = arxiv_version
     if identity_status:
         entry["identity_status"] = identity_status
     if identity_note:
@@ -1517,6 +1924,7 @@ def store_text(run_dir, ref, tier, origin, text, *, source_ref=None,
             file_format=entry.get("file_format"),
             extraction_flags=entry.get("extraction_flags"),
             extraction_method=entry.get("extraction_method"),
+            arxiv_version=entry.get("arxiv_version"),
         )
     finally:
         repo.close()

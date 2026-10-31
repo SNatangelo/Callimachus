@@ -25,7 +25,7 @@ def names(files: set[str] | None) -> list[str]:
 def test_windows_installer_pr_does_not_build_linux_or_macos():
     assert names({
         "packaging/windows-installer.nsi",
-        "docs/guide/12-desktop-packages.md",
+        "docs/maintainers/packaging/desktop-build.md",
     }) == ["windows-x64"]
 
 

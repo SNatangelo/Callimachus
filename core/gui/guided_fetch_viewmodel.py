@@ -9,8 +9,10 @@ import os
 from pathlib import Path
 import re
 from string import Formatter
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qsl, quote, quote_plus, unquote, urlparse
+
+from core.app.guided_fetch import source_display_title
 
 
 _STATUS = {
@@ -34,7 +36,8 @@ _SEARCH_FIELDS = frozenset({
 class SourceRow:
     ref_id: str
     ref_number: int | None
-    title: str | None
+    title: str
+    title_tooltip: str
     status: str
     status_label: str
     status_color: str
@@ -137,10 +140,26 @@ class GuidedFetchViewModel:
             if status != "none"
             else _no_text_presentation(entry, fetch, concern, review_labels)
         )
+        ref_number = _int_or_none(entry.get("ref_number"))
+        title = source_display_title(
+            parsed, ref_number=ref_number, ref_id=ref_id,
+        )
+        parsed_title = _string_or_none(parsed.get("title"))
+        raw_entry = _string_or_none(
+            parsed.get("raw_entry") or parsed.get("normalized_raw_entry")
+        )
+        title_tooltip = (
+            "Title recorded in the citation."
+            if parsed_title and title == parsed_title.strip()
+            else "Full citation shown because no displayable title was recorded."
+            if raw_entry and title == raw_entry.strip()
+            else "No title or original citation was recorded. Add citation details to identify this source."
+        )
         return SourceRow(
             ref_id=ref_id,
-            ref_number=_int_or_none(entry.get("ref_number")),
-            title=_string_or_none(parsed.get("title")),
+            ref_number=ref_number,
+            title=title,
+            title_tooltip=title_tooltip,
             status=status,
             status_label=style["label"],
             status_color=style["color"],
@@ -187,7 +206,9 @@ class GuidedFetchViewModel:
             "Preview": preview,
         }
 
-    def detail_panels(self, ref_id: str) -> dict[str, dict[str, Any]]:
+    def detail_panels(
+        self, ref_id: str, *, labels: Mapping[str, str] | None = None
+    ) -> dict[str, dict[str, Any]]:
         """Return concise, presentation-neutral details and their audit payloads.
 
         The raw values intentionally remain available unchanged in ``raw``.  The
@@ -202,6 +223,36 @@ class GuidedFetchViewModel:
         pending = acquired["pending_tasks"]
         sources = acquired["sources"]
         attempts = acquired["attempts"]
+        labels = labels or {}
+        preview_kind = raw["Preview"].get("kind")
+        if preview_kind == "guided_ocr_staged":
+            preview_heading = labels.get(
+                "guided_fetch_staged_ocr_heading", "Staged OCR text"
+            )
+            preview_message = labels.get(
+                "guided_fetch_staged_ocr_message",
+                "This OCR text is staged and pending Fetch checks; it is not an admitted source.",
+            )
+            preview_status = labels.get(
+                "guided_fetch_staged_ocr_status",
+                "Staged OCR text; pending Fetch checks and not admitted for verification.",
+            )
+        elif preview_kind == "guided_source_staged":
+            preview_heading = labels.get(
+                "guided_fetch_staged_source_heading", "Queued source"
+            )
+            preview_message = labels.get(
+                "guided_fetch_staged_source_message",
+                "This provided file is queued pending Fetch checks; it has not been admitted as evidence.",
+            )
+            preview_status = labels.get(
+                "guided_fetch_staged_source_status",
+                "Provided source is queued pending Fetch checks and is not admitted for verification.",
+            )
+        else:
+            preview_heading = "Source preview"
+            preview_message = "A text preview is shown below when an acquired source is available."
+            preview_status = None
         return {
             "Parsed": _detail_panel(
                 "Citation received",
@@ -238,25 +289,19 @@ class GuidedFetchViewModel:
                     ("Fetch attempts recorded", len(attempts)),
                     ("Pending actions", len(pending)),
                     ("Best source", _source_label(acquired.get("best_source"))),
+                    (
+                        "Identity confirmation",
+                        _source_identity_confirmation_label(acquired.get("best_source")),
+                    ),
                 )), raw["Acquired"],
             ),
             "Preview": _detail_panel(
-                (
-                    "Staged OCR text"
-                    if raw["Preview"].get("kind") == "guided_ocr_staged"
-                    else "Source preview"
-                ),
-                (
-                    "This OCR text is staged and pending Fetch checks; it is not an admitted source."
-                    if raw["Preview"].get("kind") == "guided_ocr_staged"
-                    else "A text preview is shown below when an acquired source is available."
-                ),
+                preview_heading,
+                preview_message,
                 _rows((
                     (
                         "Preview status",
-                        "Staged OCR text; pending Fetch checks and not admitted for verification."
-                        if raw["Preview"].get("kind") == "guided_ocr_staged"
-                        else None,
+                        preview_status,
                     ),
                     ("Preview file", raw["Preview"].get("path")),
                 )),
@@ -290,13 +335,30 @@ class GuidedFetchViewModel:
         if not isinstance(task_id, str) or not task_id or not isinstance(target, str) or not target:
             raise ValueError("guided Fetch identity review has no closed task target")
         source = _mapping(task.get("source_identity"))
+        reference = _mapping(task.get("reference"))
+        cited_title = reference.get("title")
+        citation_label = source_display_title(
+            reference,
+            ref_number=_int_or_none(
+                reference.get("ref_number") or self.entry(ref_id).get("ref_number")
+            ),
+            ref_id=ref_id,
+        )
+        citation_label_kind = (
+            "Cited title"
+            if isinstance(cited_title, str)
+            and citation_label == cited_title.strip()
+            else "Citation"
+        )
         resolve = _mapping(task.get("resolve_identity"))
         return {
             "task_id": task_id,
             "target_sha256": target,
             "source_text_id": task.get("source_text_id"),
             "source_tier": task.get("source_tier"),
-            "cited_title": _mapping(task.get("reference")).get("title"),
+            "cited_title": cited_title,
+            "citation_label": citation_label,
+            "citation_label_kind": citation_label_kind,
             "resolved_title": resolve.get("matched_title"),
             "resolved_identifier": _identifier_text(_mapping(resolve.get("resolved_identifier"))),
             "source_identity": {
@@ -340,8 +402,42 @@ class GuidedFetchViewModel:
             )
         return None
 
-    def action_guidance(self, ref_id: str) -> str:
+    def browser_compatibility_notice(
+        self, ref_id: str, *, labels: Mapping[str, str] | None = None
+    ) -> str | None:
+        """Explain a recorded Cloudflare challenge without probing the website."""
+        fetch = _mapping(self.entry(ref_id).get("fetch"))
+        if fetch.get("tier") == "fulltext":
+            return None
+        for fetched in fetch.get("attempts") or []:
+            trace = _mapping(_mapping(fetched).get("trace"))
+            for attempt in trace.get("attempts") or []:
+                attempt = _mapping(attempt)
+                headers = _mapping(attempt.get("headers"))
+                challenged = any(
+                    str(name).casefold() == "cf-mitigated"
+                    and str(value).strip().casefold() == "challenge"
+                    for name, value in headers.items()
+                )
+                markers = attempt.get("challenge_markers")
+                recorded_cloudflare = (
+                    attempt.get("outcome") == "challenge_blocked"
+                    and isinstance(markers, list)
+                    and any(str(marker).casefold() == "cloudflare" for marker in markers)
+                )
+                if challenged or recorded_cloudflare:
+                    return (labels or {}).get("guided_fetch_cloudflare_notice") or (
+                        "Automatic retrieval encountered a Cloudflare challenge for this "
+                        "source. The assisted browser may not complete it; use the system "
+                        "browser instead, then provide the acquired file in Callimachus."
+                    )
+        return None
+
+    def action_guidance(
+        self, ref_id: str, *, labels: Mapping[str, str] | None = None
+    ) -> str:
         """Explain the permitted operator action without changing task state."""
+        labels = labels or {}
         row = self.row(ref_id)
         if row.retracted:
             return (
@@ -380,22 +476,29 @@ class GuidedFetchViewModel:
                 f"{review_notice}"
             )
         if row.bibliographic_review_labels:
-            return (
+            return labels.get("guided_fetch_action_guidance_review_labels", "").format(
+                labels=row.review_label
+            ) or (
                 f"Review labels: {row.review_label}. They are informational only and not proof "
                 "of fabrication. Inspect the recorded evidence, then supply only a captured "
                 "file for the exact cited work; otherwise leave it pending and use Proceed / "
                 "skip remaining."
             )
         if row.status == "fulltext":
-            return (
+            return labels.get("guided_fetch_action_guidance_fulltext") or (
                 "Full text is already available. No action is required unless the acquired "
                 "document is visibly the wrong work."
             )
         if self.can_submit_source(ref_id):
-            available = "an abstract" if row.status == "abstract" else "no usable text"
-            return (
-                f"Callimachus currently has {available}. Supply only a captured file for the "
-                "exact cited work. If you cannot verify it, leave it pending and use "
+            if row.status == "abstract":
+                return labels.get("guided_fetch_action_guidance_abstract") or (
+                    "Callimachus currently has an abstract. Supply only a captured file for "
+                    "the exact cited work. If you cannot verify it, leave it pending and use "
+                    "Proceed / skip remaining; it will remain unavailable for verification."
+                )
+            return labels.get("guided_fetch_action_guidance_no_text") or (
+                "Callimachus currently has no usable text. Supply only a captured file for "
+                "the exact cited work. If you cannot verify it, leave it pending and use "
                 "Proceed / skip remaining; it will remain unavailable for verification."
             )
         return (
@@ -510,6 +613,23 @@ def _source_label(value: Any) -> str | None:
         text = _string_or_none(source.get(key))
         if text:
             return text
+    return None
+
+
+def _source_identity_confirmation_label(value: Any) -> str | None:
+    source = _mapping(value)
+    confirmation = _mapping(source.get("identity_confirmation"))
+    if confirmation.get("status") == "confirmed":
+        if confirmation.get("basis") == "controlled_source_provision":
+            return "Confirmed by an operator when this exact source was provided."
+        return "Confirmed by an operator for this exact source."
+    if confirmation.get("status") == "unverified":
+        return "An operator reviewed this exact source and kept it unverified."
+    if (
+        source.get("supplied_by") == "user"
+        or str(source.get("supplied_via") or "").startswith("controlled_task_answer:")
+    ):
+        return "Provided manually; identity has not been separately confirmed."
     return None
 
 

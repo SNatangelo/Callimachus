@@ -1,3 +1,6 @@
+# core/verify/claim_evidence/capabilities.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Fail-closed provider capability policy validation."""

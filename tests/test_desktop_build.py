@@ -8,6 +8,8 @@ import hashlib
 import io
 import importlib.util
 import json
+import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -30,6 +32,54 @@ def test_intel_mac_ocr_dependency_has_platform_specific_pin():
     assert f"onnxruntime>=1.24; {other_marker}" in requirements
     assert f"onnxruntime==1.23.2; {intel_marker}" in constraints
     assert f"onnxruntime==1.29.0; {other_marker}" in constraints
+
+
+def test_qt_release_constraints_select_exact_versions_per_platform():
+    constraints = (ROOT / "packaging" / "release-constraints.txt").read_text(
+        encoding="utf-8"
+    )
+    expected = {
+        "win32": {
+            "pyside6": {"6.12.0"}, "pyside6-essentials": {"6.12.0"},
+            "pyside6-addons": {"6.12.0"}, "shiboken6": {"6.12.0"},
+            "pyside6-pdf": {"6.12.0.140"},
+            "pyside6-webengine": {"6.12.0.140"},
+        },
+        "linux": {
+            "pyside6": {"6.12.0"}, "pyside6-essentials": {"6.12.0"},
+            "pyside6-addons": {"6.12.0"}, "shiboken6": {"6.12.0"},
+            "pyside6-pdf": {"6.12.0.140"},
+            "pyside6-webengine": {"6.12.0.140"},
+        },
+        "darwin": {
+            "pyside6": {"6.12.0"}, "pyside6-essentials": {"6.12.0"},
+            "pyside6-addons": {"6.12.0"}, "shiboken6": {"6.12.0"},
+            "pyside6-pdf": {"6.12.0.140"},
+            "pyside6-webengine": {"6.12.0.140"},
+        },
+    }
+    for platform, expected_versions in expected.items():
+        active = {}
+        for line in constraints.splitlines():
+            match = re.fullmatch(
+                r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.-]+)(?:;\s*(.*))?",
+                line.strip(),
+            )
+            if not match:
+                continue
+            name = re.sub(r"[-_.]+", "-", match.group(1)).lower()
+            if name not in expected_versions:
+                continue
+            marker = match.group(3)
+            if marker == 'sys_platform == "darwin"':
+                applies = platform == "darwin"
+            elif marker == 'sys_platform != "darwin"':
+                applies = platform != "darwin"
+            else:
+                applies = marker is None
+            if applies:
+                active.setdefault(name, set()).add(match.group(2))
+        assert active == expected_versions
 
 
 def test_linux_release_runner_installs_qt_platform_libraries():
@@ -72,13 +122,21 @@ def test_smoke_reports_qt_failure_before_aggregate_check(monkeypatch, tmp_path):
     executable.write_bytes(b"executable")
     monkeypatch.setattr(smoke, "DIST", tmp_path)
     monkeypatch.setattr(smoke, "ROOT", tmp_path)
+    (tmp_path / ".env.example").write_text("SMOKE_PROBE_API_KEY=\n", encoding="utf-8")
+    monkeypatch.setenv("SMOKE_PROBE_API_KEY", "synthetic-inherited-secret")
+    monkeypatch.setenv("CITATION_VERIFIER_SIGNING_KEY", "synthetic-inherited-signing-key")
+    monkeypatch.setenv("CITATION_VERIFIER_SIGNING_KEY_FILE", str(tmp_path / "unread-signing-key"))
     monkeypatch.setattr(smoke, "executable_path", lambda: executable)
     monkeypatch.setattr(smoke, "check_linux_graphics_bundle", lambda: None)
+    monkeypatch.setattr(smoke, "check_macos_minimum_version", lambda: None)
     monkeypatch.setattr(smoke, "create_image_only_pdf", lambda path: path.parent.mkdir(parents=True, exist_ok=True))
     calls = []
 
     def run(argv, **kwargs):
         calls.append(tuple(argv[1:]))
+        assert kwargs["env"]["SMOKE_PROBE_API_KEY"] == ""
+        assert kwargs["env"]["CITATION_VERIFIER_SIGNING_KEY"] == ""
+        assert "CITATION_VERIFIER_SIGNING_KEY_FILE" not in kwargs["env"]
         if argv[1:2] == ["parse"]:
             debug = Path(argv[argv.index("--debug") + 1])
             debug.parent.mkdir(parents=True, exist_ok=True)
@@ -94,15 +152,67 @@ def test_smoke_reports_qt_failure_before_aggregate_check(monkeypatch, tmp_path):
             return subprocess.CompletedProcess(
                 argv, 0, '{"ok":true,"method":"rapidocr+pypdfium2"}', ""
             )
+        if argv[1:] == ["--package-self-test"]:
+            return subprocess.CompletedProcess(
+                argv, 0,
+                "Library PDF/DOCX round-trip passed; "
+                "Historical report export probe passed; GUI shell/settings probe passed",
+                "",
+            )
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(smoke.subprocess, "run", run)
+    monkeypatch.setattr(smoke, "smoke_browser_driver", lambda _environment: None)
     smoke.main()
+    assert os.environ["SMOKE_PROBE_API_KEY"] == "synthetic-inherited-secret"
+    assert os.environ["CITATION_VERIFIER_SIGNING_KEY"] == "synthetic-inherited-signing-key"
+    assert os.environ["CITATION_VERIFIER_SIGNING_KEY_FILE"] == str(tmp_path / "unread-signing-key")
     assert calls[:2] == [("--qt-probe",), ("--package-self-test",)]
     assert calls[-2][0] == "parse"
     assert calls[-1] == ("ocr", "--pdf", str(tmp_path / "build/desktop/smoke-ocr-scan.pdf"),
                          "--out", str(tmp_path / "build/desktop/smoke-ocr-output.txt"),
                          "--dpi", "150")
+
+
+@pytest.mark.parametrize(
+    ("stdout", "missing_marker"),
+    [
+        pytest.param(
+            "Historical report export probe passed; GUI shell/settings probe passed",
+            "Library PDF/DOCX round-trip passed",
+            id="missing-library-marker",
+        ),
+        pytest.param(
+            "Library PDF/DOCX round-trip passed; GUI shell/settings probe passed",
+            "Historical report export probe passed",
+            id="missing-history-marker",
+        ),
+        pytest.param(
+            "Library PDF/DOCX round-trip passed; Historical report export probe passed",
+            "GUI shell/settings probe passed",
+            id="missing-gui-marker",
+        ),
+    ],
+)
+def test_smoke_rejects_package_self_test_without_required_marker(
+    monkeypatch, tmp_path, stdout, missing_marker,
+):
+    smoke = _load("desktop_smoke_without_required_marker", "smoke_desktop.py")
+    executable = tmp_path / "Callimachus"
+    executable.write_bytes(b"executable")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    monkeypatch.setattr(smoke, "ROOT", tmp_path)
+    (tmp_path / ".env.example").write_text("SMOKE_PROBE_API_KEY=\n", encoding="utf-8")
+    monkeypatch.setattr(smoke, "executable_path", lambda: executable)
+    monkeypatch.setattr(smoke, "check_linux_graphics_bundle", lambda: None)
+    monkeypatch.setattr(smoke, "check_macos_minimum_version", lambda: None)
+    monkeypatch.setattr(
+        smoke.subprocess, "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 0, stdout, ""),
+    )
+
+    with pytest.raises(SystemExit, match=re.escape(missing_marker)):
+        smoke.main()
 
 
 def test_linux_smoke_requires_packaged_xcb_libraries(monkeypatch, tmp_path):
@@ -120,6 +230,205 @@ def test_linux_smoke_requires_packaged_xcb_libraries(monkeypatch, tmp_path):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"native library")
     smoke.check_linux_graphics_bundle()
+
+
+def test_macos_smoke_checks_the_built_application_minimum(monkeypatch, tmp_path):
+    smoke = _load("desktop_smoke_macos_minimum", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    info_plist = tmp_path / "Callimachus.app" / "Contents" / "Info.plist"
+    info_plist.parent.mkdir(parents=True)
+    info_plist.write_bytes(smoke.plistlib.dumps({"LSMinimumSystemVersion": "14.4"}))
+    _write_macos_macho(
+        tmp_path / "Callimachus.app" / "Contents" / "MacOS" / "Callimachus"
+    )
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv,
+            0,
+            "Load command 0\n      cmd LC_BUILD_VERSION\n    minos 14.4\n      sdk 14.4\n",
+            "",
+        ),
+    )
+
+    smoke.check_macos_minimum_version()
+
+    info_plist.write_bytes(smoke.plistlib.dumps({"LSMinimumSystemVersion": "13.0"}))
+    with pytest.raises(SystemExit, match="minimum version must be 14.4"):
+        smoke.check_macos_minimum_version()
+
+
+def test_macos_smoke_rejects_native_binding_with_minimum_26(monkeypatch, tmp_path):
+    smoke = _load("desktop_smoke_macos_binding_minimum", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    _write_macos_smoke_plist(smoke, tmp_path)
+    _write_macos_macho(
+        tmp_path / "Callimachus.app" / "Contents" / "Frameworks" / "QtCore.abi3.so"
+    )
+    output = (
+        "Load command 0\n"
+        "      cmd LC_BUILD_VERSION\n"
+        "  cmdsize 32\n"
+        "  platform MACOS\n"
+        "    minos 26.0\n"
+        "      sdk 26.0\n"
+    )
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 0, output, ""),
+    )
+
+    with pytest.raises(SystemExit, match="must be 14.4 or lower"):
+        smoke.check_macos_minimum_version()
+
+
+def test_macos_smoke_accepts_minimum_14_4_with_sdk_26(monkeypatch, tmp_path):
+    smoke = _load("desktop_smoke_macos_sdk_26", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    _write_macos_smoke_plist(smoke, tmp_path)
+    _write_macos_macho(
+        tmp_path / "Callimachus.app" / "Contents" / "Frameworks" / "libshiboken.abi3.so"
+    )
+    output = (
+        "Load command 0\n"
+        "      cmd LC_BUILD_VERSION\n"
+        "  cmdsize 32\n"
+        "  platform MACOS\n"
+        "    minos 14.4\n"
+        "      sdk 26.0\n"
+    )
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 0, output, ""),
+    )
+
+    smoke.check_macos_minimum_version()
+
+
+@pytest.mark.parametrize(
+    "magic",
+    [
+        pytest.param(b"\xfe\xed\xfa\xce", id="macho32-big-endian"),
+        pytest.param(b"\xce\xfa\xed\xfe", id="macho32-little-endian"),
+        pytest.param(b"\xfe\xed\xfa\xcf", id="macho64-big-endian"),
+        pytest.param(b"\xcf\xfa\xed\xfe", id="macho64-little-endian"),
+        pytest.param(b"\xca\xfe\xba\xbe", id="fat-big-endian"),
+        pytest.param(b"\xbe\xba\xfe\xca", id="fat-little-endian"),
+        pytest.param(b"\xca\xfe\xba\xbf", id="fat64-big-endian"),
+        pytest.param(b"\xbf\xba\xfe\xca", id="fat64-little-endian"),
+    ],
+)
+def test_macos_smoke_inspects_each_macho_magic(monkeypatch, tmp_path, magic):
+    smoke = _load("desktop_smoke_macos_magic", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    _write_macos_smoke_plist(smoke, tmp_path)
+    _write_macos_macho(
+        tmp_path / "Callimachus.app" / "Contents" / "MacOS" / "Callimachus",
+        magic=magic,
+    )
+    output = (
+        "Load command 0\n"
+        "      cmd LC_VERSION_MIN_MACOSX\n"
+        "  cmdsize 16\n"
+        "  version 14.4\n"
+        "      sdk 26.0\n"
+    )
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 0, output, ""),
+    )
+
+    smoke.check_macos_minimum_version()
+
+
+def test_macos_smoke_requires_a_native_binary(monkeypatch, tmp_path):
+    smoke = _load("desktop_smoke_macos_no_binary", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    _write_macos_smoke_plist(smoke, tmp_path)
+    resource = tmp_path / "Callimachus.app" / "Contents" / "Resources" / "readme.txt"
+    resource.parent.mkdir(parents=True)
+    resource.write_text("not a native binary", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="contains no native Mach-O binaries"):
+        smoke.check_macos_minimum_version()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [pytest.param("missing-tool", id="missing-otool"), pytest.param("nonzero", id="otool-error")],
+)
+def test_macos_smoke_fails_closed_when_otool_fails(monkeypatch, tmp_path, failure):
+    smoke = _load("desktop_smoke_macos_otool_failure", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    _write_macos_smoke_plist(smoke, tmp_path)
+    _write_macos_macho(
+        tmp_path / "Callimachus.app" / "Contents" / "MacOS" / "Callimachus"
+    )
+
+    def run(argv, **_kwargs):
+        if failure == "missing-tool":
+            raise FileNotFoundError("otool")
+        return subprocess.CompletedProcess(argv, 1, "", "load command inspection failed")
+
+    monkeypatch.setattr(smoke.subprocess, "run", run)
+    with pytest.raises(SystemExit, match="otool"):
+        smoke.check_macos_minimum_version()
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        pytest.param("", id="no-load-commands"),
+        pytest.param(
+            "Load command 0\n      cmd LC_BUILD_VERSION\n      sdk 26.0\n",
+            id="missing-minimum",
+        ),
+        pytest.param(
+            "Load command 0\n      cmd LC_BUILD_VERSION\n    minos unknown\n",
+            id="invalid-minimum",
+        ),
+    ],
+)
+def test_macos_smoke_rejects_missing_or_invalid_otool_minimum(
+    monkeypatch, tmp_path, output,
+):
+    smoke = _load("desktop_smoke_macos_invalid_minimum", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    _write_macos_smoke_plist(smoke, tmp_path)
+    _write_macos_macho(
+        tmp_path / "Callimachus.app" / "Contents" / "MacOS" / "Callimachus"
+    )
+    monkeypatch.setattr(
+        smoke.subprocess,
+        "run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 0, output, ""),
+    )
+
+    with pytest.raises(SystemExit, match="minimum version is missing or invalid"):
+        smoke.check_macos_minimum_version()
+
+
+def _write_macos_smoke_plist(smoke, tmp_path):
+    info_plist = tmp_path / "Callimachus.app" / "Contents" / "Info.plist"
+    info_plist.parent.mkdir(parents=True, exist_ok=True)
+    info_plist.write_bytes(smoke.plistlib.dumps({"LSMinimumSystemVersion": "14.4"}))
+
+
+def _write_macos_macho(path, *, magic=b"\xcf\xfa\xed\xfe"):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(magic + b"test binary contents")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _diagnostic_signing_opt_in(monkeypatch):
+    monkeypatch.setenv("CALLIMACHUS_MACOS_ALLOW_ADHOC", "1")
+    monkeypatch.delenv("CALLIMACHUS_MACOS_SIGNING_IDENTITY", raising=False)
+    monkeypatch.delenv("CALLIMACHUS_MACOS_SELF_SIGNED", raising=False)
 
 
 def _load(name: str, file: str):
@@ -208,7 +517,7 @@ def test_manual_source_audit_uploads_verified_archives_without_publishing():
 
     release = workflow.split("\n  release:\n", 1)[1]
     assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
-    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --generate-notes' in release
+    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.0.md' in release
 
 
 def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):
@@ -235,26 +544,34 @@ def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):
         assert args[args.index(module) - 1] == "--hidden-import"
     assert "core.parse.citation_schemes.author_year" in build._discovered_modules()
     assert "core.resolve.providers.clinical_trials.ctgov" in build._discovered_modules()
+    assert args[args.index("keyring") - 1] == "--copy-metadata"
+    assert args[args.index("keyrings.alt") - 1] == "--exclude-module"
+    assert args[args.index("keyring.backends.SecretService") - 1] == "--hidden-import"
+    staged_defaults = tmp_path / "settings.defaults"
+    assert staged_defaults.read_bytes() == (ROOT / ".env.example").read_bytes()
     import run as entrypoint
     assert set(build._dispatch_modules()) == set(entrypoint._COMMANDS.values()) | {entrypoint._PIPELINE}
     assert args[args.index("tkinter") - 1] == "--exclude-module"
     data = [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--add-data"]
     for resource in (
-        ".env.example", "DEPLOYMENT.md", "docs/guide", "build-metadata.json",
+        "settings.defaults", "DEPLOYMENT.md", "docs/README.md", "docs/reference", "docs/user", "docs/legal", "build-metadata.json",
         "THIRD-PARTY-NOTICES", "core/parse/config", "core/resolve/providers.json",
         "core/verify/claim_evidence/contracts/prompts", "core/gui/assets",
         "core/report/human/assets",
     ):
         assert any(resource in value.replace("\\", "/") for value in data)
+    assert not any(".env" in value for value in data)
 
     monkeypatch.setattr(build.sys, "platform", "win32")
     windows_args = build.build_arguments()
+    assert windows_args[windows_args.index("keyring.backends.Windows") - 1] == "--hidden-import"
     assert windows_args[windows_args.index("--icon") + 1] == str(
         ROOT / "packaging" / "assets" / "Callimachus.ico"
     )
 
     monkeypatch.setattr(build.sys, "platform", "darwin")
     macos_args = build.build_arguments()
+    assert macos_args[macos_args.index("keyring.backends.macOS") - 1] == "--hidden-import"
     assert macos_args[macos_args.index("--icon") + 1] == str(
         ROOT / "packaging" / "assets" / "Callimachus.icns"
     )
@@ -306,16 +623,21 @@ def test_macos_application_icon_is_valid_multisize_icns():
         assert struct.unpack(">II", png[16:24]) == (size, size)
 
 
-def test_final_notices_replace_bundled_and_adjacent_indexes(monkeypatch, tmp_path):
+def test_final_notices_and_public_linux_launcher_are_assembled(monkeypatch, tmp_path):
     monkeypatch.syspath_prepend(str(ROOT / "packaging"))
     build = _load("desktop_build_finalize", "build_desktop.py")
     monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
+    monkeypatch.setattr(build.sys, "platform", "linux")
+    monkeypatch.setattr(build, "_finalize_macos_bundle", lambda: None)
     notices = tmp_path / "THIRD-PARTY-NOTICES"
     notices.mkdir()
     (notices / "index.json").write_text("[]", encoding="utf-8")
     embedded = tmp_path / "dist" / "Callimachus" / "_internal" / "THIRD-PARTY-NOTICES"
 
     def fake_build(_arguments):
+        executable = tmp_path / "dist" / "Callimachus" / "Callimachus"
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_bytes(b"PyInstaller executable")
         embedded.mkdir(parents=True)
         (embedded / "index.json").write_text("[]", encoding="utf-8")
 
@@ -342,6 +664,69 @@ def test_final_notices_replace_bundled_and_adjacent_indexes(monkeypatch, tmp_pat
     assert (embedded / "index.json").read_text(encoding="utf-8") == "[1]"
     assert (tmp_path / "dist" / "THIRD-PARTY-NOTICES" / "python.txt").read_text() == "PSF"
     assert checked == [notices, embedded, tmp_path / "dist" / "THIRD-PARTY-NOTICES"]
+    bundle = tmp_path / "dist" / "Callimachus"
+    public_launcher = bundle / "Callimachus"
+    assert public_launcher.read_bytes() == (ROOT / "packaging" / "linux-launcher.sh").read_bytes()
+    assert (bundle / "Callimachus.bin").read_bytes() == b"PyInstaller executable"
+    if build.os.name == "posix":
+        assert public_launcher.stat().st_mode & 0o111
+
+
+def test_macos_bundle_sets_minimum_and_reseals_after_resources(monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_macos_metadata", "build_desktop.py")
+    monkeypatch.setenv("CALLIMACHUS_MACOS_SIGNING_IDENTITY", "A" * 40)
+    app_bundle = tmp_path / "dist" / "Callimachus.app"
+    info_plist = app_bundle / "Contents" / "Info.plist"
+    info_plist.parent.mkdir(parents=True)
+    info_plist.write_bytes(build.plistlib.dumps({"CFBundleIdentifier": "example.app"}))
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    calls = []
+    monkeypatch.setattr(
+        build.subprocess, "run",
+        lambda argv, **kwargs: calls.append((argv, kwargs)),
+    )
+
+    node = app_bundle / "Contents/Frameworks/playwright/driver/node"
+    node.parent.mkdir(parents=True)
+    node.write_bytes(b"synthetic node")
+    build._finalize_macos_bundle()
+
+    info = build.plistlib.loads(info_plist.read_bytes())
+    assert info["CFBundleIdentifier"] == "example.app"
+    assert info["LSMinimumSystemVersion"] == "14.4"
+    assert calls == [
+        (
+            ["codesign", "--force", "--sign", "A" * 40,
+             "--options", "runtime", "--timestamp=none",
+             "--entitlements", str(ROOT / "packaging/assets/macos-playwright-node.entitlements.plist"),
+             str(node)],
+            {"check": True, "timeout": 120},
+        ),
+        (
+            [
+                "codesign", "--force", "--sign", "A" * 40,
+                "--preserve-metadata=identifier,entitlements,flags",
+                str(app_bundle),
+            ],
+            {"check": True, "timeout": 120},
+        ),
+        (
+            ["codesign", "--verify", "--deep", "--strict", str(app_bundle)],
+            {"check": True, "timeout": 120},
+        ),
+    ]
+
+
+def test_non_macos_bundle_finalization_does_not_change_resources(monkeypatch, tmp_path):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_non_macos_metadata", "build_desktop.py")
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
+    monkeypatch.setattr(build.sys, "platform", "win32")
+    monkeypatch.setattr(build.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("unexpected signing"))
+
+    build._finalize_macos_bundle()
 
 
 def test_windows_build_ignores_unrelated_runner_toolchain_dlls(monkeypatch, tmp_path):
@@ -581,11 +966,70 @@ def test_frozen_ocr_smoke_rejects_external_backend(monkeypatch, tmp_path):
 def test_release_sources_are_pinned_to_build_dependencies():
     sources = _load("desktop_sources", "assemble_sources.py")
     entries = sources.source_entries()
+    qt_sources = {
+        item["name"]: item for item in entries
+        if item["name"] in {"Qt 6", "PySide6 bindings"}
+    }
     assert {item["name"] for item in entries} == {
         "Qt 6", "Qt 5 (OpenCV)", "PySide6 bindings", "PyMuPDF", "MuPDF",
         "OpenCV Python", "FFmpeg (OpenCV)", "PyInstaller bootloader",
     }
     assert all(item["url"].startswith("https://") for item in entries)
+    assert {
+        item["name"]: (
+            item["constraint"], item["package_version"], item["version"],
+            item["filename"], item["url"], item["sha256"],
+        )
+        for item in qt_sources.values()
+    } == {
+        "Qt 6": (
+            "PySide6", "6.12.0", "6.12.0", "qt-everywhere-src-6.12.0.tar.xz",
+            (
+                "https://download.qt.io/official_releases/qt/6.12/6.12.0/single/"
+                "qt-everywhere-src-6.12.0.tar.xz"
+            ),
+            "98ff4f44bac6ec3e1e62ee2a4316ae0e3d15badb015d753cc0268a20db52f165",
+        ),
+        "PySide6 bindings": (
+            "PySide6", "6.12.0", "6.12.0",
+            "pyside-setup-everywhere-src-6.12.0.tar.xz",
+            (
+                "https://download.qt.io/official_releases/QtForPython/pyside6/"
+                "PySide6-6.12.0-src/pyside-setup-everywhere-src-6.12.0.tar.xz"
+            ),
+            "099c1a597cf33c1b000e11cf68a0b82d216fb802bf81726efc720394f10c7751",
+        ),
+    }
+
+
+def test_release_source_validator_rejects_unpinned_source_version(tmp_path):
+    sources = _load("desktop_sources_all_pins", "assemble_sources.py")
+    pins = sources._pinned_versions(ROOT / "packaging" / "release-constraints.txt")
+
+    assert pins["pyside6"] == frozenset({"6.12.0"})
+    assert pins["pyside6-pdf"] == frozenset({"6.12.0.140"})
+    assert pins["pyside6-webengine"] == frozenset({"6.12.0.140"})
+
+    manifest = tmp_path / "release-sources.json"
+    entries = json.loads((ROOT / "packaging" / "release-sources.json").read_text())
+    next(item for item in entries if item["name"] == "Qt 6")["package_version"] = "6.12.1"
+    manifest.write_text(json.dumps(entries), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="invalid or unpinned release source"):
+        sources.source_entries(manifest=manifest)
+
+
+def test_release_source_validator_rejects_orphan_source(tmp_path):
+    sources = _load("desktop_sources_orphan", "assemble_sources.py")
+    manifest = tmp_path / "release-sources.json"
+    entries = json.loads((ROOT / "packaging" / "release-sources.json").read_text())
+    orphan = entries[0].copy()
+    orphan["name"] = "Unexpected Qt source"
+    orphan["filename"] = "unexpected-qt-source-6.12.0.tar.xz"
+    entries.append(orphan)
+    manifest.write_text(json.dumps(entries), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="release sources require"):
+        sources.source_entries(manifest=manifest)
 
 
 def test_release_source_assembly_checks_bytes_and_writes_hashes(monkeypatch, tmp_path):
@@ -674,3 +1118,77 @@ def test_ubuntu_source_download_rejects_wrong_bytes(monkeypatch, tmp_path):
     )
     with pytest.raises(RuntimeError, match="checksum mismatch"):
         sources.collect([("example", "1.0")], tmp_path)
+
+
+@pytest.mark.parametrize("value", ["", "-", "not-a-certificate", "A" * 39, "A" * 41])
+def test_macos_production_signing_requires_persistent_certificate(monkeypatch, value):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_signing_required", "build_desktop.py")
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    monkeypatch.delenv("CALLIMACHUS_MACOS_ALLOW_ADHOC", raising=False)
+    monkeypatch.setenv("CALLIMACHUS_MACOS_SIGNING_IDENTITY", value)
+    with pytest.raises(RuntimeError):
+        build._macos_signing_identity()
+
+
+def test_macos_stable_identity_is_forwarded_into_nested_code_signing(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_signing_nested", "build_desktop.py")
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    monkeypatch.setenv("CALLIMACHUS_MACOS_SIGNING_IDENTITY", "ab" * 20)
+    monkeypatch.setattr(build, "_metadata", lambda: ROOT / "VERSION")
+    monkeypatch.setattr(build, "collect", lambda *_args: ROOT / "packaging")
+    monkeypatch.setattr(build, "_stage_settings_defaults", lambda: ROOT / ".env.example")
+    args = build.build_arguments()
+    assert args[args.index("--codesign-identity") + 1] == "AB" * 20
+    assert args[args.index("--osx-bundle-identifier") + 1] == "science.callimachus.desktop"
+
+
+@pytest.mark.parametrize("self_signed", [False, True])
+def test_self_signed_library_exception_is_explicit_and_narrow(monkeypatch, self_signed):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_signing_entitlements", "build_desktop.py")
+    monkeypatch.setattr(build.sys,"platform","darwin")
+    monkeypatch.setenv("CALLIMACHUS_MACOS_SIGNING_IDENTITY","ab"*20)
+    monkeypatch.setenv("CALLIMACHUS_MACOS_SELF_SIGNED","1" if self_signed else "0")
+    monkeypatch.setattr(build,"_metadata",lambda:ROOT/"VERSION")
+    monkeypatch.setattr(build,"collect",lambda *_:ROOT/"packaging")
+    monkeypatch.setattr(build,"_stage_settings_defaults",lambda:ROOT/".env.example")
+    args=build.build_arguments()
+    assert ("--osx-entitlements-file" in args) == self_signed
+    if self_signed:
+        p=Path(args[args.index("--osx-entitlements-file")+1])
+        assert build.plistlib.loads(p.read_bytes()) == {"com.apple.security.cs.disable-library-validation":True}
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux", "darwin"])
+@pytest.mark.parametrize("status", [0, -5])
+def test_browser_driver_smoke_runs_bundled_javascript(monkeypatch, tmp_path, platform, status):
+    smoke = _load("browser_driver_smoke", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    monkeypatch.setattr(smoke.sys, "platform", platform)
+    bundle = tmp_path / ("Callimachus.app" if platform == "darwin" else "Callimachus")
+    driver = bundle / ("Contents/Frameworks" if platform == "darwin" else "_internal") / "playwright/driver"
+    (driver / "package").mkdir(parents=True)
+    node = driver / ("node.exe" if platform == "win32" else "node")
+    node.write_bytes(b"node")
+    (driver / "package/cli.js").write_text("synthetic cli", encoding="utf-8")
+    (driver / "package/package.json").write_text('{"version":"1.62.0"}', encoding="utf-8")
+    def run(command, **kwargs):
+        assert command == [str(node), str(driver / "package/cli.js"), "--version"]
+        assert "NODE_OPTIONS" not in kwargs["env"]
+        assert "NODE_PATH" not in kwargs["env"]
+        return subprocess.CompletedProcess(command, status, "Version 1.62.0\n" if status == 0 else "", "")
+    monkeypatch.setattr(smoke.subprocess, "run", run)
+    if status:
+        with pytest.raises(SystemExit, match="frozen browser driver failed"):
+            smoke.smoke_browser_driver({"NODE_OPTIONS":"--require=untrusted.js"})
+    else:
+        smoke.smoke_browser_driver({"NODE_OPTIONS":"--require=untrusted.js"})
+
+
+def test_browser_driver_smoke_rejects_missing_runtime(monkeypatch, tmp_path):
+    smoke = _load("browser_driver_missing_smoke", "smoke_desktop.py")
+    monkeypatch.setattr(smoke, "DIST", tmp_path)
+    with pytest.raises(SystemExit, match="browser driver is missing"):
+        smoke.smoke_browser_driver({})

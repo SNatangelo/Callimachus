@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# core/report/human/redaction.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Create a public, redacted derivative of a human HTML report.
@@ -17,7 +20,7 @@ import json
 from pathlib import Path
 import re
 import sys
-from typing import Any
+from typing import Any, Callable
 
 
 SAFE_TECHNICAL_RESULTS = frozenset({"answer_received", "timeout", "protocol_invalid"})
@@ -51,19 +54,33 @@ def _script_json(value: Any) -> str:
             .replace("\u2029", "\\u2029"))
 
 
-def _strings(value: Any):
+def _strings(
+    value: Any, *, cancel_check: Callable[[], None] | None = None,
+):
+    if cancel_check is not None:
+        cancel_check()
     if isinstance(value, str):
         yield value
     elif isinstance(value, dict):
         for item in value.values():
-            yield from _strings(item)
+            yield from _strings(item, cancel_check=cancel_check)
     elif isinstance(value, list):
         for item in value:
-            yield from _strings(item)
+            yield from _strings(item, cancel_check=cancel_check)
 
 
-def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes, dict[str, Any]]:
+def redact_html(
+    original: bytes,
+    *,
+    timestamp: str | None = None,
+    cancel_check: Callable[[], None] | None = None,
+) -> tuple[bytes, dict[str, Any]]:
     """Return the public HTML and its sidecar manifest, without writing files."""
+    def check_cancelled() -> None:
+        if cancel_check is not None:
+            cancel_check()
+
+    check_cancelled()
     try:
         html = original.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -81,6 +98,7 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
         data = json.loads(encoded)
     except json.JSONDecodeError as exc:
         raise RedactionError("invalid cv-data JSON") from exc
+    check_cancelled()
     if not isinstance(data, dict) or not isinstance(data.get("projection"), dict):
         raise RedactionError("missing report projection")
     projection = data["projection"]
@@ -105,7 +123,10 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
     def drop(record: dict[str, Any], key: str, path: str) -> None:
         if key in record:
             value = record.pop(key)
-            omitted.update(s for s in _strings(value) if len(s) >= 120 and len(s.split()) >= 8)
+            omitted.update(
+                s for s in _strings(value, cancel_check=cancel_check)
+                if len(s) >= 120 and len(s.split()) >= 8
+            )
             counts[path] += 1
 
     manuscript = projection.get("manuscript")
@@ -114,14 +135,17 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
         title_identity = manuscript.get("title_identity")
         if isinstance(title_identity, dict):
             for attempt in title_identity.get("attempts") or []:
+                check_cancelled()
                 if isinstance(attempt, dict):
                     drop(attempt, "abstract", "manuscript.title_identity.attempts.abstract")
     for claim in projection["claims"]:
+        check_cancelled()
         if not isinstance(claim, dict) or not isinstance(claim.get("claim"), dict):
             raise RedactionError("invalid claim record")
         drop(claim["claim"], "context_window", "claims.claim.context_window")
 
     for source in projection["sources"]:
+        check_cancelled()
         if not isinstance(source, dict):
             raise RedactionError("invalid source record")
         previous = sum(counts.values())
@@ -129,6 +153,7 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
         if isinstance(resolve, dict):
             drop(resolve, "abstract", "sources.resolve.abstract")
             for attempt in resolve.get("attempts") or []:
+                check_cancelled()
                 if isinstance(attempt, dict):
                     drop(attempt, "abstract", "sources.resolve.attempts.abstract")
             evidence_profile = resolve.get("evidence_profile")
@@ -136,6 +161,7 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
                 coverage = evidence_profile.get("resolver_coverage")
                 if isinstance(coverage, dict):
                     for payload in coverage.get("payloads") or []:
+                        check_cancelled()
                         if isinstance(payload, dict) and "body" in payload:
                             body = payload["body"]
                             if (not isinstance(body, str) or
@@ -143,6 +169,7 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
                                 raise RedactionError("resolver coverage payload digest mismatch")
                             drop(payload, "body", "sources.resolve.evidence_profile.resolver_coverage.payloads.body")
         for attempt in source.get("fetch_attempts", []):
+            check_cancelled()
             if isinstance(attempt, dict):
                 drop(attempt, "trace", "sources.fetch_attempts.trace")
         if sum(counts.values()) > previous:
@@ -151,20 +178,25 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
                 redacted_sources.add(str(reference["id"]))
 
     for pair in projection["pairs"]:
+        check_cancelled()
         if not isinstance(pair, dict):
             raise RedactionError("invalid pair record")
         previous = sum(counts.values())
         for request in pair.get("logical_requests", []):
+            check_cancelled()
             if isinstance(request, dict):
                 drop(request, "payload", "pairs.logical_requests.payload")
         for candidate in pair.get("candidates", []):
+            check_cancelled()
             if isinstance(candidate, dict):
                 for key in ("evidence", "grounded", "explanation", "outcome_fields"):
                     drop(candidate, key, f"pairs.candidates.{key}")
         for event in pair.get("candidate_events", []):
+            check_cancelled()
             if isinstance(event, dict):
                 drop(event, "payload", "pairs.candidate_events.payload")
         for event in pair.get("dispatch_events", []):
+            check_cancelled()
             if isinstance(event, dict):
                 payload = event.get("payload")
                 technical_result = payload.get("technical_result") if isinstance(payload, dict) else None
@@ -173,9 +205,11 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
                     event["payload"] = {"technical_result": technical_result}
         for rejection_type in ("jury1_rejections", "rejected_jury1_attempts", "rejected_jury2_attempts"):
             for rejection in pair.get(rejection_type, []):
+                check_cancelled()
                 if isinstance(rejection, dict):
                     drop(rejection, "reason", f"pairs.{rejection_type}.reason")
                     for review_type in ("jury1_review", "jury2_review"):
+                        check_cancelled()
                         review = rejection.get(review_type)
                         if isinstance(review, dict):
                             drop(review, "reason", f"pairs.{rejection_type}.{review_type}.reason")
@@ -200,37 +234,56 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
     data["render_metadata"] = {"publication_redaction": publication}
     if seal is not None:
         after = after[:seal.start()]
+    check_cancelled()
     if not re.search(r"<body(?:\s[^>]*)?>", before, re.IGNORECASE):
         raise RedactionError("missing report body")
     public_html = before + DATA_OPEN + _script_json(data) + DATA_CLOSE + after
     public_bytes = public_html.encode("utf-8")
+    check_cancelled()
     # A removed passage must not survive elsewhere in the serialized report,
     # unless the identical passage is also a retained verdict/claim excerpt.
     retained: set[str] = set()
     for claim in projection["claims"]:
-        retained.update(_strings(claim.get("focus_text")))
-        retained.update(_strings(claim["claim"].get("sentence")))
-        retained.update(_strings(claim["claim"].get("marker_raw")))
+        check_cancelled()
+        retained.update(_strings(claim.get("focus_text"), cancel_check=cancel_check))
+        retained.update(
+            _strings(claim["claim"].get("sentence"), cancel_check=cancel_check)
+        )
+        retained.update(
+            _strings(claim["claim"].get("marker_raw"), cancel_check=cancel_check)
+        )
     for pair in projection["pairs"]:
+        check_cancelled()
         decision = pair.get("decision")
         if isinstance(decision, dict):
             for key in ("explanation", "supported_content", "incompatible_proposition",
                         "unsupported_content", "reason", "evidence"):
-                retained.update(_strings(decision.get(key)))
+                retained.update(
+                    _strings(decision.get(key), cancel_check=cancel_check)
+                )
         verification = pair.get("verification")
         if isinstance(verification, dict):
-            retained.update(_strings(verification.get("evidence")))
+            retained.update(
+                _strings(verification.get("evidence"), cancel_check=cancel_check)
+            )
     for source in projection["sources"]:
+        check_cancelled()
         reference = source.get("reference")
         if isinstance(reference, dict):
-            retained.update(_strings(reference.get("title")))
-            retained.update(_strings(reference.get("raw_entry")))
+            retained.update(
+                _strings(reference.get("title"), cancel_check=cancel_check)
+            )
+            retained.update(
+                _strings(reference.get("raw_entry"), cancel_check=cancel_check)
+            )
     for passage in omitted:
+        check_cancelled()
         serialized = _script_json(passage)[1:-1]
         if (passage in public_html or serialized in public_html) and not any(
             passage in value for value in retained
         ):
             def locations(value: Any, path: str = ""):
+                check_cancelled()
                 if isinstance(value, dict):
                     for key, item in value.items():
                         yield from locations(item, f"{path}.{key}")
@@ -244,7 +297,9 @@ def redact_html(original: bytes, *, timestamp: str | None = None) -> tuple[bytes
                 f"(sha256={_sha256(passage.encode('utf-8'))}, length={len(passage)}, "
                 f"fields={list(locations(data))[:5]})"
             )
+    check_cancelled()
     manifest = {**publication, "public_html_sha256": _sha256(public_bytes)}
+    check_cancelled()
     return public_bytes, manifest
 
 

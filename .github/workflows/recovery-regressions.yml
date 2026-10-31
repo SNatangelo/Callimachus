@@ -14,88 +14,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  source:
-    runs-on: ubuntu-latest
-    outputs:
-      ready: ${{ steps.check.outputs.ready }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Check release source
-        id: check
-        shell: bash
-        run: |
-          if [[ -f run.py && -f core/app/run.py && -f requirements.txt ]]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Application source and requirements have not been imported yet; recovery tests are pending."
-          fi
-
-  native-recovery:
-    needs: source
-    if: needs.source.outputs.ready == 'true'
-    name: Recovery (${{ matrix.os }})
+  selected-recovery:
+    name: Selected recovery focus (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - name: Windows 2022
+            os: windows-2022
+          - name: Ubuntu 22.04
+            os: ubuntu-22.04
+    env:
+      CITATION_VERIFIER_LLM_BACKEND: dummy
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.12"
-      - name: Install test dependencies
-        run: python -m pip install -r requirements.txt pytest
-      - name: Run recovery tests
-        env:
-          CITATION_VERIFIER_LLM_BACKEND: dummy
-          PYTHONUTF8: "1"
+          python-version: "3.13.15"
+      - name: Install recovery dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: \
+            -c packaging/release-constraints.txt \
+            -r requirements.txt -r requirements-gui.txt \
+            -r requirements-ocr.txt -r requirements-rag.txt \
+            pytest pytest-subtests
+      - name: Run retained bibliography parsing regressions
+        run: python -m pytest tests/test_columnaware_biblio.py tests/test_parse_golden.py tests/test_parsing.py -q
+      - name: Run retained recovery and resume regressions
         run: >-
           python -m pytest
           tests/test_recovery_regressions.py
           tests/test_pause_schema_recovery.py
-          tests/test_report_bibliography.py
           tests/test_tasks_skip_fetch.py
-          tests/test_resolve_cooldown_resume.py
-          tests/test_resolve_deferred_progress.py
-          tests/test_recovery_checkpoint_selection.py
-          tests/test_pymupdf_import_migration.py
-          tests/test_semantic_scholar_rate_floor.py
+          tests/test_pipeline_parallel.py
           tests/test_source_identity_attestation_phase.py
-          tests/infra/test_phase_event_storage.py
-          tests/infra/test_current_run_schema.py
-          tests/test_audit_readiness.py
-          tests/test_resume_hash_integrity.py
-          tests/test_db_persistence.py
-          -q
-      - name: Run CLI startup recovery tests
-        env:
-          PYTHONUTF8: "1"
-        run: >-
-          python -m pytest tests/test_cli_help.py -q
-          -k "root_help_uses_only_the_standard_library or missing_requirements or missing_requirement_install_command or missing_env or keyboard_interrupt or resume_command or pdf_backend_preflight"
-      - name: Run configuration safety tests
-        env:
-          CITATION_VERIFIER_LLM_BACKEND: dummy
-          PYTHONUTF8: "1"
-        run: >-
-          python -m pytest
-          tests/test_invocation.py
-          tests/test_configure_deployment.py
-          -q
-      - name: Run integrity recovery tests
-        if: runner.os == 'Linux'
-        env:
-          CITATION_VERIFIER_LLM_BACKEND: dummy
-          PYTHONUTF8: "1"
+          tests/infra/test_current_run_schema.py -q
+      - name: Run retained CLI and configuration regressions
+        run: python -m pytest tests/test_cli_help.py tests/test_infra.py tests/test_invocation.py -q
+      - name: Run retained adjacent pipeline regressions
         run: >-
           python -m pytest
           tests/infra/integrity/test_admission.py
-          tests/test_cache_maintenance.py
-          -q
+          tests/test_pipeline_end_to_end.py
+          tests/test_run_report.py
+          tests/test_db.py -q

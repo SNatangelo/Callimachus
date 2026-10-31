@@ -659,9 +659,16 @@ def _metadata_year(meta: dict[str, list[str]]) -> str | None:
 
 
 def _title_match(left: str | None, right: str | None) -> bool:
-    left_tokens = set(re.findall(r"[a-z0-9]+", str(left or "").lower()))
-    right_tokens = set(re.findall(r"[a-z0-9]+", str(right or "").lower()))
-    return bool(len(left_tokens) >= 3 and left_tokens == right_tokens)
+    try:
+        from core.resolve import sources as _sources
+    except ImportError:  # pragma: no cover - standalone execution fallback
+        import sources as _sources  # type: ignore
+
+    left_tokens = set(_sources._identity_comparison_tokens(left))
+    right_tokens = set(_sources._identity_comparison_tokens(right))
+    script_markers = _sources._IDENTITY_SCRIPT_MARKERS
+    left_visible = left_tokens - script_markers
+    return bool(len(left_visible) >= 3 and left_tokens == right_tokens)
 
 
 def _doi_from_url(url: str | None) -> str | None:
@@ -790,9 +797,10 @@ def landing_identity_profile(
     )
     observed = {scheme: _identifier_values(meta, scheme) for scheme in expected}
     title = first_meta(meta, "citation_title", "dc.title", "og:title", "twitter:title")
+    comparison_title = title
     title = strip_tags(title) if title else None
     title_match = any(
-        _title_match(title, expected_title)
+        _title_match(comparison_title, expected_title)
         for expected_title in (ref.get("title"), resolve_result.get("matched_title"))
         if expected_title
     )

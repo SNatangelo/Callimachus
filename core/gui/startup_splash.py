@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import sys
 import threading
 from types import TracebackType
 from typing import Any
@@ -179,59 +180,213 @@ class _StartupSession:
 
 
 def _create_splash(QtCore: Any, QtGui: Any, QtWidgets: Any) -> Any:
-    logo_path = Path(__file__).resolve().parent / "assets" / "logo.png"
+    settings = QtCore.QSettings("Callimachus", "Callimachus")
+    dark = bool(settings.value("dark_theme", False, type=bool))
+    palette = (
+        {
+            "surface": "#182330",
+            "ink": "#e6edf6",
+            "muted": "#9faec4",
+            "line": "#34455b",
+            "accent": "#7ab4ff",
+        }
+        if dark
+        else {
+            "surface": "#ffffff",
+            "ink": "#11183c",
+            "muted": "#66769c",
+            "line": "#d1def2",
+            "accent": "#175fe6",
+        }
+    )
+    asset_dir = Path(__file__).resolve().parent / "assets"
+    logo_path = asset_dir / ("logo-dark.png" if dark else "logo.png")
     if not logo_path.is_file():
         raise FileNotFoundError(f"Callimachus startup logo is missing: {logo_path}")
     logo = QtGui.QPixmap(str(logo_path))
     if logo.isNull():
         raise RuntimeError(f"Callimachus startup logo could not be loaded: {logo_path}")
+    scaled_logo = logo.scaled(
+        270,
+        106,
+        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        QtCore.Qt.TransformationMode.SmoothTransformation,
+    )
+    scaled_image = scaled_logo.toImage()
+    visible_pixels = [
+        (x, y)
+        for y in range(scaled_image.height())
+        for x in range(scaled_image.width())
+        if scaled_image.pixelColor(x, y).alpha() > 0
+    ]
+    visible_bounds = QtCore.QRect(
+        min(x for x, _y in visible_pixels),
+        min(y for _x, y in visible_pixels),
+        max(x for x, _y in visible_pixels) - min(x for x, _y in visible_pixels) + 1,
+        max(y for _x, y in visible_pixels) - min(y for _x, y in visible_pixels) + 1,
+    ) if visible_pixels else QtCore.QRect()
+    if visible_bounds.isEmpty():
+        raise RuntimeError(f"Callimachus startup logo has no visible pixels: {logo_path}")
+    visible_logo = scaled_logo.copy(visible_bounds)
     icon = _callimachus_icon(QtCore, QtGui)
     app = QtWidgets.QApplication.instance()
     if app is not None:
         app.setWindowIcon(icon)
 
+    class _GlyphOnlyCloseButton(QtWidgets.QPushButton):
+        def __init__(self, parent) -> None:
+            super().__init__(parent)
+            from .atlas_icons import icon as atlante_icon
+
+            self._normal_glyph = atlante_icon(
+                QtCore, QtGui, "close", color=palette["accent"], size=18
+            )
+            self._active_glyph = atlante_icon(
+                QtCore, QtGui, "close", color=palette["ink"], size=18
+            )
+            self.setIcon(self._normal_glyph)
+            self.setIconSize(QtCore.QSize(18, 18))
+            self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NoSystemBackground, True)
+
+        def enterEvent(self, event: Any) -> None:
+            super().enterEvent(event)
+            self.update()
+
+        def leaveEvent(self, event: Any) -> None:
+            super().leaveEvent(event)
+            self.update()
+
+        def focusInEvent(self, event: Any) -> None:
+            super().focusInEvent(event)
+            self.update()
+
+        def focusOutEvent(self, event: Any) -> None:
+            super().focusOutEvent(event)
+            self.update()
+
+        def _paint_glyph(self, painter, *, active: bool) -> None:
+            glyph = self._active_glyph if active else self._normal_glyph
+            width = min(18, self.width(), self.height())
+            rect = QtCore.QRect(
+                (self.width() - width) // 2,
+                (self.height() - width) // 2,
+                width,
+                width,
+            )
+            glyph.paint(
+                painter,
+                rect,
+                QtCore.Qt.AlignmentFlag.AlignCenter,
+                QtGui.QIcon.Mode.Normal,
+                QtGui.QIcon.State.Off,
+            )
+
+        def _glyph_is_active(self) -> bool:
+            return self.underMouse() or self.isDown() or self.hasFocus()
+
+        def paintEvent(self, event: Any) -> None:
+            del event
+            painter = QtGui.QPainter(self)
+            self._paint_glyph(
+                painter,
+                active=self._glyph_is_active(),
+            )
+            painter.end()
+
     class _SplashDialog(QtWidgets.QDialog):
         def __init__(self) -> None:
             flags = (
                 QtCore.Qt.WindowType.Dialog
-                | QtCore.Qt.WindowType.WindowTitleHint
-                | QtCore.Qt.WindowType.WindowSystemMenuHint
-                | QtCore.Qt.WindowType.WindowCloseButtonHint
                 | QtCore.Qt.WindowType.WindowStaysOnTopHint
             )
+            native_macos = sys.platform == "darwin"
+            if native_macos:
+                flags |= QtCore.Qt.WindowType.WindowTitleHint
+                flags |= QtCore.Qt.WindowType.WindowCloseButtonHint
+            else:
+                flags |= QtCore.Qt.WindowType.FramelessWindowHint
             super().__init__(None, flags)
+            if not native_macos:
+                self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
             self._close_handler: Callable[[], None] | None = None
             self._programmatic_close = False
             self.setWindowTitle("Callimachus")
             self.setWindowIcon(icon)
             self.setAccessibleName("Callimachus startup")
+            self.setObjectName("startupSplash")
+            self.setProperty("darkTheme", dark)
             self.setFixedSize(390, 205)
             self.setStyleSheet(
-                "QDialog { background: #ffffff; color: #172b4d; }"
-                "QLabel#startupStatus { color: #52627a; font-size: 13px; }"
+                "QDialog#startupSplash { "
+                f"background: transparent; color: {palette['ink']}; "
+                "}"
+                "QLabel { background: transparent; }"
+                f"QLabel#startupStatus {{ color: {palette['muted']}; font-size: 13px; }}"
             )
 
-            layout = QtWidgets.QVBoxLayout(self)
-            layout.setContentsMargins(28, 24, 28, 20)
-            layout.setSpacing(12)
+            layout = QtWidgets.QGridLayout(self)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+
+            self.close_button = None
+            if not native_macos:
+                header = QtWidgets.QWidget(self)
+                header_layout = QtWidgets.QHBoxLayout(header)
+                header_layout.setContentsMargins(18, 0, 0, 0)
+                header_layout.setSpacing(8)
+                header_layout.addStretch(1)
+
+                close_button = _GlyphOnlyCloseButton(header)
+                close_button.setObjectName("startupSplashClose")
+                close_button.setAccessibleName("Close startup splash")
+                close_button.setToolTip("Close")
+                close_button.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+                close_button.setAutoDefault(False)
+                close_button.setDefault(False)
+                close_button.setFixedSize(30, 30)
+                close_button.clicked.connect(self.close)
+                header_layout.addWidget(close_button)
+                self.close_button = close_button
+                layout.addWidget(
+                    header,
+                    0,
+                    0,
+                    QtCore.Qt.AlignmentFlag.AlignTop,
+                )
 
             logo_label = QtWidgets.QLabel(self)
+            logo_label.setObjectName("startupLogo")
             logo_label.setAccessibleName("Callimachus logo")
             logo_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            logo_label.setPixmap(
-                logo.scaled(
-                    270,
-                    106,
-                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                    QtCore.Qt.TransformationMode.SmoothTransformation,
-                )
+            logo_label.setAttribute(
+                QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                True,
             )
-            layout.addWidget(logo_label, 1)
+            logo_label.setPixmap(visible_logo)
+            layout.addWidget(logo_label, 0, 0)
 
             status = QtWidgets.QLabel("Preparing Callimachus…", self)
             status.setObjectName("startupStatus")
             status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(status)
+            status.setContentsMargins(0, 0, 0, 14)
+            layout.addWidget(
+                status,
+                0,
+                0,
+                QtCore.Qt.AlignmentFlag.AlignBottom,
+            )
+
+        def paintEvent(self, event: Any) -> None:
+            painter = QtGui.QPainter(self)
+            if sys.platform == "darwin":
+                painter.fillRect(self.rect(), QtGui.QColor(palette["surface"]))
+                painter.end()
+                return
+            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            painter.setPen(QtGui.QPen(QtGui.QColor(palette["line"]), 1))
+            painter.setBrush(QtGui.QColor(palette["surface"]))
+            painter.drawRoundedRect(QtCore.QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 8, 8)
+            painter.end()
 
         def set_close_handler(self, handler: Callable[[], None]) -> None:
             self._close_handler = handler

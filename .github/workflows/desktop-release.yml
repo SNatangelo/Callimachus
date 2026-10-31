@@ -1,7 +1,27 @@
+# .github/workflows/desktop-release.yml
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 name: Desktop packages
 
 on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "knowledge/**"
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish release from the exact Callimachus-${VERSION} branch after all gates pass
+        type: boolean
+        default: false
+      native_macos_fixture:
+        description: Run the selected native macOS Keychain fixture
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: read
@@ -16,8 +36,36 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
+      release_tag: ${{ steps.release-config.outputs.release_tag }}
+      source_version: ${{ steps.release-config.outputs.source_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate source version and publication ref
+        id: release-config
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+        run: |
+          source_version="$(tr -d '[:space:]' < VERSION)"
+          test -n "$source_version"
+          expected_tag="v${source_version}"
+          if [[ "$SOURCE_REF" == refs/tags/* && "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "Tag $RELEASE_TAG does not match VERSION ($expected_tag)" >&2
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == workflow_dispatch && "$PUBLISH_RELEASE" == true ]]; then
+            expected_branch="Callimachus-${source_version}"
+            if [[ "$SOURCE_REF" != "refs/heads/${expected_branch}" ]]; then
+              echo "Manual publication requires refs/heads/${expected_branch}" >&2
+              exit 1
+            fi
+          fi
+          {
+            echo "release_tag=${expected_tag}"
+            echo "source_version=${source_version}"
+          } >> "$GITHUB_OUTPUT"
       - name: Select affected desktop platforms
         id: select
         env:
@@ -39,6 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        id: runtime-python
         with:
           python-version: "3.13.15"
       - name: Install Linux Qt platform libraries
@@ -51,10 +100,28 @@ jobs:
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0
       - name: Install runtime and build dependencies on the runner
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt -r requirements-rag.txt -c packaging/release-constraints.txt
           python -m pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt
+      - name: Set up macOS binding build Python
+        if: runner.os == 'macOS'
+        id: macos-build-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.10.22"
+      - name: Build macOS 14.4 PySide bindings from verified source
+        if: runner.os == 'macOS'
+        env:
+          BUILD_PYTHON: ${{ steps.macos-build-python.outputs.python-path }}
+          RUNTIME_PYTHON: ${{ steps.runtime-python.outputs.python-path }}
+        run: bash packaging/prepare_macos_bindings.sh
+      - name: Restore the application Python runtime
+        if: runner.os == 'macOS'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13.15"
       - name: Test package contracts and desktop paths
         env:
           QT_QPA_PLATFORM: ${{ runner.os == 'Linux' && 'offscreen' || '' }}
@@ -66,11 +133,80 @@ jobs:
           tests/test_desktop_matrix.py
           tests/test_windows_installer_build.py
           tests/test_packaged_runtime.py
+          tests/test_production_credentials.py
+          tests/test_macos_keychain_session.py
+          tests/test_macos_single_vault.py
+          tests/test_credential_recovery_gui.py
+          tests/test_historical_desktop_export.py
+          tests/test_collection_selection_gui.py
+          tests/test_local_executables.py
           tests/test_invocation.py
           tests/test_cli_help.py
           tests/test_desktop_command.py
+          tests/test_desktop_gui_optional.py
+          tests/test_desktop_library_command.py
+          tests/test_library_import.py
+          tests/test_library_review_interactions.py
           -q
+      - name: Create an isolated synthetic Keychain for the opt-in fixture
+        if: github.event_name == 'workflow_dispatch' && inputs.native_macos_fixture && runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/callimachus-native-fixture.keychain-db"
+          password="$(openssl rand -base64 32)"
+          echo "::add-mask::$password"
+          if test -e "$keychain"; then security delete-keychain "$keychain"; fi
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "CALLIMACHUS_NATIVE_KEYCHAIN_PATH=$keychain" >> "$GITHUB_ENV"
+      - name: Run opt-in native macOS Keychain fixture
+        if: github.event_name == 'workflow_dispatch' && inputs.native_macos_fixture && runner.os == 'macOS'
+        env:
+          PYTHONUTF8: "1"
+          CALLIMACHUS_RUN_NATIVE_KEYCHAIN_TESTS: "1"
+        run: python -m pytest tests/test_macos_single_vault_native.py -q
+      - name: Remove the synthetic Keychain
+        if: always() && runner.os == 'macOS' && github.event_name == 'workflow_dispatch' && inputs.native_macos_fixture
+        run: |
+          keychain="$RUNNER_TEMP/callimachus-native-fixture.keychain-db"
+          if test -e "$keychain"; then security delete-keychain "$keychain"; fi
+      - name: Import persistent macOS signing identity
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.CALLIMACHUS_MACOS_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CALLIMACHUS_MACOS_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.CALLIMACHUS_MACOS_SIGNING_IDENTITY }}
+          SELF_SIGNED: ${{ vars.CALLIMACHUS_MACOS_SELF_SIGNED }}
+        run: |
+          set -euo pipefail
+          test -n "$CERTIFICATE_BASE64" && test -n "$CERTIFICATE_PASSWORD"
+          [[ "$SIGNING_IDENTITY" =~ ^[0-9a-fA-F]{40}$ ]]
+          keychain="$RUNNER_TEMP/callimachus-signing.keychain-db"
+          certificate="$RUNNER_TEMP/callimachus-signing.p12"
+          public_certificate="$RUNNER_TEMP/callimachus-signing.pem"
+          keychain_password="$(openssl rand -base64 32)"
+          echo "::add-mask::$keychain_password"
+          trap 'rm -f "$certificate" "$public_certificate"' EXIT
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$certificate"
+          chmod 600 "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -f pkcs12 -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain"
+          if [[ "$SELF_SIGNED" == '1' ]]; then
+            openssl pkcs12 -in "$certificate" -clcerts -nokeys -passin env:CERTIFICATE_PASSWORD -out "$public_certificate"
+            actual="$(openssl x509 -in "$public_certificate" -noout -fingerprint -sha1 | cut -d= -f2 | tr -d ':')"
+            [[ "$(printf '%s' "$actual" | tr '[:lower:]' '[:upper:]')" == "$(printf '%s' "$SIGNING_IDENTITY" | tr '[:lower:]' '[:upper:]')" ]]
+            sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$public_certificate"
+          fi
       - name: Build native standalone package
+        env:
+          CALLIMACHUS_MACOS_SIGNING_IDENTITY: ${{ github.event_name != 'pull_request' && secrets.CALLIMACHUS_MACOS_SIGNING_IDENTITY || '' }}
+          CALLIMACHUS_MACOS_ALLOW_ADHOC: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+          CALLIMACHUS_MACOS_SELF_SIGNED: ${{ vars.CALLIMACHUS_MACOS_SELF_SIGNED }}
         run: python packaging/build_desktop.py
       - name: Smoke-test frozen package and bundled resources
         env:
@@ -88,6 +224,25 @@ jobs:
         run: python packaging/collect_ubuntu_sources.py
       - name: Archive and hash package
         run: python packaging/archive_desktop.py ${{ matrix.platform }}
+      - name: Add macOS binding build provenance
+        if: runner.os == 'macOS'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          case "$PLATFORM" in
+            macos-arm64) arch=arm64 ;;
+            macos-x64) arch=x86_64 ;;
+            *) echo "Unexpected macOS platform: $PLATFORM" >&2; exit 1 ;;
+          esac
+          manifest="build/desktop/macos-binding-provenance-${arch}.json"
+          test -s "$manifest"
+          cp "$manifest" "build/desktop/artifacts/Callimachus-${PLATFORM}-binding-provenance.json"
+          (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-binding-provenance.json" > "Callimachus-${PLATFORM}-binding-provenance.json.sha256")
+      - name: Remove temporary macOS signing keychain
+        if: always() && runner.os == 'macOS' && github.event_name != 'pull_request'
+        run: |
+          keychain="$RUNNER_TEMP/callimachus-signing.keychain-db"
+          if test -f "$keychain"; then security delete-keychain "$keychain"; fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: callimachus-${{ matrix.platform }}
@@ -96,7 +251,8 @@ jobs:
           retention-days: 1
 
   source-audit:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: select-platforms
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -110,31 +266,120 @@ jobs:
           retention-days: 1
 
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release && github.ref == format('refs/heads/Callimachus-{0}', needs.select-platforms.outputs.source_version))
+    needs: [build, source-audit, select-platforms]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - name: Download x64 package artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          pattern: callimachus-*
+          pattern: callimachus-*-x64
+          merge-multiple: true
+          path: release
+      - name: Download arm64 package artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: callimachus-macos-arm64
+          merge-multiple: true
+          path: release
+      - name: Download version-matched dependency sources
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: callimachus-dependency-sources
           merge-multiple: true
           path: release
       - name: Include the corresponding project source
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.select-platforms.outputs.release_tag }}
         run: |
           git archive --format=tar.gz --output="release/Callimachus-source-${RELEASE_TAG}.tar.gz" HEAD
-          sha256sum "release/Callimachus-source-${RELEASE_TAG}.tar.gz" > "release/Callimachus-source-${RELEASE_TAG}.tar.gz.sha256"
-      - name: Include version-matched dependency sources
-        run: python packaging/assemble_sources.py release
+          (cd release && sha256sum "Callimachus-source-${RELEASE_TAG}.tar.gz" > "Callimachus-source-${RELEASE_TAG}.tar.gz.sha256")
       - name: Require the Ubuntu source archive
-        run: test -s release/Callimachus-linux-system-sources.tar.gz
+        run: |
+          test -s release/Callimachus-linux-system-sources.tar.gz
+          test -s release/Callimachus-dependency-sources.json
+      - name: Verify every release asset checksum
+        run: cd release && sha256sum -c *.sha256
+      - name: Validate the manual release target and refuse overwrites
+        id: manual-release-target
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY_NAME: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.select-platforms.outputs.release_tag }}
+          RELEASE_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repository = os.environ["REPOSITORY_NAME"]
+          token = os.environ["GITHUB_TOKEN"]
+          tag = os.environ["RELEASE_TAG"]
+          expected_commit = os.environ["RELEASE_COMMIT_SHA"]
+          base = f"https://api.github.com/repos/{repository}"
+
+          def get_json(path):
+              request = urllib.request.Request(
+                  f"{base}/{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "User-Agent": "Callimachus-release-gate",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  if error.code == 404:
+                      return None
+                  raise SystemExit(f"GitHub API returned HTTP {error.code} while validating release target")
+
+          encoded_tag = urllib.parse.quote(tag, safe="")
+          reference = get_json(f"git/ref/tags/{encoded_tag}")
+          tag_exists = reference is not None
+          if reference is not None:
+              target = reference.get("object", {})
+              for _ in range(8):
+                  object_type = target.get("type")
+                  if object_type == "commit":
+                      break
+                  if object_type != "tag":
+                      raise SystemExit(f"Unexpected release tag target type: {object_type!r}")
+                  annotated = get_json(f"git/tags/{target.get('sha', '')}")
+                  if annotated is None:
+                      raise SystemExit("Could not resolve the existing annotated release tag")
+                  target = annotated.get("object", {})
+              else:
+                  raise SystemExit("Release tag nesting is too deep to verify safely")
+              if target.get("sha") != expected_commit:
+                  raise SystemExit("Existing release tag points to a different commit; refusing publication")
+
+          if get_json(f"releases/tags/{encoded_tag}") is not None:
+              raise SystemExit("A release already exists for this tag; refusing to overwrite it")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"tag_exists={str(tag_exists).lower()}\n")
+          PY
       - name: Publish only after every native job passes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" release/* --verify-tag --generate-notes
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ needs.select-platforms.outputs.release_tag }}
+          RELEASE_TAG_EXISTS: ${{ steps.manual-release-target.outputs.tag_exists }}
+          RELEASE_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == push || "$RELEASE_TAG_EXISTS" == true ]]; then
+            gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.0.md
+          else
+            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_COMMIT_SHA" --notes-file docs/releases/2.0.0.md
+          fi

@@ -1,3 +1,6 @@
+# core/parse/reference_readers/_field_utils.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Shared construction helpers for structural reference readers."""
 
 from __future__ import annotations

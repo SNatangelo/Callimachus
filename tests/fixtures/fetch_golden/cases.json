@@ -1,0 +1,257 @@
+[
+  {
+    "name": "published_official_auxiliary_beats_preprint_winner_links",
+    "ref": {
+      "id": "r1",
+      "ref_number": 1,
+      "title": "End-to-end memory networks",
+      "raw_entry": "Sainbayar Sukhbaatar, Arthur Szlam, Jason Weston, and Rob Fergus. End-to-end memory networks. In Advances in Neural Information Processing Systems 28, 2015.",
+      "source_type": "article",
+      "source_kind": "article_like",
+      "doi": null,
+      "url": null,
+      "year": 2015
+    },
+    "resolve_result": {
+      "status": "resolved",
+      "oa_status": "open",
+      "fulltext_exists": true,
+      "fulltext_links": [
+        {
+          "url": "https://doi.org/10.48550/arxiv.1503.08895",
+          "content_type": "doi"
+        },
+        {
+          "url": "https://arxiv.org/pdf/1503.08895",
+          "content_type": "pdf"
+        }
+      ],
+      "auxiliary_fulltext_links": [
+        {
+          "url": "https://proceedings.neurips.cc/paper_files/paper/2015/file/8fb21ee7a2207526da55a679f0332de2-Paper.pdf",
+          "content_type": "pdf",
+          "discovered_via": "neurips_search"
+        }
+      ]
+    },
+    "expected": {
+      "status": "not_found",
+      "process_queues": [
+        [
+          "https://proceedings.neurips.cc/paper_files/paper/2015/file/8fb21ee7a2207526da55a679f0332de2-Paper.pdf",
+          "https://doi.org/10.48550/arxiv.1503.08895"
+        ],
+        [
+          "https://arxiv.org/pdf/1503.08895"
+        ]
+      ],
+      "final_queue": [
+        "https://proceedings.neurips.cc/paper_files/paper/2015/file/8fb21ee7a2207526da55a679f0332de2-Paper.pdf",
+        "https://doi.org/10.48550/arxiv.1503.08895"
+      ],
+      "preprint_queue": [
+        "https://arxiv.org/pdf/1503.08895"
+      ]
+    }
+  },
+  {
+    "name": "genuine_preprint_citation_keeps_preprint_primary",
+    "ref": {
+      "id": "r1",
+      "ref_number": 1,
+      "title": "End-to-end memory networks",
+      "raw_entry": "Sainbayar Sukhbaatar, Arthur Szlam, Jason Weston, and Rob Fergus. End-to-end memory networks. arXiv preprint arXiv:1503.08895, 2015.",
+      "source_type": "article",
+      "source_kind": "article_like",
+      "doi": "10.48550/arxiv.1503.08895",
+      "url": null,
+      "year": 2015
+    },
+    "resolve_result": {
+      "status": "resolved",
+      "oa_status": "open",
+      "fulltext_exists": true,
+      "fulltext_links": [
+        {
+          "url": "https://doi.org/10.48550/arxiv.1503.08895",
+          "content_type": "doi"
+        },
+        {
+          "url": "https://arxiv.org/pdf/1503.08895",
+          "content_type": "pdf"
+        }
+      ],
+      "auxiliary_fulltext_links": [
+        {
+          "url": "https://proceedings.neurips.cc/paper_files/paper/2015/file/8fb21ee7a2207526da55a679f0332de2-Paper.pdf",
+          "content_type": "pdf",
+          "discovered_via": "neurips_search"
+        }
+      ]
+    },
+    "expected": {
+      "status": "not_found",
+      "process_queues": [
+        [
+          "https://arxiv.org/pdf/1503.08895",
+          "https://proceedings.neurips.cc/paper_files/paper/2015/file/8fb21ee7a2207526da55a679f0332de2-Paper.pdf",
+          "https://doi.org/10.48550/arxiv.1503.08895"
+        ]
+      ],
+      "final_queue": [
+        "https://arxiv.org/pdf/1503.08895",
+        "https://proceedings.neurips.cc/paper_files/paper/2015/file/8fb21ee7a2207526da55a679f0332de2-Paper.pdf",
+        "https://doi.org/10.48550/arxiv.1503.08895"
+      ],
+      "preprint_queue": []
+    }
+  },
+  {
+    "name": "doi_only_reference_generates_doi_landing",
+    "ref": {
+      "id": "r1",
+      "ref_number": 1,
+      "title": "Example DOI-only paper",
+      "raw_entry": "Doe J. Example DOI-only paper. J Testing. 2020.",
+      "source_type": "article",
+      "source_kind": "article_like",
+      "doi": "10.1234/example.doi",
+      "url": null,
+      "year": 2020
+    },
+    "resolve_result": {
+      "status": "resolved",
+      "oa_status": "unknown",
+      "fulltext_exists": "unknown",
+      "fulltext_links": [],
+      "auxiliary_fulltext_links": []
+    },
+    "expected": {
+      "status": "not_found",
+      "process_queues": [
+        [
+          "https://doi.org/10.1234%2Fexample.doi"
+        ]
+      ],
+      "final_queue": [
+        "https://doi.org/10.1234%2Fexample.doi"
+      ],
+      "preprint_queue": []
+    }
+  },
+  {
+    "name": "pmid_europepmc_provider_candidates_feed_queue",
+    "ref": {
+      "id": "r1",
+      "ref_number": 1,
+      "title": "Example Europe PMC paper",
+      "raw_entry": "Doe J. Example Europe PMC paper. J Testing. 2021.",
+      "source_type": "article",
+      "source_kind": "article_like",
+      "doi": null,
+      "pmid": "12345678",
+      "url": null,
+      "year": 2021
+    },
+    "resolve_result": {
+      "status": "resolved",
+      "oa_status": "open",
+      "fulltext_exists": true,
+      "fulltext_links": [],
+      "auxiliary_fulltext_links": []
+    },
+    "provider_candidate_rows": [
+      {
+        "provider": "europepmc",
+        "error": null,
+        "items": [
+          {
+            "method": "europepmc",
+            "url": "https://europepmc.org/articles/PMC1234567?pdf=render",
+            "kind": "pdf"
+          },
+          {
+            "method": "europepmc",
+            "url": "https://europepmc.org/articles/PMC1234567",
+            "kind": "landing"
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "status": "not_found",
+      "process_queues": [
+        [
+          "https://europepmc.org/articles/PMC1234567?pdf=render",
+          "https://europepmc.org/articles/PMC1234567"
+        ]
+      ],
+      "final_queue": [
+        "https://europepmc.org/articles/PMC1234567?pdf=render",
+        "https://europepmc.org/articles/PMC1234567"
+      ],
+      "preprint_queue": []
+    }
+  },
+  {
+    "name": "trusted_reference_url_enters_queue_directly",
+    "ref": {
+      "id": "r1",
+      "ref_number": 1,
+      "title": "Example CVF paper",
+      "raw_entry": "Doe J. Example CVF paper. ICCV 2021.",
+      "source_type": "article",
+      "source_kind": "article_like",
+      "doi": null,
+      "url": "https://openaccess.thecvf.com/content/ICCV2021/papers/Doe_Example_CVF_Paper_ICCV_2021_paper.pdf",
+      "year": 2021
+    },
+    "resolve_result": {
+      "status": "resolved",
+      "oa_status": "open",
+      "fulltext_exists": true,
+      "fulltext_links": [],
+      "auxiliary_fulltext_links": []
+    },
+    "expected": {
+      "status": "not_found",
+      "process_queues": [
+        [
+          "https://openaccess.thecvf.com/content/ICCV2021/papers/Doe_Example_CVF_Paper_ICCV_2021_paper.pdf"
+        ]
+      ],
+      "final_queue": [
+        "https://openaccess.thecvf.com/content/ICCV2021/papers/Doe_Example_CVF_Paper_ICCV_2021_paper.pdf"
+      ],
+      "preprint_queue": []
+    }
+  },
+  {
+    "name": "abstract_only_reference_never_builds_queue",
+    "ref": {
+      "id": "r1",
+      "ref_number": 1,
+      "title": "Example abstract-only reference",
+      "raw_entry": "Doe J. Example abstract-only reference. J Abstracts. 2019.",
+      "source_type": "article",
+      "source_kind": "article_like",
+      "doi": "10.9999/abstract-only",
+      "url": null,
+      "year": 2019
+    },
+    "resolve_result": {
+      "status": "resolved",
+      "oa_status": "closed",
+      "fulltext_exists": false,
+      "fulltext_links": [],
+      "auxiliary_fulltext_links": [],
+      "abstract": "A stored abstract exists for this work."
+    },
+    "expected": {
+      "status": "skipped",
+      "process_queues": [],
+      "final_queue": [],
+      "preprint_queue": []
+    }
+  }
+]

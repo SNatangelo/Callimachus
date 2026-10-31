@@ -1,0 +1,292 @@
+{
+  "topics": [
+    {
+      "id": "start",
+      "category": "Your first analysis",
+      "title": "Prepare your first analysis",
+      "lead": "Start with the manuscript, then choose how to run the verification.",
+      "steps": [
+        ["Choose the manuscript", "On the Analysis screen, choose a file or drag it into the box. Check its name before you start: the Source Library and the manuscript being analysed are two different things."],
+        ["Prepare the Juries", "Open Jury 1 and Jury 2, configure the providers you want to use, and select models. Credentials are shared by provider; assignments to the two Juries remain independent."],
+        ["Review Options", "Check the mode and the choices for manual review and retrieval. This is also where you set Jury 2's severity. If retrieval needs institutional access, prepare the required session."],
+        ["Start and follow the phases", "Start the analysis and read the current activity. Callimachus may pause to ask you to distinguish references, provide a text, or check a document's identity."],
+        ["Open and read the report", "When it finishes, open the report and review the outcomes and coverage. You can find the run again in History; completion does not mean every claim is supported."]
+      ],
+      "notice": "If you selected Juries, the run checks that they respond before it starts.",
+      "related": "See also: choosing models and institutional access.",
+      "faq": [
+        ["Do I need to configure every key?", "Configure the services and providers you want to use. A field for one service does not configure the others; check the selected models for each Jury separately."],
+        ["Can I stop and come back later?", "Available actions depend on the run's state. Read the notice before stopping and use History to find the work again. Resume is available when that state allows it."]
+      ],
+      "example": ["Before you press Start", "Manuscript: literature-review.docx. Jury 1: models selected. Jury 2: models selected. Options: manual reviews allowed. The file name and selections should match the work you intend to start."],
+      "links": ["models", "workflow", "services"]
+    },
+    {
+      "id": "workflow",
+      "category": "Getting oriented · The five phases",
+      "title": "What happens during an analysis",
+      "lead": "The phase bar shows where you are. Review requests indicate when the app needs you to make a choice.",
+      "steps": [
+        ["Parse · recognise citations and bibliography", "Callimachus reads the manuscript and links citations to references. If a link is ambiguous, it may ask you to choose a candidate: check the cited text before deciding."],
+        ["Resolve · identify the works", "References are compared with the available bibliographic data. Titles, authors, years, and identifiers help distinguish similar works. Identifying a work does not mean its text has been obtained."],
+        ["Fetch · obtain the content", "The app looks for available texts. When needed, Assisted Fetch lets you provide the document or an abstract. Scans may need OCR; acquired materials still have to pass the checks."],
+        ["Verify · compare claims with evidence", "Verification uses admitted material to assess claims. Read each outcome together with the cited passage and its explanation: a technical error is not a judgement about the content."],
+        ["Report · read the result", "The report brings together outcomes, coverage, and evidence provenance. A completed run may still contain unavailable sources or assessments that cannot be decided."]
+      ],
+      "notice": "A completed phase describes progress; it does not establish that every citation is scientifically correct.",
+      "faq": [
+        ["Why does it ask me to step in instead of choosing on its own?", "Some links or documents cannot be confirmed from the available data. The request makes the decision explicit and preserves its provenance."],
+        ["Is a resolved source ready for verification?", "Not necessarily. Bibliographic resolution, text availability, and document admission are separate steps."]
+      ],
+      "links": ["identity", "fetch", "report"]
+    },
+    {
+      "id": "models",
+      "category": "Before you begin · Models and Juries",
+      "title": "Choose models for verification",
+      "lead": "The two Juries can use different models. Their model choices are independent; credentials for the same provider are shared.",
+      "steps": [
+        ["Open a Jury selector", "On the Analysis screen, open Jury 1 or Jury 2. The selector title tells you which group you are changing."],
+        ["Configure the provider", "Choose the service and enter the required credentials or endpoint. For CLI tools, use the access method provided by that tool. The check button tests the available configuration."],
+        ["Select models", "Tick the models you want to use for that Jury. The navigation count helps you find your selections, including selections from different providers."],
+        ["Check the second Jury and Options", "Close the selector and review the other Jury. Change Jury 2's severity in Options on the Analysis screen."]
+      ],
+      "notice": "Saving a key does not select a model automatically. Check both Juries before starting.",
+      "faq": [
+        ["If I change provider, do I lose the other selections?", "Models already selected from other providers remain in the Jury. The counts help you check the whole group, not just the page you are viewing."],
+        ["Why is the catalogue empty?", "First read the check status: the catalogue may not have been requested, may still be loading, or may be unavailable with the current configuration. An empty list alone does not explain why."],
+        ["Where do I change Jury 2's severity?", "In Options on the main Analysis screen. Provider settings and model choices stay in the Jury selector."]
+      ],
+      "links": ["start", "services"]
+    },
+    {
+      "id": "identity",
+      "category": "Identifying sources",
+      "title": "Choose between two ambiguous references",
+      "lead": "When a link is uncertain, Callimachus asks you to decide.",
+      "steps": [
+        ["Tell the requests apart", "Choosing between references links a citation to the bibliography. An identity check instead compares a retrieved document with the work being sought. Read which decision the app is asking for."],
+        ["Read the context and compare the details", "For a citation, look at the manuscript text. For a document, check its title, authors, year, identifiers, and available details. Do not rely only on the file name."],
+        ["Choose only when the evidence is sufficient", "If two works have the same author and year, use the title and context to distinguish them. A candidate is not correct just because it appears first."],
+        ["Confirm or leave it unresolved", "Confirm the link supported by the data. If you cannot establish it, leave the request open or use the available action to continue without confirmation: keep the uncertainty visible."]
+      ],
+      "notice": "The document's content is not rewritten to make it match a source.",
+      "related": "See also: confirming the identity of a PDF.",
+      "example": ["Two works by the same author in the same year", "The manuscript cites “Rossi, 2026”. The bibliography contains “Shared decisions” and “Evaluation methods”. If the sentence is about patient participation, compare the context and work details: author and year alone are not enough."],
+      "faq": [
+        ["The title is similar. Can I confirm it?", "A similar title is one clue to compare with the other details. Check at least the authors, year, and any identifier; if substantial differences remain, do not force a match."],
+        ["Do review notices prove that a source is fabricated?", "No. They indicate that a check is needed. Read the recorded evidence and leave uncertainty visible when the data do not support a conclusion."]
+      ],
+      "links": ["fetch", "coverage"]
+    },
+    {
+      "id": "fetch",
+      "category": "Retrieving texts · Assisted Fetch",
+      "title": "Provide a missing text",
+      "lead": "Use a document that matches the cited source. Full text and Abstract describe the content you are providing.",
+      "steps": [
+        ["Select the source", "Choose the reference from the list. Compare its title, authors, year, and recorded details: the document must match the cited work."],
+        ["Open or capture the document", "Use the system browser or Assisted Chrome. In Assisted Chrome, capture a PDF or HTML page from its toolbar. You can also choose a local file directly."],
+        ["Say what you are providing", "Choose Full text for the complete document or Abstract for the summary. Preparation starts automatically after you choose the file; there is no second confirmation."],
+        ["Read the text and status", "Open Preview. The Full text or Abstract button to the right of the title opens the extracted text in a reading window. If the title is shortened, hover over it to see the full title."],
+        ["Wait, discard, or continue", "Wait for any checks or OCR. Discard cancels the source you just provided; it stays inactive until you provide one. If you continue while skipping the remaining retrievals, those texts stay unavailable for verification."]
+      ],
+      "notice": "An acquired document is checked before it is used for verification.",
+      "related": "See also: source identity and OCR.",
+      "faq": [
+        ["I already provided the PDF. Why does it say “queued”?", "The file was provided, but it may be waiting for extraction, OCR, or other checks. That does not yet confirm that the document is admitted for verification."],
+        ["Can I provide only the abstract?", "Yes. Choose Abstract when that is the content you are providing. Its limitation remains recorded; it is not turned into full text."],
+        ["I cannot retrieve the source. Can I continue?", "Use the available action to continue while skipping the remaining retrievals, and read the confirmation. Missing texts remain unavailable; the app does not invent a source's content."]
+      ],
+      "links": ["ocr", "identity", "coverage"]
+    },
+    {
+      "id": "ocr",
+      "category": "Retrieving texts · Scanned PDFs",
+      "title": "When OCR is needed",
+      "lead": "OCR tries to turn scan images into text. Check the result before using it as evidence.",
+      "steps": [
+        ["Provide the source document", "In Assisted Fetch, select the correct reference and choose the PDF. Check the title, authors, and content first: a readable scan of the wrong work is still the wrong source."],
+        ["Read the PDF status", "An image-only document may appear among those to process with OCR. Do not choose Abstract to get around an extraction problem: the type must describe what you are providing."],
+        ["Start the available processing", "Use Run OCR for queued documents and wait for the result. While it runs, check the source and activity message."],
+        ["Check the extracted text", "Open Preview and choose Full text to read the text in a larger window. Look for obvious errors in words, numbers, symbols, and paragraph order."],
+        ["Resolve any remaining requests", "The extracted text may still be waiting for Fetch checks or an identity decision. Before continuing, wait for processing or discard the document you provided."]
+      ],
+      "notice": "“Text extracted” does not mean “source admitted”. OCR does not confirm the work's identity or the citation's accuracy.",
+      "example": ["A scan is not yet verifiable text", "The PDF says “The sample includes 120 patients”. OCR might confuse a number or letter, for example reading “I20”. Check the passage against the original document before relying on the extracted text."],
+      "faq": [
+        ["Can I use OCR for a PDF that already contains text?", "Follow the file checks. The fact that a PDF can be displayed does not tell you whether its text extraction succeeded."],
+        ["The text is incomplete or out of order. What should I do?", "Compare it with the scan, especially tables, columns, and symbols. If the material is not usable, look for a better copy or leave retrieval unavailable using the app's available actions."],
+        ["Does “OCR complete” mean the source is confirmed?", "No. Extraction, identity, and admission are separate checks. Always read the source status before continuing."]
+      ],
+      "links": ["fetch", "coverage", "trouble"]
+    },
+    {
+      "id": "report",
+      "category": "Reading the report",
+      "title": "Distinguish verification outcomes",
+      "lead": "A completed run and the outcome for each citation are two different pieces of information.",
+      "steps": [
+        ["Start with the overview", "Check the manuscript and the run status. The summary helps you orient yourself: “Verification complete” describes the end of the process, not approval of every citation."],
+        ["Read the claim together with its evidence", "For each assessment, compare the manuscript sentence with the available source passage and the recorded rationale. A text on the same subject may not support that specific claim."],
+        ["Filter items for review", "Combine filters to find partial, undecidable, or off-topic outcomes. Technical errors remain separate from judgements about content."],
+        ["Check coverage and provenance", "Before drawing a conclusion, check whether full text, an abstract, or no text was available, and which document was actually used."],
+        ["Keep or share the report", "You can find the report again in History and export a copy. The exported report does not include the full source texts."]
+      ],
+      "notice": "“Verification complete” does not mean every citation is supported.",
+      "related": "See also: text provenance and sharing a report.",
+      "glossary": [
+        ["Supported", "The examined material supports the claim in the context assessed."],
+        ["Partial", "Support applies only to part of the claim or requires an important qualification."],
+        ["Contradicted", "The recorded evidence conflicts with the claim."],
+        ["Related", "The material covers a connected subject without directly supporting the claim."],
+        ["Off topic", "The examined content does not address the specific claim."],
+        ["Undecidable", "The available evidence is not sufficient for an assessment."],
+        ["Technical error", "An operational problem prevented the check; this remains separate from a judgement about content."]
+      ],
+      "faq": [
+        ["Should I automatically correct every flagged citation?", "First read the passage and explanation, compare them with the source, and consider any change in the context of the manuscript. The report makes the check inspectable; it does not replace your review."],
+        ["Do all models agree?", "Check the recorded results for the models and the available assessments. Do not infer unanimity from the run's overall status alone."]
+      ],
+      "links": ["coverage", "resume"]
+    },
+    {
+      "id": "coverage",
+      "category": "Reading results · Coverage",
+      "title": "How much text was available?",
+      "lead": "Coverage describes the material available for verification. Read it together with the outcomes; it does not replace them.",
+      "steps": [
+        ["Distinguish identity from availability", "A source can be identified with confidence even when no usable text is available. Conversely, a file may have been provided while its identity checks are still pending."],
+        ["Check the type of text", "Full text means a complete text is available. Abstract means availability is limited to a summary or material at that level. No text means there is no usable content for that source."],
+        ["Read the limits of the outcome", "An abstract may omit the method, a result, or a qualification that appears in the article. If the material is insufficient, read the outcome as limited or undecidable according to the recorded evidence."],
+        ["Open the source details", "Check which document and passage were used. The report helps distinguish a material limitation from a technical problem."]
+      ],
+      "notice": "Full text describes text availability: it is not a quality mark or a positive outcome.",
+      "glossary": [
+        ["Identity", "Which work was recognised and what evidence supports it."],
+        ["Full text", "Complete text available, with the required admission checks."],
+        ["Abstract", "Content limited to the summary or stated level."],
+        ["No text", "No usable content is available for the source."],
+        ["Queued / OCR", "Work still to be completed; this does not mean the text is admitted."]
+      ],
+      "example": ["A limitation to preserve in the report", "The abstract describes an association but does not report the subgroup analysis cited in the manuscript. Having an abstract does not let you assume the missing result."],
+      "faq": [["Does complete coverage mean the citations are correct?", "No. Having the text makes comparison possible, but the result may be positive, partial, negative, or undecidable."]],
+      "links": ["report", "fetch"]
+    },
+    {
+      "id": "resume",
+      "category": "History · Resuming work",
+      "title": "Resume previous work",
+      "lead": "History keeps analyses and the actions available for each run.",
+      "steps": [
+        ["Open History", "Select the analysis to resume. Its details are loaded when you request them."],
+        ["Check how far it got", "Read the phase and status before choosing an action. A completed verification may contain different outcomes."],
+        ["Use Resume", "When available, Resume continues the run from its current point. Open review requests return to the review screen."],
+        ["Distinguish resuming from starting a new analysis", "Before starting other work, check the selected manuscript. Use History to return to the earlier run and read which actions are available for its state."]
+      ],
+      "notice": "Resuming applies to the selected run: check the manuscript name.",
+      "related": "See also: interrupted analysis and reports.",
+      "faq": [
+        ["Resume is disabled. Is that an error?", "Not necessarily. Actions depend on the selected run's state and available data. A finished run may offer report actions instead of resuming."],
+        ["Are Resume latest and the row I selected the same thing?", "Resume latest applies to the run identified as most recent; the action in History applies to the run you selected. Always check the manuscript name."]
+      ],
+      "links": ["report", "trouble", "library"]
+    },
+    {
+      "id": "library",
+      "category": "Finding your work · Library",
+      "title": "Manage documents in the Library",
+      "lead": "The Library is for saved sources. History is for analyses run on manuscripts.",
+      "steps": [
+        ["Find a source", "Use search and the availability filter to find a document. Title, author, and year help distinguish similar records."],
+        ["Import papers", "Choose Import papers to add full-text documents. The file picker follows Callimachus’s enabled document readers. Follow the reading, extraction, and check messages during import; an upload still in progress is not a ready source."],
+        ["Review pending checks", "If Pending reviews shows items to check, open them and compare the available information before confirming identity."],
+        ["Use cleanup actions carefully", "Select the entries an action should apply to and read the confirmation. Clear cache is a cleanup command, separate from browsing sources."]
+      ],
+      "notice": "A document in the Library is not guaranteed to be the one cited by a new manuscript: the link verified for that run matters.",
+      "faq": [
+        ["Does the Library contain the same things as History?", "No. The Library collects source documents; History collects manuscript analyses, states, and reports."],
+        ["Why are documents awaiting review after import?", "The document was acquired, but some details may need an identity decision. Check the details before confirming."]
+      ],
+      "links": ["identity", "fetch", "resume"]
+    },
+    {
+      "id": "trouble",
+      "category": "Troubleshooting",
+      "title": "Understand why an analysis is waiting",
+      "lead": "Start with the message shown by the app, while keeping the work already acquired.",
+      "steps": [
+        ["Check the phase", "The phase bar shows where the analysis is. The source row shows the current activity."],
+        ["Read the request", "You may need to provide a text, choose between references, or check the model connection."],
+        ["Resolve it and continue", "Complete the request or use the available action to leave the item unresolved. A PDF still being processed must be allowed to finish or discarded before you continue."]
+      ],
+      "notice": "A technical error remains separate from a negative verification outcome.",
+      "related": "See also: resuming a run and service checks.",
+      "faq": [
+        ["The analysis seems stuck on a source", "Check the current activity, review requests, and any documents still being processed. Waiting alone does not prove the run is stuck."],
+        ["The PDF opens, but its text is not read", "It may be a scan or an unusable extraction. Read the file status, check the preview, and see Scanned PDFs and OCR."],
+        ["I cannot press Continue", "Read the message beside the command. Processing may still be active or a decision may be unresolved. Wait or use the discard action provided for the document."],
+        ["The program closed during an operation", "Reopen the app and check the run in History. Note its progress and the last action you took; do not assume the operation finished."],
+        ["The text is too small or the theme is hard to read", "Open Settings → General → Personalisation. Adjust the size or use Reset, then check the selected theme."],
+        ["What information helps describe a problem?", "Note the screen, phase, action, full message, and whether you can reproduce it. If you share a console or image, remove keys and other confidential data."]
+      ],
+      "links": ["ocr", "services", "resume"]
+    },
+    {
+      "id": "services",
+      "category": "Troubleshooting · Keys and connections",
+      "title": "When a key or service does not respond",
+      "lead": "Start with the service named in the message. Bibliographic services and Jury providers use separate settings.",
+      "steps": [
+        ["Find the right field", "Open Settings and search for the service, key, or control. Search checks names and descriptions, not credential contents. Choose a result to reach its field; model keys open the corresponding provider in the Jury selector."],
+        ["Check the complete value", "If replacing a key, enter the complete value in the field. Avoid extra spaces and check that the credential belongs to the selected service."],
+        ["Run the service check", "Read the check result after making the change. An earlier success message does not confirm a key changed later."],
+        ["Follow the specific message", "A rejected key, a service configuration issue, and a network error need different checks. A generic code such as 400 does not identify the cause by itself."]
+      ],
+      "notice": "Do not put API keys in manuscripts, review notes, or screenshots you share.",
+      "faq": [
+        ["Google Books returns 400. Is the key wrong?", "The code alone is not enough to tell. Read any specific reason shown by the check, confirm that the complete key is in the Google Books field, and check the service settings in its portal."],
+        ["The check passes, but the model does not appear", "Credential checks and catalogue loading are different. Check the catalogue status and provider selection."],
+        ["The link asks me to sign in to the site", "Sites for creating or managing tokens may require an account sign-in. Do not paste website login credentials into a token field."]
+      ],
+      "links": ["models", "trouble", "privacy"]
+    },
+    {
+      "id": "privacy",
+      "category": "Data and privacy",
+      "title": "Which data is used",
+      "lead": "The operations and services you select determine which information leaves your computer.",
+      "steps": [
+        ["Bibliographic services", "Services are queried to retrieve and identify references."],
+        ["Verification models", "Selected models may receive the material needed for verification. Check the provider's terms."],
+        ["Sessions and settings", "Settings include credentials and preferences. You can protect an exported settings file with a password."]
+      ],
+      "notice": "If you lose the password for an encrypted export, the file cannot be recovered.",
+      "related": "See also: settings, browser cache, and credentials.",
+      "faq": [
+        ["Does everything stay on my computer?", "Do not assume so: bibliographic services, remote providers, and selected tools may communicate with external systems. The operations and models you choose determine which materials are used."],
+        ["How is a report different from a settings backup?", "A report describes results. A settings backup contains configuration and credentials and should be handled separately; you can password-protect its export."],
+        ["Why is there an option to clear browser cache?", "The browser may retain browsing data and sessions. Cleanup options are in capture settings; check which choice suits the session you are using."]
+      ],
+      "links": ["services", "report"]
+    },
+    {
+      "id": "cli",
+      "category": "Technical reference · CLI",
+      "title": "CLI documentation",
+      "lead": "Options and technical details stay separate from instructions for the graphical interface.",
+      "steps": [
+        ["Commands and startup", "Reference for available commands, arguments, and exit codes."],
+        ["Configuration", "Meaning of variables and technical options, including defaults and constraints."],
+        ["Data and provenance", "Pipeline phases, run storage, and integrity checks."]
+      ],
+      "notice": "This is an editorial proposal; the current documentation remains available.",
+      "related": "Topics kept separate from operational instructions for the GUI.",
+      "faq": [
+        ["Do I need the CLI to use the app?", "Everyday operations have their own interface controls. Consult the technical reference when you need terminal features or more detail about configuration."],
+        ["Where can I find execution errors?", "The optional console can be enabled in General settings. Read the message together with the phase and action that produced it; avoid sharing credentials in logs."]
+      ],
+      "links": ["trouble", "models"]
+    }
+  ]
+}

@@ -1,12 +1,10 @@
 # Microsoft Store preparation
 
 This contract concerns the separate Windows MSIX channel. It does not certify
-the app. NSIS and Linux remain separate channels. Do not compile until authorised.
+the app. NSIS, Linux and macOS archives remain separate channels.
 
-The preserved native recipes and their build plan are in
-[the Store build plan](../../packaging/store/native-recipes/build-plan.json).
-Build an MSIX with [`packaging/build_msix.py`](../../packaging/build_msix.py)
-after the required package identity and tested Windows distribution are ready.
+For the native runtime recipe, package identity and assembly commands, see
+[Microsoft Store build](microsoft-store-build.md).
 
 ## Before submission
 
@@ -18,14 +16,22 @@ after the required package identity and tested Windows distribution are ready.
   a Company account when primary functionality requires them. Callimachus also
   supports external CLI and credentialless backends; account eligibility has
   not been confirmed for this listing.
-- Publish reviewed [English privacy information](../guide/privacy.md) and its
-  [Italian version](../guide/privacy-it.md) at stable public HTTPS URLs. Verify
+- Publish reviewed [English privacy information](../legal/en/privacy.md) and its
+  [Italian version](../legal/it/privacy.md) at stable public HTTPS URLs. Verify
   access without signing in and enter the live privacy URL in Partner Center.
   Bundled local documents alone do not provide a public submission URL.
 - Review credential storage and endpoint security for this distribution.
-  `.env` keys are currently plaintext. Do not advertise encrypted credentials
-  or unrestricted suitability for confidential manuscripts. Resolve any
-  certification requirement for storage security before submission.
+  Compiled 2.0 stores saved API keys, tokens, passwords and its generated
+  report-signing key in Windows Credential Manager; non-secret settings use
+  per-user `settings.conf`, with read-only `settings.defaults` bundled in the app.
+  Vault failures do not fall back to plaintext. Source launches still use dotenv;
+  the compiled app ignores old `.env` files and performs no automatic migration.
+  Existing explicit signing-key-file references keep their file-based behavior.
+  Process-environment overrides and external CLI logins remain separate inputs.
+  Settings exports can contain secrets and are encrypted only when the user
+  chooses password encryption. See [Desktop settings and credentials](../user/en/09-desktop-packages.md#settings-and-credentials-in-20).
+  Native vault storage is not a claim that all local data or exports are encrypted,
+  or that Store security requirements have been certified.
 - Provide AGPL-3.0-only terms, complete corresponding sources for the shipped
   version and third-party notices. Store terms must not restrict those licences.
   Complete the age/content questionnaire and declare live generative AI in
@@ -101,10 +107,12 @@ In Info sono disponibili privacy e segnalazioni IA. Si apre un modulo pubblico
 su GitHub e serve un account; nessun dato della run viene allegato automaticamente.
 È uno strumento di ricerca, non di consulenza professionale.
 
-## Private certification instructions and test gates
+## Certification instructions and test gates
 
-The following installed-package tests remain pending until an MSIX build is
-authorised. Provide a consented synthetic manuscript, a usable test endpoint /
+Local build/install qualification and Microsoft Store certification are separate.
+Treat the following as submission test gates; a local build
+does not establish that every gate passed. Provide a consented synthetic
+manuscript, a usable test endpoint /
 account and sufficient provider allowance for Verify in private certification
 notes. Never include credentials in the package or public listing. A reviewer
 must have a way to exercise the full functionality.
@@ -114,6 +122,11 @@ must have a way to exercise the full functionality.
   English/Italian, light/dark themes and readable controls.
 - Cold Resolve: persistent user caches, no writes inside WindowsApps. Restart
   and check Settings, History and cached source reuse.
+- Save and reload synthetic provider credentials through Windows Credential
+  Manager; check that `settings.conf` contains no plaintext secret values and
+  that legacy `.env` values are not loaded. Exercise vault errors without a
+  plaintext fallback, process overrides, and explicit settings export/import
+  separately. Do not include real secrets in test evidence.
 - Actual image-only PDF OCR with networking disabled after installation.
   Checking that ONNX files exist does not prove inference works.
 - New analysis, manual review, deferred review, assisted fetch, file supply,
@@ -136,6 +149,7 @@ must have a way to exercise the full functionality.
 - [Capabilities](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations).
 - [Win32 Store distribution](https://learn.microsoft.com/en-us/windows/apps/distribute-through-store/how-to-distribute-your-win32-app-through-microsoft-store).
 
-Recheck policy at submission: version 7.20 takes effect on 22 October 2026.
+Recheck policy at submission: the recorded transition date for version 7.20 is
+22 October 2026; the 7.19 reference above is historical.
 Preparation is not a guarantee of certification or compliance with all privacy
 laws in every jurisdiction.

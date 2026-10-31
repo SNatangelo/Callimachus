@@ -60,17 +60,21 @@ def _load_bibliography_headings() -> tuple[str, ...]:
 BIBLIOGRAPHY_HEADINGS = _load_bibliography_headings()
 
 
-def _heading_re(headings: tuple[str, ...]) -> re.Pattern:
+def _heading_re(headings: tuple[str, ...], *, numbered: bool = False) -> re.Pattern:
     alt = "|".join(re.escape(h).replace(r"\ ", r"\s+") for h in headings)
-    return re.compile(r"(?im)^\s*[\W_]{0,3}(?:" + alt + r")\s*[:.]?\s*$")
+    section_number = r"(?:\d+(?:\.\d+)*\.?\s+)?" if numbered else ""
+    return re.compile(
+        r"(?im)^\s*[\W_]{0,3}" + section_number
+        + r"(?:" + alt + r")\s*[:.]?\s*$"
+    )
 
 
 def bibliography_heading_re() -> re.Pattern:
     """A line that is a bibliography heading: any BIBLIOGRAPHY_HEADINGS entry,
-    tolerating a leading section-marker glyph ("■References") and a trailing
-    ':'/'.'.  Shared by the PDF link-layer and the column-aware re-extraction so
-    heading recognition has one source of truth."""
-    return _heading_re(BIBLIOGRAPHY_HEADINGS)
+    tolerating a leading section-marker glyph ("■References"), an anchored
+    numeric section label ("8.1 References"), and a trailing ':'/'.'. Shared by
+    bibliography splitters so heading recognition has one source of truth."""
+    return _heading_re(BIBLIOGRAPHY_HEADINGS, numbered=True)
 
 
 def _load_further_reading_headings() -> tuple[str, ...]:

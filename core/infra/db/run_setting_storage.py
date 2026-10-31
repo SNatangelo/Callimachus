@@ -18,6 +18,7 @@ SCALAR_KEYS = {
     "verify_table_citations": "bool", "verify_semantic_contract": "nonempty_text",
 }
 COMPLEX_KEYS = {
+    "institutional_access",
     "user_source_ingest", "ingest_review", "verify_runtime", "verify_claim_evidence_config",
     "verification_lifecycle_failure", "frozen_fetch_provenance", "manual_review_ref_numbers",
 }
@@ -40,6 +41,9 @@ def _text(value: Any, *, nonempty: bool = False) -> str | None:
     return value
 
 def normalize_setting(key: str, value: Any) -> Any:
+    if key == "institutional_access":
+        from .institutional_access_storage import normalize
+        return normalize(value)
     if key == "manual_review_ref_numbers":
         if type(value) is not list or any(type(item) is not int or item <= 0 for item in value):
             raise ValueError("manual_review_ref_numbers must be positive integer list")
@@ -155,6 +159,9 @@ def write_setting(conn, key: str, value: Any) -> None:
     elif key in SCALAR_KEYS:
         col = key
         conn.execute(f"UPDATE run_runtime_settings SET {col}_present=1, {col}=? WHERE singleton=1", (value,))
+    elif key == "institutional_access":
+        from .institutional_access_storage import replace
+        replace(conn, value)
     elif key == "verify_runtime":
         from .verify_setting_storage import replace_verify_runtime
         replace_verify_runtime(conn, value)
@@ -178,6 +185,10 @@ def write_setting(conn, key: str, value: Any) -> None:
 
 def read_setting(conn, key: str, default: Any = None) -> Any:
     validate_key(key)
+    if key == "institutional_access":
+        from .institutional_access_storage import read
+        value = read(conn)
+        return default if value is None else value
     if key == "manual_review_ref_numbers":
         row = conn.execute(
             "SELECT manual_review_ref_numbers_present,manual_review_ref_numbers_count "

@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/prepare-openblas.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 from pathlib import Path
 import scipy_openblas64 as ob
 root=Path(__file__).resolve().parent

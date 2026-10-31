@@ -39,6 +39,14 @@ def test_frozen_prefix_does_not_reference_source_entrypoint(monkeypatch):
     ) == "/opt/Callimachus/Callimachus --run '/operator path/run' --resume"
 
 
+def test_frozen_linux_prefix_uses_the_public_launcher_for_children(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    assert run_prefix(
+        executable="/opt/Callimachus/Callimachus.bin", platform_name="linux",
+    ) == "/opt/Callimachus/Callimachus"
+
+
 def test_windows_project_venv_command_quotes_spaced_arguments():
     command = run_command(
         "--run", r"C:\operator path\run", "--resume",

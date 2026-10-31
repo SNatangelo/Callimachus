@@ -34,6 +34,78 @@ _MAX_SOURCE_PAGE_SIZE = 100
 _MAX_SOURCE_PAGE_OFFSET = (1 << 63) - 1
 
 
+_TITLE_PLACEHOLDERS = frozenset({
+    "unknown", "unknown title", "unavailable", "not available",
+    "not identified", "non identificato", "non identificata",
+    "non disponibile", "unidentified", "untitled", "not found",
+    "not recorded", "title not recorded", "none", "null", "n a",
+})
+
+
+def _displayable_source_title(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    title = value.strip()
+    if not title:
+        return None
+    key = re.sub(r"[\W_]+", " ", title.casefold()).strip()
+    if key in _TITLE_PLACEHOLDERS or re.fullmatch(r"\d{4}", title):
+        return None
+    if re.fullmatch(r"(?i)(?:https?://|ftp://|www\.)\S+", title):
+        return None
+    if re.fullmatch(
+        r"(?i)(?:(?:https?://)?(?:dx\.)?doi\.org/)?"
+        r"(?:doi:\s*)?10\.\d{4,9}/\S+",
+        title,
+    ):
+        return None
+    isbn_only = re.fullmatch(
+        r"(?i)(?:isbn(?:-1[03])?\s*[:#]?\s*)?([\dX\s-]+)",
+        title,
+    )
+    identifier = (
+        re.sub(r"[^0-9Xx]", "", isbn_only.group(1))
+        if isbn_only
+        else ""
+    )
+    if isbn_only and len(identifier) in {10, 13}:
+        return None
+    return title
+
+
+def source_display_title(
+    parsed: object, *, ref_number: object = None, ref_id: object = None,
+) -> str:
+    """Choose a safe source label without borrowing titles from Resolve or files."""
+    fields = parsed if isinstance(parsed, dict) else {}
+    nested = fields.get("parsed")
+    if isinstance(nested, dict):
+        fields = nested
+    title = _displayable_source_title(fields.get("title"))
+    if title is not None:
+        return title
+    raw_entry = fields.get("raw_entry")
+    if not isinstance(raw_entry, str) or not raw_entry.strip():
+        raw_entry = fields.get("normalized_raw_entry")
+    if isinstance(raw_entry, str) and raw_entry.strip():
+        citation = raw_entry.strip()
+        citation_key = re.sub(r"[\W_]+", " ", citation.casefold()).strip()
+        if citation_key not in _TITLE_PLACEHOLDERS:
+            return citation
+    if isinstance(ref_number, int) and not isinstance(ref_number, bool) and ref_number > 0:
+        source = str(ref_number)
+    elif (
+        isinstance(ref_number, float) and ref_number > 0
+        and ref_number.is_integer()
+    ):
+        source = str(int(ref_number))
+    elif isinstance(ref_id, str) and ref_id.strip():
+        source = ref_id.strip()
+    else:
+        source = ""
+    return f"Source {source} · title not recorded" if source else "Source · title not recorded"
+
+
 def source_payload(
     *,
     file_path: str | None = None,
@@ -80,13 +152,7 @@ def browser_waived_payload(ref_ids: list[str]) -> dict:
 
 
 class GuidedFetchController:
-    """Stage human-selected source artifacts, then atomically preflight proceed.
-
-    Staging is deliberately process-local.  The only persistent mutation is an
-    individual task admission after every pending Fetch task has been checked
-    for a closed, complete answer.  A later admission failure leaves prior
-    admissions auditable and the remaining staged inputs resumable.
-    """
+    """Persist confirmed source drafts, then preflight task admission on Proceed."""
 
     def __init__(
         self,
@@ -106,7 +172,13 @@ class GuidedFetchController:
         self._repository_opener = repository_opener
         self._admit = admit or _admit_fetch_payload
         self._admit_identity_review = admit_identity_review or _admit_identity_review
+        self._stage_artifact_store = _store_guided_fetch_stage
+        self._stage_artifact_discarder = _discard_guided_fetch_stage
+        self._stage_artifact_loader = _load_guided_fetch_stages
         self._staged: dict[str, dict] = {}
+        self._staged_records: dict[str, dict[str, Any]] = {}
+        self._stage_issues: dict[str, str] = {}
+        self._superseded_ocr_scan_ids: set[str] = set()
         self._restored_ocr_artifacts = _load_guided_ocr_artifacts(run_dir)
         self._proceeded = False
         self._summary: dict[str, Any] = {
@@ -114,6 +186,7 @@ class GuidedFetchController:
             "submitted_task_ids": [],
             "waived_ref_ids": [],
         }
+        self._restore_guided_fetch_stages()
         self._restore_completed_ocr()
 
     @property
@@ -130,7 +203,7 @@ class GuidedFetchController:
         return self._agent_identity is None
 
     def stage_source(self, ref_id: str, payload: dict) -> None:
-        """Associate one file-only guided source with exactly one pending task."""
+        """Durably stage one confirmed file-only source for a pending task."""
         if isinstance(payload, dict) and "ocr_scan_file_path" in payload:
             raise ValueError("guided OCR evidence can only be staged by the OCR action")
         _validate_staged_source(ref_id, payload)
@@ -143,8 +216,27 @@ class GuidedFetchController:
             raise ValueError(
                 "guided Fetch source must match exactly one pending Fetch task"
             )
+        task = matches[0]
+        stored = self._stage_artifact_store(
+            self.run_dir,
+            task_id=task["task_id"],
+            task_kind=task.get("kind") or task.get("task_kind"),
+            task_generation=task.get("task_generation"),
+            ref_id=ref_id,
+            payload=payload,
+            original_path=payload["file_path"],
+            original_filename=Path(payload["file_path"]).name,
+            supersedes_ocr_scan_ids=self._ocr_scan_ids_for_ref(ref_id),
+            debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+            debug_override_reason=self._debug_override_reason,
+        )
+        self._staged[ref_id] = deepcopy(stored["payload"])
+        self._staged_records[ref_id] = deepcopy(stored.get("record") or {})
+        self._stage_issues.pop(ref_id, None)
+        self._superseded_ocr_scan_ids.update(
+            (stored.get("record") or {}).get("supersedes_ocr_scan_ids", [])
+        )
         self._mark_staged_ocr_discarded(ref_id)
-        self._staged[ref_id] = deepcopy(payload)
         self._proceeded = False
 
     def submit_identity_decision(
@@ -181,19 +273,43 @@ class GuidedFetchController:
         return admitted
 
     def discard_source(self, ref_id: str) -> bool:
-        """Remove one process-local staged answer without changing audit evidence.
+        """Append a durable tombstone and leave the reference pending.
 
-        Returns whether an answer was staged for ``ref_id``.  A discarded
-        reference is deliberately left pending, so ``proceed`` records its
-        normal explicit user waiver if the operator does not provide another
-        source first.
+        Returns whether a draft existed, was damaged, or an OCR result was
+        staged. Older stage records remain available in the integrity audit.
         """
         if not isinstance(ref_id, str) or not ref_id.strip():
             raise ValueError("Guided Fetch reference id must be non-empty")
+        had_stage = ref_id in self._staged or ref_id in self._stage_issues
+        ocr_ids = self._ocr_scan_ids_for_ref(ref_id)
+        if not had_stage and not ocr_ids:
+            return False
+        matches = [
+            task for task in self._pending_tasks_by_ref().get(ref_id, [])
+            if task.get("kind") in {"fetch", "browser_challenge"}
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "guided Fetch discard must match exactly one pending retrieval task"
+            )
+        task = matches[0]
+        stored = self._stage_artifact_discarder(
+            self.run_dir,
+            task_id=task["task_id"],
+            task_kind=task.get("kind") or task.get("task_kind"),
+            task_generation=task.get("task_generation"),
+            ref_id=ref_id,
+            supersedes_ocr_scan_ids=ocr_ids,
+            debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+            debug_override_reason=self._debug_override_reason,
+        )
+        self._superseded_ocr_scan_ids.update(ocr_ids)
         self._mark_staged_ocr_discarded(ref_id)
-        discarded = self._staged.pop(ref_id, None) is not None
+        self._staged.pop(ref_id, None)
+        self._staged_records.pop(ref_id, None)
+        self._stage_issues.pop(ref_id, None)
         self._proceeded = False
-        return discarded
+        return had_stage or bool(ocr_ids) or stored is not None
 
     def run_ocr(
         self,
@@ -355,6 +471,7 @@ class GuidedFetchController:
                 payload = _ocr_artifact_payload(artifact)
                 _validate_staged_source(ref_id, payload, allow_ocr_scan=True)
                 self._staged[ref_id] = payload
+                self._staged_records.pop(ref_id, None)
                 self._proceeded = False
             return artifact
 
@@ -435,6 +552,7 @@ class GuidedFetchController:
             payload = _ocr_artifact_payload(completed)
             _validate_staged_source(ref_id, payload, allow_ocr_scan=True)
             self._staged[ref_id] = payload
+            self._staged_records.pop(ref_id, None)
             self._proceeded = False
         self._restored_ocr_artifacts[completed["scan_id"]] = completed
         return completed
@@ -506,6 +624,11 @@ class GuidedFetchController:
             ref_id = artifact.get("ref_id")
             if not isinstance(ref_id, str):
                 continue
+            if (
+                artifact.get("scan_id") in self._superseded_ocr_scan_ids
+                or ref_id in self._stage_issues
+            ):
+                continue
             eligible = [
                 task for task in pending.get(ref_id, [])
                 if task.get("kind") in {"fetch", "browser_challenge"}
@@ -519,14 +642,132 @@ class GuidedFetchController:
             except (OSError, ValueError, KeyError):
                 continue
             self._staged[ref_id] = payload
+            self._staged_records.pop(ref_id, None)
 
-    def proceed(self) -> dict[str, Any]:
+    def _restore_guided_fetch_stages(self) -> None:
+        try:
+            state = self._stage_artifact_loader(self.run_dir)
+            if (
+                not isinstance(state, dict)
+                or not isinstance(state.get("latest"), dict)
+                or not isinstance(state.get("issues"), dict)
+            ):
+                raise ValueError("guided Fetch stage inventory is malformed")
+            pending = self._pending_tasks_by_ref()
+        except Exception as exc:
+            self._stage_issues["*"] = (
+                f"Guided Fetch drafts could not be checked ({type(exc).__name__}). "
+                "Refresh or reselect the source before proceeding."
+            )
+            return
+        for ref_id in pending:
+            key = hashlib.sha256(ref_id.encode("utf-8")).hexdigest()
+            issue = state["issues"].get(key)
+            if isinstance(issue, str):
+                self._stage_issues[ref_id] = issue
+        for item in state["latest"].values():
+            if not isinstance(item, dict):
+                continue
+            record = item.get("record")
+            if not isinstance(record, dict):
+                continue
+            ref_id = record.get("ref_id")
+            if not isinstance(ref_id, str) or ref_id not in pending:
+                continue
+            matches = [
+                task for task in pending[ref_id]
+                if task.get("kind") in {"fetch", "browser_challenge"}
+            ]
+            if len(matches) != 1:
+                self._stage_issues[ref_id] = (
+                    "Confirmed Guided Fetch draft no longer matches exactly one pending task. "
+                    "Confirm the source again for the current task."
+                )
+                continue
+            task = matches[0]
+            task_kind = task.get("kind") or task.get("task_kind")
+            if (
+                record.get("task_id") != task.get("task_id")
+                or record.get("task_kind") != task_kind
+                or record.get("task_generation") != task.get("task_generation")
+            ):
+                reference = next(
+                    (item for item in task.get("references", []) or []
+                     if isinstance(item, dict) and item.get("ref_id") == ref_id),
+                    task.get("reference") or {},
+                )
+                number = task.get("ref_number") or reference.get("ref_number")
+                source_label = f"[{number}]" if isinstance(number, int) else ref_id
+                self._stage_issues[ref_id] = (
+                    f"Source {source_label}: Confirmed Guided Fetch draft belongs to an earlier task generation. "
+                    "Confirm the source again for the current task."
+                )
+                continue
+            superseded = record.get("supersedes_ocr_scan_ids")
+            if isinstance(superseded, list):
+                self._superseded_ocr_scan_ids.update(superseded)
+            if record.get("action") == "discard":
+                continue
+            payload = item.get("payload")
+            try:
+                _validate_staged_source(
+                    ref_id, payload,
+                    allow_ocr_scan=(
+                        isinstance(payload, dict)
+                        and "ocr_scan_file_path" in payload
+                    ),
+                )
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                self._stage_issues[ref_id] = (
+                    f"Confirmed Guided Fetch draft is unusable ({type(exc).__name__}). "
+                    "Discard it or confirm the source again."
+                )
+                continue
+            self._staged[ref_id] = deepcopy(payload)
+            self._staged_records[ref_id] = deepcopy(record)
+
+    def _ocr_scan_ids_for_ref(self, ref_id: str) -> list[str]:
+        return sorted(
+            scan_id for scan_id, artifact in self._restored_ocr_artifacts.items()
+            if artifact.get("ref_id") == ref_id
+            and artifact.get("status") == "done"
+            and not artifact.get("discarded")
+            and isinstance(scan_id, str)
+        )
+
+    def proceed(self, *, skip_remaining_confirmed: bool = False) -> dict[str, Any]:
         """Admit staged sources and explicit waivers for every pending Fetch task."""
+        if type(skip_remaining_confirmed) is not bool:
+            raise ValueError("guided Fetch skip confirmation must be boolean")
+        if skip_remaining_confirmed and not self.identity_review_allowed:
+            raise ValueError(
+                "keeping future source identity reviews unverified requires the human operator"
+            )
+        self._verify_staged_drafts()
         self._prepare_ocr_only_queue()
         pending = self._pending_task_views()
         planned, staged_refs, waived_refs = self._preflight_proceed(pending)
         submitted: list[str] = []
         try:
+            if skip_remaining_confirmed:
+                for task_id, payload, task_staged_refs in planned:
+                    for ref_id in task_staged_refs:
+                        staged_record = self._staged_records.get(ref_id)
+                        if not isinstance(staged_record, dict):
+                            raise ValueError(
+                                "the confirmed Guided Fetch source has no current staged artifact binding"
+                            )
+                        if (
+                            staged_record.get("task_id") != task_id
+                            or staged_record.get("ref_id") != ref_id
+                        ):
+                            raise ValueError(
+                                "the confirmed Guided Fetch source no longer matches its pending task"
+                            )
+                        self._record_identity_skip_intent(
+                            task_id=task_id,
+                            staged_record=staged_record,
+                        )
             for task_id, payload, task_staged_refs in planned:
                 self._admit(
                     self.run_dir,
@@ -539,6 +780,7 @@ class GuidedFetchController:
                 submitted.append(task_id)
                 for ref_id in task_staged_refs:
                     self._staged.pop(ref_id, None)
+                    self._staged_records.pop(ref_id, None)
         except Exception:
             self._summary = {
                 "proceeded": False,
@@ -555,6 +797,65 @@ class GuidedFetchController:
             "staged_ref_ids": staged_refs,
         }
         return self.summary
+
+    def _record_identity_skip_intent(
+        self, *, task_id: str, staged_record: dict[str, Any],
+    ) -> None:
+        if not self.identity_review_allowed:
+            raise ValueError("guided identity review skip requires the human operator")
+        _record_guided_fetch_identity_skip_intent(
+            self.run_dir,
+            task_id=task_id,
+            task_kind=staged_record.get("task_kind"),
+            task_generation=staged_record.get("task_generation"),
+            ref_id=staged_record.get("ref_id"),
+            source_tier=staged_record.get("source_tier"),
+            source_sha256=staged_record.get("sha256"),
+            source_stage_event_id=staged_record.get("event_id"),
+            agent_identity=self._agent_identity,
+            debug_override_artifact_integrity=self._debug_override_artifact_integrity,
+            debug_override_reason=self._debug_override_reason,
+        )
+
+    def _verify_staged_drafts(self) -> None:
+        if "*" in self._stage_issues:
+            raise ValueError(self._stage_issues["*"])
+        if self._stage_issues:
+            ref_id = sorted(self._stage_issues)[0]
+            raise ValueError(self._stage_issues[ref_id])
+        managed = {
+            ref_id: record for ref_id, record in self._staged_records.items()
+            if isinstance(record.get("event_id"), str)
+        }
+        if not managed:
+            return
+        state = self._stage_artifact_loader(self.run_dir)
+        for ref_id, record in managed.items():
+            key = hashlib.sha256(ref_id.encode("utf-8")).hexdigest()
+            if key in state.get("issues", {}):
+                self._stage_issues[ref_id] = state["issues"][key]
+                raise ValueError(self._stage_issues[ref_id])
+            latest = state.get("latest", {}).get(key)
+            current = latest.get("record") if isinstance(latest, dict) else None
+            if (
+                not isinstance(current, dict)
+                or current.get("action") != "stage"
+                or current.get("event_id") != record.get("event_id")
+                or current.get("task_id") != record.get("task_id")
+                or current.get("task_generation") != record.get("task_generation")
+            ):
+                raise ValueError(
+                    "confirmed Guided Fetch draft changed after it was staged; "
+                    "discard it or confirm the source again"
+                )
+            payload = latest.get("payload")
+            _validate_staged_source(
+                ref_id, payload,
+                allow_ocr_scan=(
+                    isinstance(payload, dict) and "ocr_scan_file_path" in payload
+                ),
+            )
+            self._staged[ref_id] = deepcopy(payload)
 
     def _prepare_ocr_only_queue(self) -> None:
         """Make a queued scan answerable before an explicit Proceed/skip."""
@@ -614,6 +915,8 @@ class GuidedFetchController:
                 view = repo.task_view(task.task_id)
                 if not isinstance(view, dict):
                     raise ValueError(f"pending Fetch task {task.task_id} has no task view")
+                view["task_kind"] = task.task_kind
+                view["task_generation"] = task.generation
                 views.append(view)
             return sorted(views, key=lambda task: task.get("task_id", ""))
         finally:
@@ -651,6 +954,18 @@ class GuidedFetchController:
                 raise ValueError(
                     "staged guided source does not match exactly one pending Fetch task"
                 )
+            record = self._staged_records.get(ref_id)
+            if record is not None and record.get("event_id") is not None:
+                task_id = ref_matches[ref_id][0]
+                task = next(item for item in pending if item.get("task_id") == task_id)
+                if (
+                    record.get("task_id") != task_id
+                    or record.get("task_generation") != task.get("task_generation")
+                    or record.get("task_kind") != (task.get("kind") or task.get("task_kind"))
+                ):
+                    raise ValueError(
+                        "staged Guided Fetch source belongs to an earlier task generation"
+                    )
 
         for task in pending:
             task_id = task["task_id"]
@@ -666,7 +981,7 @@ class GuidedFetchController:
                     )
                     waived_refs.append(ref_id)
                 else:
-                    payload, was_waived = _proceed_payload(ref_id, payload)
+                    payload, was_waived = _proceed_payload(ref_id, payload, self.run_dir)
                     if payload.get("found") is True:
                         _validate_staged_source(
                             ref_id, payload,
@@ -691,7 +1006,7 @@ class GuidedFetchController:
                     items.append({"ref_id": ref_id, **waived_payload()})
                     waived_refs.append(ref_id)
                 else:
-                    payload, was_waived = _proceed_payload(ref_id, payload)
+                    payload, was_waived = _proceed_payload(ref_id, payload, self.run_dir)
                     if payload.get("found") is True:
                         _validate_staged_source(
                             ref_id, payload,
@@ -777,7 +1092,9 @@ def _validate_staged_source(
             raise ValueError("guided OCR source PDF hash does not match its reference")
 
 
-def _proceed_payload(ref_id: str, payload: dict) -> tuple[dict, bool]:
+def _proceed_payload(
+    ref_id: str, payload: dict, run_dir: str | None = None,
+) -> tuple[dict, bool]:
     """Turn an unprocessed scanned PDF into an explicit waiver with its PDF."""
     if (
         payload.get("found") is True
@@ -785,7 +1102,9 @@ def _proceed_payload(ref_id: str, payload: dict) -> tuple[dict, bool]:
         and isinstance(payload.get("file_path"), str)
         and Path(payload["file_path"]).suffix.lower() == ".pdf"
         and Path(io_path(payload["file_path"])).is_file()
-        and provided_fulltext.pdf_requires_ocr(io_path(payload["file_path"]))
+        and provided_fulltext.pdf_requires_ocr(
+            io_path(payload["file_path"]), run_dir=run_dir,
+        )
     ):
         return ({
             **waived_payload(),
@@ -808,6 +1127,26 @@ def _admit_identity_review(*args, **kwargs) -> dict:
     """Late import keeps the GUI controller independent from CLI parsing."""
     from core.app.commands.tasks import admit_source_identity_review
     return admit_source_identity_review(*args, **kwargs)
+
+
+def _store_guided_fetch_stage(*args, **kwargs) -> dict:
+    from core.app.commands.tasks import store_guided_fetch_stage_artifact
+    return store_guided_fetch_stage_artifact(*args, **kwargs)
+
+
+def _discard_guided_fetch_stage(*args, **kwargs) -> dict:
+    from core.app.commands.tasks import discard_guided_fetch_stage_artifact
+    return discard_guided_fetch_stage_artifact(*args, **kwargs)
+
+
+def _record_guided_fetch_identity_skip_intent(*args, **kwargs) -> dict:
+    from core.app.commands.tasks import record_guided_fetch_identity_skip_intent
+    return record_guided_fetch_identity_skip_intent(*args, **kwargs)
+
+
+def _load_guided_fetch_stages(run_dir: str) -> dict:
+    from core.app.commands.tasks import load_guided_fetch_stage_artifacts
+    return load_guided_fetch_stage_artifacts(run_dir)
 
 
 def _sha256_path(path: Path) -> str:
@@ -1021,6 +1360,29 @@ def build_source_inventory(
                 slot="fetch", ref_ids=page_ref_ids,
             ),
         ])
+        try:
+            stage_state = _load_guided_fetch_stages(run_dir)
+            staged_sources, staging_issues, superseded_ocr_ids = (
+                _project_guided_fetch_stages(
+                    stage_state,
+                    pending_by_ref,
+                    {reference.ref_id for reference in references},
+                )
+            )
+        except Exception as exc:
+            staged_sources = []
+            superseded_ocr_ids = set()
+            staging_issues = [
+                {
+                    "ref_id": ref_id,
+                    "message": (
+                        f"Guided Fetch drafts could not be checked ({type(exc).__name__}). "
+                        "Refresh or reselect the source before proceeding."
+                    ),
+                }
+                for ref_id, tasks in pending_by_ref.items()
+                if tasks
+            ]
         source_by_ref: dict[str, list[dict[str, Any]]] = {}
         for source in source_records:
             item = asdict(source)
@@ -1031,6 +1393,11 @@ def build_source_inventory(
             )
             item["available"] = source.ref_id in usable
             item["availability_diagnostics"] = list(diagnostics)
+            confirmation = _source_identity_confirmation(
+                repo, source, available=item["available"],
+            )
+            if confirmation is not None:
+                item["identity_confirmation"] = confirmation
             item["preview_path"] = (
                 _preview_path(run_dir, source.stored_path)
                 if item["available"]
@@ -1038,7 +1405,11 @@ def build_source_inventory(
             )
             source_by_ref.setdefault(source.ref_id, []).append(item)
 
-        guided_ocr_artifacts = _load_guided_ocr_artifacts(run_dir)
+        guided_ocr_artifacts = {
+            scan_id: artifact
+            for scan_id, artifact in _load_guided_ocr_artifacts(run_dir).items()
+            if scan_id not in superseded_ocr_ids
+        }
         guided_ocr_by_ref: dict[str, list[dict[str, Any]]] = {}
         for artifact in guided_ocr_artifacts.values():
             ref_id = artifact.get("ref_id")
@@ -1140,14 +1511,78 @@ def build_source_inventory(
             [reference.ref_id for reference in references],
             source_by_ref,
             guided_ocr_artifacts,
+            superseded_ocr_scan_ids=superseded_ocr_ids,
         )
         return {
             "run": asdict(repo.get_run()),
             "references": entries,
             "ocr_queue": ocr_queue,
+            "staged_sources": staged_sources,
+            "staging_issues": staging_issues,
         }
     finally:
         repo.close()
+
+
+def _source_identity_confirmation(
+    repo: RunRepository, source: Any, *, available: bool,
+) -> dict[str, Any] | None:
+    """Project only persisted operator proof tied to this available source."""
+    if not available:
+        return None
+
+    try:
+        decision = repo.source_identity_attestation_for(source.source_text_id)
+    except (RuntimeError, ValueError):
+        return None
+    if decision is not None:
+        try:
+            target = repo.source_identity_attestation_target(
+                ref_id=source.ref_id,
+                source_text_id=source.source_text_id,
+            )
+        except (RuntimeError, ValueError):
+            return None
+        if (
+            isinstance(target, dict)
+            and decision.get("ref_id") == source.ref_id
+            and decision.get("source_text_id") == source.source_text_id
+            and target.get("ref_id") == source.ref_id
+            and target.get("source_text_id") == source.source_text_id
+            and target.get("source_text_sha256") == source.sha256
+            and decision.get("target_sha256") == target.get("target_sha256")
+        ):
+            action = decision.get("action")
+            if action in {"attest_identity", "keep_unverified"}:
+                return {
+                    "status": "confirmed" if action == "attest_identity" else "unverified",
+                    "basis": "source_identity_attestation",
+                    "action": action,
+                    "source_text_id": source.source_text_id,
+                    "source_text_sha256": source.sha256,
+                    "target_sha256": target["target_sha256"],
+                    "applied_at": decision.get("applied_at"),
+                }
+        return None
+
+    score = source.match_score
+    if (
+        source.identity_status == "operator_attested"
+        and source.mapping == "operator_attested"
+        and source.match_signal == "operator_confirmation"
+        and score == 1.0
+        and source.supplied_by == "user"
+        and isinstance(source.supplied_via, str)
+        and source.supplied_via.startswith("controlled_task_answer:")
+    ):
+        return {
+            "status": "confirmed",
+            "basis": "controlled_source_provision",
+            "action": "attest_identity",
+            "source_text_id": source.source_text_id,
+            "source_text_sha256": source.sha256,
+        }
+    return None
 
 
 def _validate_source_page_bounds(
@@ -1199,8 +1634,95 @@ def _task_views_by_ref(
         view = repo.task_view(task.task_id)
         if isinstance(view, dict):
             view["task_kind"] = task.task_kind
+            view["task_generation"] = task.generation
             views.append(view)
     return _tasks_by_ref(views)
+
+
+def _project_guided_fetch_stages(
+    state: dict[str, Any], pending_by_ref: dict[str, list[dict[str, Any]]],
+    ref_ids: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], set[str]]:
+    staged_sources: list[dict[str, Any]] = []
+    issues: list[dict[str, str]] = []
+    superseded_ocr: set[str] = set()
+    latest = state.get("latest") if isinstance(state, dict) else None
+    raw_issues = state.get("issues") if isinstance(state, dict) else None
+    if not isinstance(latest, dict) or not isinstance(raw_issues, dict):
+        return [], [{"ref_id": "", "message": "Guided Fetch draft inventory is malformed."}], set()
+    ref_by_key = {
+        hashlib.sha256(ref_id.encode("utf-8")).hexdigest(): ref_id
+        for ref_id in ref_ids
+    }
+    for key, message in raw_issues.items():
+        ref_id = ref_by_key.get(key)
+        if ref_id is not None and isinstance(message, str):
+            issues.append({"ref_id": ref_id, "message": message})
+    for ref_id in sorted(ref_ids):
+        active_issue = next((item for item in issues if item["ref_id"] == ref_id), None)
+        if active_issue is not None:
+            continue
+        key = hashlib.sha256(ref_id.encode("utf-8")).hexdigest()
+        item = latest.get(key)
+        if not isinstance(item, dict):
+            continue
+        record = item.get("record")
+        if not isinstance(record, dict):
+            continue
+        superseded = record.get("supersedes_ocr_scan_ids")
+        if isinstance(superseded, list):
+            superseded_ocr.update(superseded)
+        matches = [
+            task for task in pending_by_ref.get(ref_id, [])
+            if task.get("kind") in {"fetch", "browser_challenge"}
+        ]
+        if not matches:
+            continue
+        if len(matches) != 1:
+            issues.append({
+                "ref_id": ref_id,
+                "message": "Confirmed Guided Fetch draft no longer matches exactly one pending task.",
+            })
+            continue
+        task = matches[0]
+        task_kind = task.get("kind") or task.get("task_kind")
+        if (
+            record.get("task_id") != task.get("task_id")
+            or record.get("task_kind") != task_kind
+            or record.get("task_generation") != task.get("task_generation")
+        ):
+            issues.append({
+                "ref_id": ref_id,
+                "message": "Confirmed Guided Fetch draft belongs to an earlier task generation. Confirm the source again.",
+            })
+            continue
+        if record.get("action") == "discard":
+            continue
+        payload = item.get("payload")
+        try:
+            _validate_staged_source(ref_id, payload)
+        except (OSError, ValueError, TypeError):
+            issues.append({
+                "ref_id": ref_id,
+                "message": "Confirmed Guided Fetch draft is unusable. Discard it or confirm the source again.",
+            })
+            continue
+        staged_sources.append({
+            "ref_id": ref_id,
+            "task_id": record["task_id"],
+            "task_kind": record["task_kind"],
+            "task_generation": record["task_generation"],
+            "source_tier": record["source_tier"],
+            "identity_attested": record["identity_attested"],
+            "source_ref": record["source_ref"],
+            "display_name": record["original_filename"],
+            "file_path": payload["file_path"],
+            "sha256": record["sha256"],
+            "byte_count": record["byte_count"],
+            "original_filename": record["original_filename"],
+            "original_path": record["original_path"],
+        })
+    return staged_sources, issues, superseded_ocr
 
 
 def _task_is_retrieval(task: dict[str, Any]) -> bool:
@@ -1214,7 +1736,10 @@ def _ocr_queue_projection(
     ref_ids: list[str],
     source_by_ref: dict[str, list[dict[str, Any]]],
     guided_ocr_artifacts: dict[str, dict[str, Any]],
+    *,
+    superseded_ocr_scan_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
+    superseded_ocr_scan_ids = superseded_ocr_scan_ids or set()
     allowed_refs = set(ref_ids)
     eligible_refs = {
         ref_id for ref_id in ref_ids
@@ -1226,7 +1751,10 @@ def _ocr_queue_projection(
     scans: dict[str, dict[str, Any]] = {}
     try:
         for scan in provided_fulltext.list_pending_ocr_scans(run_dir):
-            if scan.get("ref_id") not in eligible_refs:
+            if (
+                scan.get("ref_id") not in eligible_refs
+                or scan.get("scan_id") in superseded_ocr_scan_ids
+            ):
                 continue
             scans[scan["scan_id"]] = {
                 "scan_id": scan["scan_id"],

@@ -1,3 +1,6 @@
+# packaging/store/prepare_sources.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Recover the pinned Store build inputs without a local binary backup.
 
 Requires Python 3.13 or newer. Downloads are hash-checked before extraction.

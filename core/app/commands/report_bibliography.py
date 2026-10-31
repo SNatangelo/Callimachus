@@ -49,6 +49,7 @@ def read_snapshot(run_dir: str) -> dict:
         if assurance.protection == "agent_attested":
             # No local downgrade or override is offered by a read-only exporter.
             gate = RunIntegrityGate.from_environment()
+            gate.activate_worker(run_dir)
             gate.preflight(run_dir, mirror_audit_records=False)
         repo._conn.execute("BEGIN")
         run = repo.get_run()

@@ -1,3 +1,6 @@
+# packaging/store/native-recipes/stage-framework-runtime.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Stage only the framework runtime pinned by the checked-in build receipt."""
 import hashlib
 import json

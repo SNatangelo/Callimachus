@@ -1,5 +1,41 @@
 # Deployment — turning the cage on
 
+## Minimum supported desktop systems
+
+Desktop builds must support Windows 10 version 1809 (build 17763) or later,
+macOS 14.4 or later, and GNU/Linux with glibc 2.35 or later, using Ubuntu 22.04
+LTS as the qualification baseline. These are persistent user requirements. Linux
+binaries must be built and tested against Ubuntu 22.04 or a demonstrably
+equivalent baseline; building only on a newer distribution does not qualify this
+minimum. Raising any minimum requires an explicit user request.
+
+Qt/PySide/Shiboken 6.12 is authorized on all desktop platforms. The exact release
+pins are in `packaging/release-constraints.txt`; the matching source archives and
+hashes are in `packaging/release-sources.json`. Keep those files consistent when
+updating a dependency. Follow the maintained
+[desktop build instructions](docs/maintainers/packaging/desktop-build.md#maintainer-build-procedure),
+including the macOS 14.4 binding qualification and the Windows Store CRT rules.
+
+## Installed desktop settings
+
+Compiled desktop releases save credentials in the current user's operating
+system vault: Windows Credential Manager, macOS Keychain, or a running Linux
+Secret Service. They do not fall back to plaintext when the vault is unavailable
+or locked. Non-secret settings use `settings.conf` in the Callimachus user-data
+directory; the bundled read-only inventory is `settings.defaults`. Old `.env`
+files are neither loaded nor migrated by compiled releases. Re-enter required
+credentials in the Jury chooser or Settings; old files are not automatically
+deleted. Genuine process overrides retain priority, and existing explicit
+signing-key-file references retain their file-based behavior. See
+[Desktop packages](docs/user/en/09-desktop-packages.md#settings-and-credentials-in-20).
+
+Settings export retains its existing optional password encryption. Choose the
+encrypted export when the backup includes credentials. Source/development use
+keeps the `.env` configuration and CLI setup described below. The
+`python run.py configure` tool is source-only; a compiled app generates its local
+report-signing key through Settings into the vault. That local key does not
+replace the external integrity authority described below.
+
 ## Invocation modes
 
 Fresh direct human CLI use omits `--agent-identity` and remains usable without
@@ -106,7 +142,7 @@ Use **absolute paths** to the hook scripts. The `Stop` hook needs the signing ke
 environment (step 2) so it can seal an approved report; if you run Claude Code such that
 hooks inherit a separate environment, set the key there.
 
-**Optional — put the armed sentinel out of the agent's reach.** The arm hook writes a
+**Required for an agent-resistant deployment — put the armed sentinel out of the agent's reach.** The arm hook writes a
 sentinel (`pending.json`) that tells the Stop hook a verification was requested. By default
 it lives under the project (`./.citation_verifier/`), which the agent's tools *can* write —
 so a determined agent could delete it within a turn to dodge the auto-launch. To close that,
@@ -161,7 +197,81 @@ Stop hook applies, now enforced by infrastructure the agent never touches.
 
 ---
 
-**What this does and does not buy you** is in the README. In short: with the key isolated and
-the hooks at user level, an agent cannot skip verification, hand-write or forge a report, or
-end its turn on an incomplete run. It still must *start* the process (reduced to a binary,
+**What this does and does not buy you** is in the README. In short: with the key, state directory,
+hook scripts and hook settings isolated from the agent as described above, the protected
+deployment prevents skipping the armed verification, hand-writing or forging a report, or
+ending a turn on an incomplete run. It still must *start* the process (reduced to a binary,
 auto-launchable fact), and passage *relevance* remains the model's judgment.
+
+
+
+## Security qualification of external CLI backends
+
+The `codex_cli` adapter requests a read-only sandbox and a process timeout.
+Those controls do not qualify the set of readable files. The adapter inherits
+its working directory and environment and does not disable the CLI's own tools,
+configuration or MCP connections. `supports_tools=False` describes Callimachus
+adapter capabilities, not the tools available inside the CLI process.
+
+Before treating this backend as isolated from local confidential files, qualify
+the installed CLI version and its effective OS filesystem/network policy with
+non-secret fixtures: an allowed citation file must remain readable, an excluded
+fixture must not be readable, and configured tools/MCP must not expand that
+scope. Keep authentication outside model-readable file access. Do not use real
+secrets for qualification. Until that qualification passes, this backend is not
+qualified for that protected deployment; explicitly select an existing backend
+whose access scope meets the deployment requirements. Do not silently substitute
+another provider. No installed CLI or host policy is certified by the source tests.
+
+For Claude hooks, configuring `CITATION_VERIFIER_STATE_DIR` is necessary but does
+not prove isolation: the agent must also be unable to alter that directory, its
+ancestors, either hook script, hook settings, or the signing key. Check effective
+permissions for the actual agent identity. A directory outside the project with
+the same writable permissions does not close the sentinel-deletion path.
+
+
+## Automatic retrieval on institutional networks
+
+Automatic HTTP(S) source retrieval and bibliographic resolution use a public-only
+connection policy. Each new connection validates the complete DNS answer and
+connects to a validated numeric address without a second hostname lookup.
+Redirects and cookie-session retries use the same policy. Local, private,
+link-local, multicast, reserved and other nonpublic destinations are refused;
+non-HTTP(S) URLs and embedded URL credentials are refused as well.
+
+The policy keeps the original hostname for HTTP Host, TLS SNI and certificate
+verification. It uses the system resolver and OS routing without choosing an
+interface or bypassing a VPN. Institutional VPN access to publicly addressed
+publishers therefore keeps its normal route and source-IP recognition. Native
+public IPv6 and standard NAT64 addressing of public IPv4 destinations are
+supported; conservative checks exclude other ambiguous transition prefixes.
+
+On a desktop-launched analysis, an eligible private RFC1918/ULA destination or
+a selected proxy requests an explicit decision in the owning desktop window.
+The options are Cancel, Allow once, Remember for this session (until the desktop
+closes), and Always remember. The permission binds the origin, connection host
+and port, complete resolved numeric address set, and proxy/direct route. A changed
+origin, endpoint or address set requires a new decision. Loopback resources,
+metadata services, link-local and other prohibited destinations remain blocked;
+a loopback proxy endpoint may be explicitly approved as a proxy only.
+
+Session grants are window memory; permanent grants are user QSettings entries.
+Settings > Network lists remembered grants and revokes them. Persistent grants
+are saved before use. Revocation blocks reuse immediately and retains retry state
+if writing the removal fails. The desktop and child exchange authenticated,
+request-scoped decisions; the IPC key is removed from the child environment before
+provider processes can inherit it. The run records the decision before connecting;
+failing to record it denies the connection. Closing/STOP/timeout denies pending
+requests. A non-desktop process without the owner channel has no implicit grant.
+Decisions use dedicated append-only SQLite relations in current run schema 118,
+separate from pipeline phase events. Create a fresh run for this schema; older
+run databases are not migrated or deleted.
+
+A proxy chooses the origin's final address outside the application's control;
+the confirmation explains that trust delegation. The proxy is not silently
+ignored and there is no automatic direct fallback. A system NO_PROXY/bypass
+decision still allows a validated direct connection. Approval of network access
+does not attest source identity: all existing identity/provenance gates still apply.
+The separate institutional/assisted-browser and explicit local-source workflows
+remain available. A real institution/VPN/provider login, native QSettings and a
+packaged Qt dialog have not been exercised by the isolated source regressions.

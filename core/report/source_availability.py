@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -20,7 +21,7 @@ def is_verifiable_source_entry(entry: dict) -> bool:
     )
 
 
-def usable_source_refs(run_dir, manifest):
+def usable_source_refs(run_dir, manifest, *, cancel_check=None):
     """Return usable ref IDs and deterministic diagnostics for bad source entries.
 
     The manifest is a ledger projection, not proof that the referenced bytes
@@ -33,6 +34,8 @@ def usable_source_refs(run_dir, manifest):
     usable = set()
     unavailable = []
     for entry in entries:
+        if cancel_check is not None:
+            cancel_check()
         if not isinstance(entry, dict):
             unavailable.append("source manifest entry is malformed")
             continue
@@ -64,26 +67,44 @@ def usable_source_refs(run_dir, manifest):
             source_path.relative_to(sources_root.resolve(strict=True))
             if not source_path.is_file():
                 raise OSError("not a regular file")
-            source_bytes = source_path.read_bytes()
-            source_text = source_bytes.decode("utf-8")
+            digest = hashlib.sha256()
+            decoder = codecs.getincrementaldecoder("utf-8")()
+            char_count = 0
+            with source_path.open("rb") as stream:
+                while True:
+                    if cancel_check is not None:
+                        cancel_check()
+                    chunk = stream.read(64 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    char_count += len(decoder.decode(chunk))
+                char_count += len(decoder.decode(b"", final=True))
         except (OSError, UnicodeError, ValueError):
             unavailable.append(f"source {label} is unavailable")
             continue
-        if hashlib.sha256(source_bytes).hexdigest() != expected_sha256:
+        if digest.hexdigest() != expected_sha256:
             unavailable.append(f"source {label} hash mismatch")
             continue
-        if len(source_text) != expected_char_count:
+        if char_count != expected_char_count:
             unavailable.append(f"source {label} length mismatch")
             continue
         usable.add(ref_id)
     return frozenset(usable), tuple(unavailable)
 
 
-def usable_verification_source_refs(run_dir, manifest):
+def usable_verification_source_refs(run_dir, manifest, *, cancel_check=None):
     """Physical availability limited to evidence that can support a citation verdict."""
     entries = manifest.get("entries", ()) if isinstance(manifest, dict) else ()
+    def verification_entries():
+        for entry in entries:
+            if cancel_check is not None:
+                cancel_check()
+            if isinstance(entry, dict) and is_verifiable_source_entry(entry):
+                yield entry
+
     return usable_source_refs(
         run_dir,
-        {"entries": [entry for entry in entries
-                     if isinstance(entry, dict) and is_verifiable_source_entry(entry)]},
+        {"entries": verification_entries()},
+        cancel_check=cancel_check,
     )

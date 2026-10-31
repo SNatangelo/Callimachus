@@ -17,6 +17,11 @@ import re
 import zipfile
 from pathlib import Path
 
+try:
+    from core.parse import docx_limits
+except ImportError:  # standalone extraction
+    import docx_limits
+
 
 class FileProbeError(ValueError):
     """Base class for deterministic file-probe rejection."""
@@ -109,9 +114,12 @@ def _detect_builtin(path: str) -> str:
         raise UnreadableFileError(f"cannot inspect ZIP container: {exc}") from exc
     if is_zip:
         try:
+            docx_limits.check_directory(path)
             with zipfile.ZipFile(path) as archive:
                 names = set(archive.namelist())
-        except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+                if {"[Content_Types].xml", "word/document.xml"} <= names:
+                    docx_limits.check_xml_parts(archive)
+        except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
             raise UnreadableFileError(f"corrupt ZIP container: {exc}") from exc
         if {"[Content_Types].xml", "word/document.xml"} <= names:
             return "docx"

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Mapping
 
+from .atlante import stylesheet as atlante_stylesheet
+
 
 _TEXT = {
     "title": "Callimachus: Parse review",
@@ -40,6 +42,11 @@ _TEXT = {
     "original_title": "Original title",
     "original_doi": "Original DOI",
     "claim_text": "Cited claim",
+    "missing_claim_text": "Claim text is unavailable.",
+    "missing_reference_text": "Reference text is unavailable.",
+    "missing_candidate_text": "Candidate source text is unavailable.",
+    "missing_citation_marker": "Citation marker is unavailable.",
+    "missing_footnote_text": "Footnote text is unavailable.",
     "select_reference": "Assign citation to this reference",
     "keep_unresolved": "Keep unresolved",
     "select_claim": "Assign reference to this claim",
@@ -74,6 +81,17 @@ _TEXT = {
     "candidate_references": "References under consideration",
     "candidate_claims": "Claims under consideration",
     "candidate_option": "Option {number}",
+    "overview_heading": "Review tasks",
+    "back_to_list": "All reviews",
+    "back_to_list_tip": "Return to the review list",
+    "next_task": "Next",
+    "next_task_tip": "Open the next review task",
+    "task_selected": "Selected",
+    "task_unresolved": "Unresolved",
+    "task_status_unknown": "Saved decision needs review",
+    "question_citation": "Which source is cited by this sentence?",
+    "question_inverse": "Which sentence in the paper cites this reference?",
+    "skip_review": "Skip as unresolved",
 }
 
 
@@ -95,7 +113,7 @@ def create_parse_review_window(
     widgets so reopening re-reads current durable state.
     """
     try:
-        from PySide6 import QtCore, QtWidgets
+        from PySide6 import QtCore, QtGui, QtWidgets
     except ModuleNotFoundError as exc:
         if exc.name == "PySide6":
             raise RuntimeError("PySide6 is required for Parse review") from exc
@@ -106,6 +124,8 @@ def create_parse_review_window(
         for key, value in (review_text or {}).items()
         if key.startswith("parse_review_")
     }
+    if isinstance(review_text, Mapping) and isinstance(review_text.get("close"), str):
+        provided_text["close"] = review_text["close"]
     labels = {**_TEXT, **provided_text}
 
     class LoadSignals(QtCore.QObject):
@@ -140,7 +160,134 @@ def create_parse_review_window(
             except Exception as exc:  # surfaced in the dialog for operator action
                 self.signals.finished.emit(self.generation, None, str(exc))
 
+    class OverviewTaskCard(QtWidgets.QPushButton):
+        """Button card with explicit keyboard activation outside dialog defaults."""
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            policy = QtWidgets.QSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Preferred,
+                QtWidgets.QSizePolicy.Policy.Maximum,
+            )
+            policy.setHeightForWidth(True)
+            self.setSizePolicy(policy)
+            self._content_fit_pending = False
+
+        def _schedule_content_fit(self):
+            if self._content_fit_pending:
+                return
+            self._content_fit_pending = True
+            QtCore.QTimer.singleShot(0, self._fit_wrapped_text)
+
+        def _fit_wrapped_text(self):
+            self._content_fit_pending = False
+            layout = self.layout()
+            content = self.contentsRect()
+            if layout is None or content.width() <= 0:
+                return
+            margins = layout.contentsMargins()
+            label_width = max(0, content.width() - margins.left() - margins.right())
+            heights = []
+            for index in range(layout.count()):
+                widget = layout.itemAt(index).widget()
+                if widget is None:
+                    continue
+                required = (
+                    widget.heightForWidth(label_width)
+                    if widget.hasHeightForWidth() else widget.sizeHint().height()
+                )
+                heights.append(max(widget.minimumSizeHint().height(), required))
+            if not heights:
+                return
+            outer_insets = max(0, self.height() - content.height())
+            needed = (
+                margins.top() + margins.bottom() + sum(heights)
+                + max(0, layout.spacing()) * (len(heights) - 1)
+                + outer_insets + 2
+            )
+            needed = max(self.minimumSizeHint().height(), needed)
+            if self.minimumHeight() != needed:
+                self.setMinimumHeight(needed)
+
+        def resizeEvent(self, event):  # noqa: N802 - Qt API name
+            super().resizeEvent(event)
+            self._schedule_content_fit()
+
+        def changeEvent(self, event):  # noqa: N802 - Qt API name
+            super().changeEvent(event)
+            if event.type() in {
+                QtCore.QEvent.Type.FontChange, QtCore.QEvent.Type.StyleChange,
+            }:
+                self._schedule_content_fit()
+
+        def hasHeightForWidth(self):  # noqa: N802 - Qt API name
+            layout = self.layout()
+            return layout is not None and layout.hasHeightForWidth()
+
+        def heightForWidth(self, width):  # noqa: N802 - Qt API name
+            layout = self.layout()
+            if layout is None or not layout.hasHeightForWidth():
+                return super().sizeHint().height()
+            content_rect = self.contentsRect()
+            horizontal_insets = max(0, self.width() - content_rect.width())
+            vertical_insets = max(0, self.height() - content_rect.height())
+            content_width = max(0, width - horizontal_insets)
+            layout_height = layout.heightForWidth(content_width)
+            return max(
+                super().sizeHint().height(),
+                layout_height + vertical_insets,
+            )
+
+        def keyPressEvent(self, event):  # noqa: N802 - Qt API name
+            if event.key() in {
+                QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter,
+            } and not event.isAutoRepeat():
+                self.click()
+                event.accept()
+                return
+            super().keyPressEvent(event)
+
     class CandidateRow(QtWidgets.QWidget):
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._base_minimum_height = 120
+            self._content_fit_pending = False
+
+        def _schedule_content_fit(self):
+            if self._content_fit_pending:
+                return
+            self._content_fit_pending = True
+            QtCore.QTimer.singleShot(0, self._fit_wrapped_text)
+
+        def _fit_wrapped_text(self):
+            self._content_fit_pending = False
+            layout = self.layout()
+            description = self.findChild(QtWidgets.QLabel, "parseCandidateDescription")
+            if layout is None or description is None or description.width() <= 0:
+                return
+            margins = layout.contentsMargins()
+            content_height = max(0, description.heightForWidth(description.width()))
+            radio = self.findChild(QtWidgets.QRadioButton)
+            if radio is not None:
+                content_height = max(content_height, radio.sizeHint().height())
+            required_height = max(
+                self._base_minimum_height,
+                margins.top() + content_height + margins.bottom(),
+            )
+            if self.minimumHeight() != required_height:
+                self.setMinimumHeight(required_height)
+
+        def resizeEvent(self, event):  # noqa: N802 - Qt API name
+            super().resizeEvent(event)
+            self._schedule_content_fit()
+
+        def changeEvent(self, event):  # noqa: N802 - Qt API name
+            super().changeEvent(event)
+            if event.type() in {
+                QtCore.QEvent.Type.FontChange,
+                QtCore.QEvent.Type.StyleChange,
+            }:
+                self._schedule_content_fit()
+
         def mousePressEvent(self, event):  # noqa: N802 - Qt API name
             if event.button() == QtCore.Qt.MouseButton.LeftButton:
                 event.accept()
@@ -156,6 +303,38 @@ def create_parse_review_window(
                 return
             super().mouseReleaseEvent(event)
 
+    class CitedPassage(QtWidgets.QLabel):
+        """Keep the original plain text while highlighting its literal marker."""
+        def paintEvent(self, event):
+            from html import escape
+            original = escape(self.text())
+            marker = escape(str(self.property("citationMarker") or ""))
+            if marker:
+                original = original.replace(marker, f'<span style="background-color:#ffe7a3;color:#14243b">{marker}</span>')
+            document = QtGui.QTextDocument()
+            document.setDocumentMargin(0)
+            document.setDefaultFont(self.font())
+            foreground = self.palette().color(QtGui.QPalette.ColorRole.WindowText).name()
+            document.setHtml(f'<div style="color:{foreground}">{original}</div>')
+            document.setTextWidth(self.contentsRect().width())
+            painter = QtGui.QPainter(self)
+            painter.translate(self.contentsRect().topLeft())
+            painter.setPen(self.palette().color(QtGui.QPalette.ColorRole.WindowText))
+            context = QtGui.QAbstractTextDocumentLayout.PaintContext()
+            context.palette = self.palette()
+            if self.hasSelectedText():
+                selection = QtGui.QAbstractTextDocumentLayout.Selection()
+                selection.cursor = QtGui.QTextCursor(document)
+                selection.cursor.setPosition(self.selectionStart())
+                selection.cursor.setPosition(
+                    self.selectionStart()+len(self.selectedText()),
+                    QtGui.QTextCursor.MoveMode.KeepAnchor,
+                )
+                selection.format.setBackground(self.palette().highlight())
+                selection.format.setForeground(self.palette().highlightedText())
+                context.selections = [selection]
+            document.documentLayout().draw(painter, context)
+
     class ParseReviewWindow(QtWidgets.QDialog):
         def __init__(self):
             super().__init__()
@@ -163,9 +342,10 @@ def create_parse_review_window(
             # desktop keeps it alive explicitly so Review later and title-bar
             # close preserve drafts for this app session.
             self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            self.setObjectName("parseReviewDialog")
             self.setWindowTitle(labels["title"])
-            self.setMinimumSize(680, 430)
-            self.resize(760, 560)
+            self.setMinimumSize(480, 430)
+            self.resize(980, 680)
             self._run_dir = run_dir
             self._generation = 0
             self._open = False
@@ -175,6 +355,14 @@ def create_parse_review_window(
             self._next_task_id: str | None = None
             self._drafts: dict[str, dict[str, Any]] = {}
             self._status_after_load: tuple[str, str] | None = None
+            self._compact_source_fit_pending = False
+            self._compact_mode = self.width() < 760
+            self._compact_detail_open = False
+            self._compact_transition_target = False
+            self._compact_animation = None
+            self._overview_cards: list[Any] = []
+            self._overview_focus_task_id: str | None = None
+            self._overview_scroll_value = 0
             self._build()
             self._pulse = QtCore.QTimer(self)
             self._pulse.setInterval(450)
@@ -183,34 +371,145 @@ def create_parse_review_window(
 
         def _build(self):
             root = QtWidgets.QVBoxLayout(self)
-            root.setSpacing(10)
-            detail_group = QtWidgets.QVBoxLayout()
-            detail_group.setSpacing(0)
-            root.addLayout(detail_group, 1)
-            self.task_tabs = QtWidgets.QTabBar(self)
+            root.setContentsMargins(0, 16, 0, 0)
+            root.setSpacing(14)
+            self.workspace = QtWidgets.QWidget(self)
+            self.workspace.setObjectName("parseReviewWorkspace")
+            self.workspace.installEventFilter(self)
+            root.addWidget(self.workspace, 1)
+
+            self.overview_scroll = QtWidgets.QScrollArea(self.workspace)
+            self.overview_scroll.setObjectName("parseReviewOverviewScroll")
+            self.overview_scroll.setWidgetResizable(True)
+            self.overview_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+            self.overview_scroll.setHorizontalScrollBarPolicy(
+                QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+            self.overview_content = QtWidgets.QWidget(self.overview_scroll)
+            self.overview_content.setObjectName("parseReviewOverview")
+            self.overview_layout = QtWidgets.QVBoxLayout(self.overview_content)
+            self.overview_layout.setContentsMargins(18, 8, 18, 16)
+            self.overview_layout.setSpacing(12)
+            self.overview_heading = QtWidgets.QLabel(
+                labels["overview_heading"], self.overview_content
+            )
+            self.overview_heading.setObjectName("parseReviewOverviewHeading")
+            self.overview_heading.setWordWrap(True)
+            self.overview_layout.addWidget(self.overview_heading)
+            self.overview_message = QtWidgets.QLabel(
+                labels["loading"], self.overview_content
+            )
+            self.overview_message.setObjectName("parseReviewOverviewMessage")
+            self.overview_message.setWordWrap(True)
+            self.overview_layout.addWidget(self.overview_message)
+            self.overview_layout.addStretch(1)
+            self.overview_scroll.setWidget(self.overview_content)
+
+            self.detail_panel = QtWidgets.QWidget(self.workspace)
+            self.detail_panel.setObjectName("parseReviewDetailPanel")
+            detail_group = QtWidgets.QVBoxLayout(self.detail_panel)
+            detail_group.setContentsMargins(18, 0, 18, 0)
+            detail_group.setSpacing(10)
+
+            self.compact_navigation = QtWidgets.QWidget(self.detail_panel)
+            self.compact_navigation.setObjectName("parseReviewCompactNavigation")
+            nav_layout = QtWidgets.QGridLayout(self.compact_navigation)
+            nav_layout.setObjectName("parseReviewNavigationGrid")
+            nav_layout.setContentsMargins(0, 0, 0, 0)
+            nav_layout.setHorizontalSpacing(8)
+            nav_layout.setVerticalSpacing(2)
+            nav_layout.setColumnStretch(1, 1)
+            self._compact_progress_row = -1
+            from .atlas_icons import icon
+            self.back_button = QtWidgets.QPushButton(
+                labels["back_to_list"], self.compact_navigation
+            )
+            self.back_button.setObjectName("parseReviewBack")
+            from core.gui.shell.navigation import set_back_button_presentation
+            set_back_button_presentation(
+                self.back_button, QtCore, QtGui,
+                label=labels["back_to_list"], text=labels["back_to_list"],
+            )
+            self.back_button.setToolTip(labels["back_to_list_tip"])
+            self.back_button.clicked.connect(self._back_to_overview)
+            nav_layout.addWidget(
+                self.back_button, 0, 0, QtCore.Qt.AlignmentFlag.AlignLeft
+            )
+            self.compact_progress = QtWidgets.QLabel(
+                "", self.compact_navigation
+            )
+            self.compact_progress.setObjectName("parseReviewProgress")
+            self.compact_progress.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignCenter
+            )
+            self.next_button = QtWidgets.QPushButton(
+                labels["next_task"], self.compact_navigation
+            )
+            self.next_button.setObjectName("parseReviewNext")
+            self.next_button.setAccessibleName(labels["next_task"])
+            self.next_button.setToolTip(labels["next_task_tip"])
+            self.next_button.setIcon(icon(QtCore, QtGui, "arrow-right"))
+            self.next_button.clicked.connect(self._next_task)
+            nav_layout.addWidget(
+                self.next_button, 0, 2, QtCore.Qt.AlignmentFlag.AlignRight
+            )
+            detail_group.addWidget(self.compact_navigation)
+
+            self.task_tabs = QtWidgets.QTabBar(self.detail_panel)
             self.task_tabs.setObjectName("parseReviewTaskTabs")
+            self.task_tabs.setAccessibleName(labels["overview_heading"])
             self.task_tabs.setExpanding(False)
             self.task_tabs.setUsesScrollButtons(True)
             self.task_tabs.setElideMode(QtCore.Qt.TextElideMode.ElideNone)
             self.task_tabs.setTabsClosable(False)
             detail_group.addWidget(self.task_tabs)
-            scroll = QtWidgets.QScrollArea(self)
+            self.decision_banner = QtWidgets.QLabel(
+                labels["action_required"], self.detail_panel
+            )
+            self.decision_banner.setObjectName("parseDecisionBanner")
+            self.decision_banner.setWordWrap(True)
+            self.decision_banner.hide()
+            from .atlas_icons import icon
+            warning = QtWidgets.QLabel(self.decision_banner)
+            warning.setPixmap(icon(QtCore, QtGui, "warning", "#c9770d", 22).pixmap(22, 22))
+            warning.setGeometry(12, 12, 22, 22)
+            warning.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            detail_group.addWidget(self.decision_banner)
+            scroll = QtWidgets.QScrollArea(self.detail_panel)
             scroll.setObjectName("parseReviewDetailScroll")
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(
+                QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
             self.detail = QtWidgets.QWidget(scroll)
             self.detail.setObjectName("parseReviewDetail")
+            detail_policy = self.detail.sizePolicy()
+            detail_policy.setHorizontalPolicy(QtWidgets.QSizePolicy.Policy.Ignored)
+            self.detail.setSizePolicy(detail_policy)
+            self.detail.setMinimumWidth(0)
             self.detail_layout = QtWidgets.QVBoxLayout(self.detail)
-            self.detail_layout.setContentsMargins(4, 4, 4, 4)
-            self.detail_layout.setSpacing(10)
+            self.detail_layout.setContentsMargins(12, 12, 12, 12)
+            self.detail_layout.setSpacing(14)
             scroll.setWidget(self.detail)
             self.task_tabs.addTab(labels["loading"])
             detail_group.addWidget(scroll, 1)
-            self.status = QtWidgets.QLabel("", self)
+            from core.gui.shell.scroll import install_edge_scrollbar
+            self._detail_edge_scrollbar = install_edge_scrollbar(
+                self, [self.overview_scroll, scroll], QtCore, QtWidgets,
+                compact_when=lambda: self.width() < 760,
+            )
+            footer = QtWidgets.QFrame(self)
+            footer.setObjectName("parseDecisionFooter")
+            footer_layout = QtWidgets.QHBoxLayout(footer)
+            self._footer_layout = footer_layout
+            footer_layout.setContentsMargins(18, 16, 18, 16)
+            self.status = QtWidgets.QLabel("", footer)
             self.status.setObjectName("parseReviewStatus")
             self.status.setWordWrap(True)
-            root.addWidget(self.status)
+            footer_layout.addWidget(self.status, 1)
             actions = QtWidgets.QHBoxLayout()
+            self._footer_actions_layout = actions
             actions.addStretch()
             self.retry_button = QtWidgets.QPushButton(labels["refresh"], self)
             self.retry_button.clicked.connect(self._load)
@@ -220,14 +519,569 @@ def create_parse_review_window(
             self.resume_button.setObjectName("parseReviewResume")
             self.resume_button.setEnabled(False)
             self.resume_button.clicked.connect(self._resume)
-            actions.addWidget(self.resume_button)
             self.close_button = QtWidgets.QPushButton(labels["close"], self)
             self.close_button.setToolTip(labels["close_tip"])
+            from .atlas_icons import icon
+            self.resume_button.setIcon(icon(QtCore, QtGui, "play"))
+            self.close_button.setIcon(icon(QtCore, QtGui, "close"))
             self.close_button.clicked.connect(self.hide)
             actions.addWidget(self.close_button)
-            root.addLayout(actions)
+            actions.addWidget(self.resume_button)
+            footer_layout.addLayout(actions)
+            root.addWidget(footer)
             self._clear_detail()
             self.task_tabs.currentChanged.connect(self._select_task)
+            self._reflow_compact_layout()
+            self._apply_workspace_mode()
+
+        def eventFilter(self, watched, event):  # noqa: N802 - Qt API name
+            if (
+                watched is self.workspace
+                and event.type() == QtCore.QEvent.Type.Resize
+            ):
+                if self._compact_animation is not None:
+                    self._stop_compact_animation()
+                    self._apply_workspace_mode()
+                else:
+                    self._workspace_resized()
+            return super().eventFilter(watched, event)
+
+        def _workspace_resized(self):
+            if not hasattr(self, "workspace"):
+                return
+            rect = self.workspace.rect()
+            self.overview_scroll.setGeometry(rect)
+            if not self._compact_animation:
+                self.detail_panel.setGeometry(rect)
+            if hasattr(self, "_detail_edge_scrollbar"):
+                self._detail_edge_scrollbar.schedule()
+
+        def _apply_workspace_mode(self):
+            self._compact_mode = self.width() < 760
+            rect = self.workspace.rect()
+            self.overview_scroll.setGeometry(rect)
+            self.detail_panel.setGeometry(rect)
+            if self._compact_mode and not self._compact_detail_open:
+                self.overview_scroll.setEnabled(True)
+                self.overview_scroll.show()
+                self.overview_scroll.raise_()
+                self.detail_panel.hide()
+                self.task_tabs.hide()
+                self.compact_navigation.hide()
+            else:
+                self.overview_scroll.setEnabled(False)
+                self.overview_scroll.hide()
+                self.detail_panel.setEnabled(True)
+                self.detail_panel.show()
+                self.detail_panel.raise_()
+                self.task_tabs.setVisible(not self._compact_mode)
+                self.compact_navigation.setVisible(self._compact_mode)
+            self._update_compact_navigation()
+            if hasattr(self, "_detail_edge_scrollbar"):
+                self._detail_edge_scrollbar.schedule()
+
+        def _rebuild_overview(self):
+            for card in self._overview_cards:
+                self.overview_layout.removeWidget(card)
+                card.hide()
+                card.deleteLater()
+            self._overview_cards = []
+            if not self._tasks:
+                if self.overview_message.text() == labels["loading"]:
+                    self.overview_message.show()
+                else:
+                    self.overview_message.setText(labels["empty"])
+                    self.overview_message.show()
+                return
+            self.overview_message.hide()
+            for index, task in enumerate(self._tasks):
+                card = OverviewTaskCard(self.overview_content)
+                card.setObjectName("parseReviewTaskCard")
+                card.setProperty("taskId", str(task.get("task_id") or ""))
+                card.setProperty("taskIndex", index)
+                card.setProperty("selected", index == self.task_tabs.currentIndex())
+                card.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+                card.setAutoDefault(False)
+                card_layout = QtWidgets.QVBoxLayout(card)
+                card_layout.setContentsMargins(12, 10, 12, 10)
+                card_layout.setSpacing(6)
+                title = QtWidgets.QLabel(
+                    self._task_name(task, index + 1), card
+                )
+                title.setObjectName("parseReviewTaskTitle")
+                title.setWordWrap(True)
+                title.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+                )
+                context = QtWidgets.QLabel(self._raw_target(task), card)
+                context.setObjectName("parseReviewTaskContext")
+                context.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+                context.setWordWrap(True)
+                context.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+                )
+                state = QtWidgets.QLabel("", card)
+                state.setObjectName("parseReviewTaskState")
+                state.setWordWrap(True)
+                state.setAttribute(
+                    QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+                )
+                card_layout.addWidget(title)
+                card_layout.addWidget(context)
+                card_layout.addWidget(state)
+                card.clicked.connect(
+                    lambda _checked=False, row=index: self._open_compact_task(row)
+                )
+                self._overview_layout_insert_card(card)
+                self._overview_cards.append(card)
+                self._refresh_overview_card(card, task)
+            self._update_overview_selection()
+
+        def _overview_layout_insert_card(self, card):
+            stretch_index = max(1, self.overview_layout.count() - 1)
+            self.overview_layout.insertWidget(stretch_index, card)
+
+        def _refresh_overview_card(self, card, task):
+            state = self._task_choice_state(task)
+            text = {
+                "selected": labels["task_selected"],
+                "unresolved": labels["task_unresolved"],
+                "unknown": labels["task_status_unknown"],
+            }.get(state, labels["pending"])
+            card.setProperty("status", state)
+            status_label = card.findChild(QtWidgets.QLabel, "parseReviewTaskState")
+            if status_label is not None:
+                status_label.setText(text)
+                status_label.setProperty("status", state)
+                status_label.style().unpolish(status_label)
+                status_label.style().polish(status_label)
+            if isinstance(card, OverviewTaskCard):
+                card._schedule_content_fit()
+            status_tip = self._task_tooltip(task)
+            card.setToolTip(status_tip)
+            card.setAccessibleName(f"{self._task_name(task, int(card.property('taskIndex')) + 1)} · {text}")
+            card.setAccessibleDescription(self._raw_target(task))
+            card.style().unpolish(card)
+            card.style().polish(card)
+
+        def _refresh_overview_cards(self, task_id: str | None = None):
+            for card in self._overview_cards:
+                if task_id is not None and card.property("taskId") != task_id:
+                    continue
+                index = int(card.property("taskIndex"))
+                if 0 <= index < len(self._tasks):
+                    self._refresh_overview_card(card, self._tasks[index])
+            self._update_overview_selection()
+
+        def _update_overview_selection(self):
+            selected = self.task_tabs.currentIndex()
+            for card in self._overview_cards:
+                active = int(card.property("taskIndex")) == selected
+                if card.property("selected") != active:
+                    card.setProperty("selected", active)
+                    card.style().unpolish(card)
+                    card.style().polish(card)
+
+        def _task_choice_state(self, task: Mapping[str, Any]) -> str:
+            task_id = str(task.get("task_id") or "")
+            target_hash = task.get("target_sha256")
+            if self._task_status(task) == "answered":
+                answer = task.get("answer")
+                if not isinstance(answer, Mapping):
+                    return "unknown"
+                action = answer.get("action")
+                if (
+                    not isinstance(target_hash, str) or not target_hash
+                    or answer.get("target_sha256") != target_hash
+                ):
+                    return "unknown"
+                if action == "skip_review":
+                    return (
+                        "unresolved"
+                        if isinstance(answer.get("reason"), str)
+                        and answer["reason"].strip()
+                        else "unknown"
+                    )
+                draft = {
+                    "target_sha256": answer.get("target_sha256"),
+                    "action": action,
+                    "candidate_id": answer.get(
+                        "ref_id" if action == "select_reference"
+                        else "claim_id" if action == "select_claim" else ""
+                    ),
+                    "fields": {
+                        key: answer.get(key) for key in ("title", "doi", "reason")
+                    },
+                    "source_texts": answer.get("source_texts"),
+                }
+                if self._draft_payload(task, draft) is None:
+                    return "unknown"
+                if action in {"keep_unresolved", "keep_ambiguous"}:
+                    return "unresolved"
+                return "selected"
+            if self._task_status(task) != "pending":
+                return "unknown"
+            draft = self._drafts.get(task_id)
+            if draft is None or not isinstance(target_hash, str) or not target_hash:
+                return "pending"
+            if draft.get("target_sha256") != target_hash:
+                return "pending"
+            payload = self._draft_payload(task, draft)
+            if payload is None:
+                return "pending"
+            if payload.get("action") in {"keep_unresolved", "keep_ambiguous"}:
+                return "unresolved"
+            return "selected"
+
+        def _update_compact_navigation(self):
+            row = self.task_tabs.currentIndex() if hasattr(self, "task_tabs") else -1
+            total = len(self._tasks)
+            if 0 <= row < total:
+                self.compact_progress.setText(labels["review_progress"].format(
+                    current=row + 1, total=total
+                ))
+                self.next_button.setEnabled(row < total - 1)
+            else:
+                self.compact_progress.setText("")
+                self.next_button.setEnabled(False)
+            if not hasattr(self, "compact_navigation"):
+                return
+            layout = self.compact_navigation.layout()
+            layout.activate()
+            self.back_button.setMinimumWidth(0)
+            self.next_button.setMinimumWidth(0)
+            back_width = self.back_button.sizeHint().width()
+            next_width = self.next_button.sizeHint().width()
+            self.back_button.setMinimumWidth(back_width)
+            self.next_button.setMinimumWidth(next_width)
+            progress_width = self.compact_progress.sizeHint().width()
+            needed_width = (
+                back_width + next_width + progress_width
+                + 2 * layout.horizontalSpacing()
+            )
+            available_width = self.compact_navigation.width()
+            if back_width + next_width + layout.horizontalSpacing() > available_width:
+                progress_row = 2
+            else:
+                progress_row = 0 if needed_width <= available_width else 1
+            if self._compact_progress_row != progress_row:
+                for widget in (self.back_button, self.next_button, self.compact_progress):
+                    layout.removeWidget(widget)
+                if progress_row == 2:
+                    layout.addWidget(
+                        self.back_button, 0, 0, 1, 3,
+                        QtCore.Qt.AlignmentFlag.AlignLeft,
+                    )
+                    layout.addWidget(
+                        self.next_button, 1, 0, 1, 3,
+                        QtCore.Qt.AlignmentFlag.AlignRight,
+                    )
+                else:
+                    layout.addWidget(
+                        self.back_button, 0, 0, QtCore.Qt.AlignmentFlag.AlignLeft,
+                    )
+                    layout.addWidget(
+                        self.next_button, 0, 2, QtCore.Qt.AlignmentFlag.AlignRight,
+                    )
+                if progress_row == 0:
+                    layout.addWidget(
+                        self.compact_progress, 0, 1,
+                        QtCore.Qt.AlignmentFlag.AlignCenter,
+                    )
+                else:
+                    layout.addWidget(
+                        self.compact_progress, progress_row, 0, 1, 3,
+                        QtCore.Qt.AlignmentFlag.AlignHCenter,
+                    )
+                self._compact_progress_row = progress_row
+                layout.activate()
+
+        def _open_compact_task(self, row: int):
+            if not self._compact_mode or row < 0 or row >= len(self._tasks):
+                return
+            if not self._compact_detail_open:
+                self._overview_focus_task_id = str(
+                    self._tasks[row].get("task_id") or ""
+                )
+                self._overview_scroll_value = (
+                    self.overview_scroll.verticalScrollBar().value()
+                )
+            if self.task_tabs.currentIndex() != row:
+                self.task_tabs.setCurrentIndex(row)
+            elif self._current is None:
+                self._select_task(row)
+            self._update_compact_navigation()
+            if self._compact_detail_open:
+                return
+            self._compact_transition_target = True
+            self.overview_scroll.setEnabled(False)
+            self.overview_scroll.hide()
+            self.task_tabs.hide()
+            self.compact_navigation.show()
+            self.detail_panel.setEnabled(True)
+            self.detail_panel.show()
+            self.detail_panel.raise_()
+            self.back_button.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+            self._compact_detail_open = True
+            self._animate_compact_detail(opening=True)
+
+        def _back_to_overview(self):
+            if not self._compact_mode or not self._compact_detail_open:
+                return
+            self._remember_draft()
+            self._compact_transition_target = False
+            self._compact_detail_open = False
+            self._animate_compact_detail(opening=False)
+
+        def _next_task(self):
+            if not self._compact_mode:
+                return
+            row = self.task_tabs.currentIndex()
+            if row < 0 or row + 1 >= len(self._tasks):
+                self._update_compact_navigation()
+                return
+            self._remember_draft()
+            self._overview_focus_task_id = str(
+                self._tasks[row + 1].get("task_id") or ""
+            )
+            self._open_compact_task(row + 1)
+
+        def _animate_compact_detail(self, *, opening: bool):
+            was_animating = self._compact_animation is not None
+            current_rect = self.detail_panel.geometry()
+            if self._compact_animation is not None:
+                self._stop_compact_animation()
+            rect = self.workspace.rect()
+            offscreen = QtCore.QRect(
+                rect.right() + 1, rect.top(), rect.width(), rect.height()
+            )
+            if was_animating:
+                start = current_rect
+            elif opening:
+                start = offscreen
+            else:
+                start = rect
+            end = (
+                rect
+                if opening else
+                offscreen
+            )
+            if rect.width() <= 0 or rect.height() <= 0:
+                self._compact_detail_open = self._compact_transition_target
+                self._apply_workspace_mode()
+                if self._compact_detail_open:
+                    self._schedule_compact_source_fit()
+                else:
+                    self._restore_overview_focus()
+                return
+            animation = QtCore.QPropertyAnimation(
+                self.detail_panel, b"geometry", self
+            )
+            animation.setDuration(200)
+            animation.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+            animation.setStartValue(start)
+            animation.setEndValue(end)
+            animation.finished.connect(
+                lambda active=animation: self._finish_compact_animation(active)
+            )
+            self._compact_animation = animation
+            self.detail_panel.setGeometry(start)
+            animation.start()
+
+        def _finish_compact_animation(self, animation):
+            if animation is not self._compact_animation:
+                return
+            self._compact_animation = None
+            animation.deleteLater()
+            self._compact_detail_open = self._compact_transition_target
+            self._apply_workspace_mode()
+            if self._compact_detail_open:
+                self._schedule_compact_source_fit()
+            else:
+                self._restore_overview_focus()
+
+        def _stop_compact_animation(self):
+            animation = self._compact_animation
+            if animation is None:
+                return
+            self._compact_animation = None
+            animation.stop()
+            animation.deleteLater()
+            self._compact_detail_open = self._compact_transition_target
+
+        def _restore_overview_focus(self):
+            self.overview_scroll.setEnabled(True)
+            self.overview_scroll.show()
+            self.overview_scroll.raise_()
+            self.overview_scroll.verticalScrollBar().setValue(
+                self._overview_scroll_value
+            )
+            card = next((
+                item for item in self._overview_cards
+                if item.property("taskId") == self._overview_focus_task_id
+            ), None)
+            if card is not None:
+                card.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+        def _reflow_compact_layout(self):
+            compact = self.width() < 760
+            self._compact_mode = compact
+            if getattr(self, "_atlas_embedded", False):
+                self.layout().setContentsMargins(
+                    *((8, 12, 8, 0) if compact else (30, 26, 30, 0))
+                )
+            self.overview_layout.setContentsMargins(
+                *((0, 8, 0, 16) if compact else (18, 8, 18, 16))
+            )
+            self.detail_panel.layout().setContentsMargins(
+                *((0, 0, 0, 0) if compact else (18, 0, 18, 0))
+            )
+            self.detail_layout.setContentsMargins(
+                *((0, 12, 0, 12) if compact else (12, 12, 12, 12))
+            )
+            self._footer_layout.setContentsMargins(
+                *((8, 12, 8, 12) if compact else (18, 16, 18, 16))
+            )
+            direction = (
+                QtWidgets.QBoxLayout.Direction.TopToBottom
+                if compact else QtWidgets.QBoxLayout.Direction.LeftToRight
+            )
+            self._footer_layout.setDirection(direction)
+            action_width = (
+                self.close_button.sizeHint().width()
+                + self.resume_button.sizeHint().width()
+                + self._footer_actions_layout.spacing()
+            )
+            available = max(0, self.width() - 36)
+            self._footer_actions_layout.setDirection(
+                QtWidgets.QBoxLayout.Direction.LeftToRight
+                if action_width <= available
+                else QtWidgets.QBoxLayout.Direction.TopToBottom
+            )
+            for row in getattr(self, "_field_rows", {}).values():
+                row.setDirection(direction)
+            for container in self.findChildren(QtWidgets.QWidget, "parseReviewBinaryActions"):
+                row = container.layout()
+                if row is not None:
+                    row.setDirection(direction)
+            for splitter in self.findChildren(QtWidgets.QSplitter, "parseAssignmentColumns"):
+                orientation = (
+                    QtCore.Qt.Orientation.Vertical if compact
+                    else QtCore.Qt.Orientation.Horizontal
+                )
+                orientation_changed = splitter.orientation() != orientation
+                first_setup = splitter.property("parseCompactLayout") is None
+                if orientation_changed:
+                    splitter.setOrientation(orientation)
+                if orientation_changed or first_setup:
+                    left = splitter.widget(0)
+                    right = splitter.widget(1)
+                    left.layout().setContentsMargins(0, 12, 0 if compact else 24, 18)
+                    right.layout().setContentsMargins(0 if compact else 26, 12, 0, 0)
+                    left.setStyleSheet(
+                        "QFrame#parseAssignmentTarget { border: 0; }" if compact else ""
+                    )
+                    if compact:
+                        # In portrait mode the original passage should take
+                        # only its natural wrapped height; the alternatives
+                        # and decision controls use the remaining scroll area.
+                        left.setMinimumHeight(0)
+                        splitter.setStretchFactor(0, 0)
+                        splitter.setStretchFactor(1, 1)
+                        splitter.setSizes([
+                            0,
+                            max(1, splitter.height()),
+                        ])
+                    else:
+                        target = left.findChild(
+                            QtWidgets.QWidget, "parseReviewOriginalText"
+                        )
+                        if target is not None:
+                            for label in target.findChildren(QtWidgets.QLabel):
+                                if label.objectName() != "parseReviewSectionHeading":
+                                    label.setMinimumHeight(0)
+                        left.setMinimumHeight(340)
+                        splitter.setStretchFactor(0, 1)
+                        splitter.setStretchFactor(1, 1)
+                        splitter.setSizes([440, 440])
+                    splitter.setProperty("parseCompactLayout", compact)
+            if compact:
+                self._schedule_compact_source_fit()
+            self._update_compact_navigation()
+
+        def _schedule_compact_source_fit(self):
+            if self._compact_source_fit_pending:
+                return
+            self._compact_source_fit_pending = True
+            QtCore.QTimer.singleShot(0, self._fit_compact_assignment_targets)
+
+        def _fit_compact_assignment_targets(self):
+            self._compact_source_fit_pending = False
+            if self.width() >= 760:
+                return
+            self.detail_layout.invalidate()
+            self.detail_layout.activate()
+            for splitter in self.findChildren(
+                QtWidgets.QSplitter, "parseAssignmentColumns"
+            ):
+                if splitter.orientation() != QtCore.Qt.Orientation.Vertical:
+                    continue
+                left = splitter.widget(0)
+                target = left.findChild(
+                    QtWidgets.QWidget, "parseReviewOriginalText"
+                )
+                left_layout = left.layout()
+                target_layout = target.layout() if target is not None else None
+                if target is None or left_layout is None or target_layout is None:
+                    continue
+
+                # A prior narrow width may have left a tall label minimum.
+                # Clear it before measuring the settled child width again.
+                left.setMinimumHeight(0)
+                source_labels = [
+                    label for label in target.findChildren(QtWidgets.QLabel)
+                    if label.objectName() != "parseReviewSectionHeading"
+                ]
+                for label in source_labels:
+                    label.setMinimumHeight(0)
+                target_layout.invalidate()
+                target_layout.activate()
+                left_layout.invalidate()
+                left_layout.activate()
+
+                widths_ready = True
+                for label in source_labels:
+                    width = label.width()
+                    if width <= 0:
+                        widths_ready = False
+                        continue
+                    required_height = (
+                        label.heightForWidth(width)
+                        if label.hasHeightForWidth()
+                        else label.sizeHint().height()
+                    )
+                    label.setMinimumHeight(max(0, required_height))
+                if not widths_ready:
+                    continue
+
+                target_layout.invalidate()
+                target_layout.activate()
+                left_layout.invalidate()
+                left_layout.activate()
+                required_card_height = max(
+                    left.minimumSizeHint().height(),
+                    left_layout.sizeHint().height(),
+                )
+                left.setMinimumHeight(required_card_height)
+                left.updateGeometry()
+                splitter.updateGeometry()
+
+        def resizeEvent(self, event):  # noqa: N802 - Qt API name
+            super().resizeEvent(event)
+            if self._compact_animation is not None:
+                self._stop_compact_animation()
+            self._apply_workspace_mode()
+            self._reflow_compact_layout()
 
         def _set_status(self, message: str, kind: str = "error"):
             self.status.setText(message)
@@ -270,6 +1124,9 @@ def create_parse_review_window(
             super().showEvent(event)
             if not self._open:
                 self._open = True
+                self._compact_detail_open = False
+                self._compact_transition_target = False
+                self._apply_workspace_mode()
                 QtCore.QTimer.singleShot(0, self._load)
 
         def _pulse_loading(self):
@@ -286,6 +1143,15 @@ def create_parse_review_window(
             generation = self._generation
             self._tasks = []
             self._current = None
+            self.overview_message.setText(labels["loading"])
+            self.overview_message.show()
+            self._rebuild_overview()
+            if self.width() < 760:
+                self._compact_detail_open = False
+                self._compact_transition_target = False
+                if self._compact_animation is not None:
+                    self._stop_compact_animation()
+                self._apply_workspace_mode()
             self._set_status("", "info")
             self.retry_button.hide()
             self._set_resume_ready(False)
@@ -308,7 +1174,10 @@ def create_parse_review_window(
             self._clear_tabs()
             if error is not None:
                 key = "refresh_error" if self._refresh_after_answer else "load_error"
-                self._set_status(labels[key].format(reason=error))
+                message = labels[key].format(reason=error)
+                self._set_status(message)
+                self.overview_message.setText(message)
+                self.overview_message.show()
                 self.retry_button.show()
                 return
             self._refresh_after_answer = False
@@ -325,8 +1194,11 @@ def create_parse_review_window(
             if not self._tasks:
                 self.task_tabs.addTab(labels["empty"])
                 self._clear_detail()
+                self.overview_message.setText(labels["empty"])
+                self._rebuild_overview()
                 self._update_review_status()
                 self._show_status_after_load()
+                self._update_compact_navigation()
                 return
             for index, task in enumerate(self._tasks, start=1):
                 tab = self.task_tabs.addTab(self._task_label(task, index))
@@ -343,7 +1215,10 @@ def create_parse_review_window(
                     if self._task_status(task) == "pending"
                 ), 0))
             self._next_task_id = None
+            self._rebuild_overview()
+            self._refresh_overview_cards()
             self._update_review_status()
+            self._update_compact_navigation()
             self._show_status_after_load()
 
         def _show_status_after_load(self):
@@ -371,9 +1246,15 @@ def create_parse_review_window(
             return self._task_name(task, index) + marker
 
         def _task_tooltip(self, task: Mapping[str, Any]) -> str:
-            status = (labels["saved"] if self._task_status(task) == "answered" else
-                      labels["draft"] if str(task.get("task_id")) in self._drafts else
-                      labels["pending"])
+            choice_state = self._task_choice_state(task)
+            if choice_state == "unknown":
+                status = labels["task_status_unknown"]
+            elif self._task_status(task) == "answered":
+                status = labels["saved"]
+            elif str(task.get("task_id") or "") in self._drafts:
+                status = labels["draft"]
+            else:
+                status = labels["pending"]
             return f"{status} · {self._raw_target(task)}"
 
         def _remember_draft(self):
@@ -408,6 +1289,7 @@ def create_parse_review_window(
             if index is not None and index < self.task_tabs.count():
                 self.task_tabs.setTabText(index, self._task_label(task, index + 1))
                 self.task_tabs.setTabToolTip(index, self._task_tooltip(task))
+            self._refresh_overview_cards(task_id)
             self._update_review_status()
 
         def _restore_draft(self, task: Mapping[str, Any]):
@@ -440,10 +1322,14 @@ def create_parse_review_window(
             if row < 0 or row >= len(self._tasks):
                 self._current = None
                 self._clear_detail()
+                self._update_compact_navigation()
                 return
             self._current = self._tasks[row]
             self._current_is_pending = self._task_status(self._current) == "pending"
             self._render_detail(self._current)
+            self._reflow_compact_layout()
+            self._update_overview_selection()
+            self._update_compact_navigation()
             self._update_review_status()
 
         def _clear_detail(self):
@@ -461,6 +1347,7 @@ def create_parse_review_window(
 
             clear_layout(self.detail_layout)
             self._fields = {}
+            self._field_rows = {}
             self._source_fields = []
             self._source_box = None
             self._add_source_button = None
@@ -478,18 +1365,23 @@ def create_parse_review_window(
         def _render_detail(self, task: Mapping[str, Any]):
             self._clear_detail()
             kind = task.get("review_kind")
+            is_assignment = kind in {
+                "citation_reference_review", "reference_claim_review",
+            }
+            self.decision_banner.setVisible(is_assignment and self._current_is_pending)
             row = self.task_tabs.currentIndex()
-            progress = QtWidgets.QLabel(labels["review_progress"].format(
-                current=row + 1, total=len(self._tasks)
-            ), self.detail)
-            progress.setObjectName("parseReviewProgress")
-            self.detail_layout.addWidget(progress)
-            title = QtWidgets.QLabel(self._task_name(task, row + 1), self.detail)
-            title.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-            title.setWordWrap(True)
-            title.setObjectName("parseReviewHeading")
-            self.detail_layout.addWidget(title)
-            if self._current_is_pending:
+            if not is_assignment or not self._current_is_pending:
+                progress = QtWidgets.QLabel(labels["review_progress"].format(
+                    current=row + 1, total=len(self._tasks)
+                ), self.detail)
+                progress.setObjectName("parseReviewProgress")
+                self.detail_layout.addWidget(progress)
+                title = QtWidgets.QLabel(self._task_name(task, row + 1), self.detail)
+                title.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+                title.setWordWrap(True)
+                title.setObjectName("parseReviewHeading")
+                self.detail_layout.addWidget(title)
+            if self._current_is_pending and not is_assignment:
                 guidance_key = {
                     "citation_reference_review": "guidance_citation",
                     "reference_claim_review": "guidance_inverse",
@@ -501,12 +1393,24 @@ def create_parse_review_window(
                     guidance.setObjectName("parseReviewGuidance")
                     guidance.setWordWrap(True)
                     self.detail_layout.addWidget(guidance)
-            raw = self._raw_target(task)
-            target = QtWidgets.QLabel(f"{labels['target']}: {raw}", self.detail)
-            target.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-            target.setObjectName("parseReviewTarget")
-            target.setWordWrap(True)
-            target.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+            if is_assignment:
+                question_key = (
+                    "question_citation" if kind == "citation_reference_review"
+                    else "question_inverse"
+                )
+                question = QtWidgets.QLabel(labels[question_key], self.detail)
+                question.setObjectName("parseReviewAssignmentQuestion")
+                question.setWordWrap(True)
+                self.detail_layout.addWidget(question)
+            if is_assignment:
+                target = self._assignment_target(task)
+            else:
+                raw = self._raw_target(task)
+                target = QtWidgets.QLabel(f"{labels['target']}: {raw}", self.detail)
+                target.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+                target.setObjectName("parseReviewTarget")
+                target.setWordWrap(True)
+                target.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
             self.detail_layout.addWidget(target)
             if not self._current_is_pending:
                 saved_title = QtWidgets.QLabel(labels["saved_answer"], self.detail)
@@ -524,8 +1428,11 @@ def create_parse_review_window(
                 self.detail_layout.addWidget(summary)
                 self.detail_layout.addStretch(1)
                 return
-            decision_label = QtWidgets.QLabel(labels["choice"], self.detail)
+            decision_label = QtWidgets.QLabel(
+                labels["candidate_references"] if kind == "citation_reference_review" else labels["choice"], self.detail
+            )
             decision_label.setObjectName("parseReviewSectionHeading")
+            decision_label.setWordWrap(True)
             self.detail_layout.addWidget(decision_label)
             self._action_group = QtWidgets.QButtonGroup(self.detail)
             self._action_group.setExclusive(True)
@@ -579,15 +1486,65 @@ def create_parse_review_window(
             self._restore_draft(task)
             self._action_changed()
             self.detail_layout.addStretch(1)
+            if kind in {"citation_reference_review", "reference_claim_review"}:
+                self._arrange_assignment_columns(target, decision_label)
+
+        def _arrange_assignment_columns(self, target, decision_label):
+            """Keep the cited passage and alternative works side by side."""
+            split = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal, self.detail)
+            split.setObjectName("parseAssignmentColumns")
+            split.setChildrenCollapsible(False)
+            split.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Expanding,
+            )
+            split.setMinimumWidth(0)
+            left = QtWidgets.QFrame(split)
+            left.setObjectName("parseAssignmentTarget")
+            left.setMinimumHeight(340)
+            left_layout = QtWidgets.QVBoxLayout(left)
+            left_layout.setContentsMargins(0, 12, 24, 18)
+            left_layout.setSpacing(12)
+            self.detail_layout.removeWidget(target)
+            left_layout.addWidget(target)
+            right = QtWidgets.QWidget(split)
+            right_layout = QtWidgets.QVBoxLayout(right)
+            right_layout.setContentsMargins(26, 12, 0, 0)
+            right_layout.setSpacing(16)
+            self.detail_layout.removeWidget(decision_label)
+            right_layout.addWidget(decision_label)
+            candidate_heading = self._candidate_container.findChild(QtWidgets.QLabel, "parseReviewSectionHeading")
+            if candidate_heading is not None:
+                candidate_heading.hide()
+            self.detail_layout.removeWidget(self._candidate_container)
+            right_layout.addWidget(self._candidate_container)
+            choice = next(iter(self._action_buttons.values())).parentWidget()
+            self.detail_layout.removeWidget(choice)
+            right_layout.addWidget(choice)
+            reason_row = self._field_rows.get("reason")
+            if reason_row is not None:
+                self.detail_layout.removeItem(reason_row)
+                right_layout.addLayout(reason_row)
+            right_layout.addStretch()
+            split.setStretchFactor(0,1)
+            split.setStretchFactor(1,1)
+            split.setSizes([440,440])
+            self.detail_layout.insertWidget(self.detail_layout.count()-1, split,1)
+            self._reflow_compact_layout()
+            split.show()
 
         def _action_changed(self, *_args):
             action = self._selected_action()
             if self._candidate_container is not None:
-                target_action = (
-                    "select_reference" if self._candidate_target_field == "ref_id"
-                    else "select_claim"
-                )
-                self._candidate_container.setEnabled(action == target_action)
+                # The candidate cards remain available so choosing one after
+                # "Keep unresolved" naturally returns to assignment mode.
+                self._candidate_container.setEnabled(True)
+                if action == "keep_unresolved" and self._candidate_group is not None:
+                    selected = self._candidate_group.checkedButton()
+                    if selected is not None:
+                        self._candidate_group.setExclusive(False)
+                        selected.setChecked(False)
+                        self._candidate_group.setExclusive(True)
             if self._source_box is not None:
                 self._source_box.setVisible(action == "split_sources")
             if "title" in self._fields:
@@ -601,16 +1558,23 @@ def create_parse_review_window(
 
         def _binary_actions(self, actions: tuple[str, str]):
             container = QtWidgets.QWidget(self.detail)
-            row = QtWidgets.QHBoxLayout(container)
+            container.setObjectName("parseReviewBinaryActions")
+            assignment = actions[0] in {"select_reference", "select_claim"}
+            row = QtWidgets.QVBoxLayout(container) if assignment else QtWidgets.QHBoxLayout(container)
             row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(0)
+            row.setSpacing(8 if assignment else 0)
             for action in actions:
                 button = QtWidgets.QPushButton(labels[action], container)
                 button.setObjectName(f"parseReviewAction_{action}")
                 button.setCheckable(True)
                 button.setProperty("action", action)
                 button.setProperty("role", "choice")
-                row.addWidget(button, 1)
+                if assignment and action == actions[0]:
+                    # Candidate radios are the visible assignment choice; keep
+                    # this checked action as the draft/payload state only.
+                    button.hide()
+                else:
+                    row.addWidget(button, 1 if not assignment else 0)
                 self._action_group.addButton(button)
                 self._action_buttons[action] = button
             self.detail_layout.addWidget(container)
@@ -620,6 +1584,7 @@ def create_parse_review_window(
             container = QtWidgets.QWidget(self.detail)
             container.setObjectName("parseReviewCandidateList")
             layout = QtWidgets.QVBoxLayout(container)
+            layout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetMinimumSize)
             layout.setContentsMargins(0, 0, 0, 0)
             heading = QtWidgets.QLabel(
                 labels["candidate_references" if target == "ref" else "candidate_claims"],
@@ -629,15 +1594,13 @@ def create_parse_review_window(
             layout.addWidget(heading)
             self._candidate_group = QtWidgets.QButtonGroup(container)
             self._candidate_group.setExclusive(True)
-            self._candidate_group.buttonClicked.connect(
-                lambda *_args: self._remember_draft()
-            )
+            self._candidate_group.buttonClicked.connect(self._candidate_selected)
             candidates = task.get("candidates") or []
             for candidate in candidates:
                 if not isinstance(candidate, dict) or not candidate.get("id"):
                     continue
                 identifier = str(candidate["id"])
-                display = labels["candidate_label"].format(
+                provenance = labels["candidate_label"].format(
                     identifier=identifier,
                     origin=candidate.get("origin") or "candidate",
                     score=(
@@ -646,31 +1609,96 @@ def create_parse_review_window(
                         else ""
                     ),
                 ).strip(" ·")
-                display = str(candidate.get("label") or display)
+                display = self._candidate_display_text(candidate, identifier)
                 option = CandidateRow(container)
                 option.setObjectName("parseReviewCandidateRow")
+                option.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+                option.setMinimumHeight(120)
                 option.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+                option.setToolTip(provenance)
                 option_layout = QtWidgets.QHBoxLayout(option)
-                option_layout.setContentsMargins(8, 6, 8, 6)
+                option_layout.setContentsMargins(24, 18, 24, 18)
+                option_layout.setSpacing(24)
                 radio = QtWidgets.QRadioButton(
-                    labels["candidate_option"].format(number=len(self._candidate_group.buttons()) + 1),
-                    option,
+                    "", option,
                 )
                 radio.setObjectName(f"parseReviewCandidate_{len(self._candidate_group.buttons())}")
                 radio.setProperty("candidate_id", identifier)
+                radio.setProperty("candidate_origin", candidate.get("origin") or "candidate")
+                radio.setProperty("candidate_score", candidate.get("score"))
                 radio.setAccessibleName(display)
+                radio.setToolTip(provenance)
                 option.radio = radio
                 self._candidate_group.addButton(radio)
                 option_layout.addWidget(radio)
                 description = QtWidgets.QLabel(display, option)
                 description.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+                description.setObjectName("parseCandidateDescription")
                 description.setWordWrap(True)
+                description.setSizePolicy(
+                    QtWidgets.QSizePolicy.Policy.Ignored,
+                    QtWidgets.QSizePolicy.Policy.Minimum,
+                )
                 description.setAttribute(QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents)
                 option_layout.addWidget(description, 1)
                 layout.addWidget(option)
+                option._schedule_content_fit()
             self.detail_layout.addWidget(container)
             self._candidate_container = container
             self._candidate_target_field = "ref_id" if target == "ref" else "claim_id"
+
+        def _candidate_selected(self, *_args):
+            if self._candidate_target_field == "ref_id":
+                action = "select_reference"
+            else:
+                action = "select_claim"
+            button = self._action_buttons.get(action)
+            if button is not None:
+                button.setChecked(True)
+            self._remember_draft()
+
+        def _assignment_target(self, task: Mapping[str, Any]):
+            container = QtWidgets.QWidget(self.detail)
+            container.setObjectName("parseReviewOriginalText")
+            layout = QtWidgets.QVBoxLayout(container)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(10)
+            heading = QtWidgets.QLabel(labels["target"], container)
+            heading.setObjectName("parseReviewSectionHeading")
+            layout.addWidget(heading)
+            kind = task.get("review_kind")
+            if kind == "citation_reference_review":
+                marker = self._recorded_text(task, "marker_raw")
+                claim = self._recorded_text(task, "claim_text")
+                parts = []
+                if isinstance(marker, str) and marker.strip():
+                    parts.append(("parseReviewCitationMarker", marker))
+                else:
+                    parts.append(("parseReviewMissingMarker", labels["missing_citation_marker"]))
+                if isinstance(claim, str) and claim.strip():
+                    parts.append(("parseReviewOriginalClaim", claim))
+                else:
+                    parts.append(("parseReviewMissingClaim", labels["missing_claim_text"]))
+            else:
+                entry = self._recorded_text(task, "raw_entry", "title")
+                parts = (
+                    [("parseReviewOriginalEntry", entry)] if entry is not None else
+                    [("parseReviewMissingReference", labels["missing_reference_text"])]
+                )
+            for object_name, text in parts:
+                value = (CitedPassage(text, container) if object_name == "parseReviewOriginalClaim"
+                         else QtWidgets.QLabel(text, container))
+                if object_name == "parseReviewOriginalClaim":
+                    value.setProperty("citationMarker", task.get("marker_raw") or "")
+                value.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+                value.setWordWrap(True)
+                value.setTextInteractionFlags(
+                    QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+                )
+                value.setObjectName(object_name)
+                layout.addWidget(value)
+            layout.addStretch(1)
+            return container
 
         def _line_field(self, label_key: str, value: Any):
             label_text = labels.get(label_key, labels["reason"])
@@ -684,6 +1712,7 @@ def create_parse_review_window(
             row.addWidget(label)
             row.addWidget(field, 1)
             self.detail_layout.addLayout(row)
+            self._field_rows[label_key] = row
             return field
 
         def _add_source_field(self):
@@ -714,22 +1743,46 @@ def create_parse_review_window(
             kind = task.get("review_kind")
             if kind == "citation_reference_review":
                 return labels["citation_target"].format(
-                    marker=task.get("marker_raw") or task.get("occurrence_id") or "?",
-                    claim=task.get("claim_text") or task.get("claim_id") or "?",
+                    marker=(self._recorded_text(task, "marker_raw")
+                            or labels["missing_citation_marker"]),
+                    claim=(self._recorded_text(task, "claim_text")
+                           or labels["missing_claim_text"]),
                 )
             if kind == "reference_claim_review":
                 return labels["reference_target"].format(
                     number=task.get("ref_number", "?"),
-                    entry=task.get("raw_entry") or task.get("ref_id") or "?",
+                    entry=(self._recorded_text(task, "raw_entry", "title")
+                           or labels["missing_reference_text"]),
                 )
             if kind == "footnote_source_review":
                 return labels["note_target"].format(
                     number=task.get("note_number", "?"),
-                    note=task.get("raw_note") or task.get("note_id") or "?",
+                    note=(self._recorded_text(task, "raw_note")
+                          or labels["missing_footnote_text"]),
                 )
             return labels["identity_target"].format(
                 number=task.get("ref_number", "?"),
-                title=task.get("raw_entry") or task.get("title") or task.get("ref_id") or "?",
+                title=(self._recorded_text(task, "raw_entry", "title")
+                       or labels["missing_reference_text"]),
+            )
+
+        @staticmethod
+        def _recorded_text(source: Mapping[str, Any], *keys: str) -> str | None:
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value
+            return None
+
+        def _candidate_display_text(
+            self, candidate: Mapping[str, Any], identifier: str,
+        ) -> str:
+            label = self._recorded_text(candidate, "label")
+            if label is not None and label != identifier:
+                return label
+            return (
+                self._recorded_text(candidate, "raw_entry", "claim_text", "title")
+                or labels["missing_candidate_text"]
             )
 
         def _readonly_value(self, label_key: str, value: Any):
@@ -763,7 +1816,10 @@ def create_parse_review_window(
                     item for item in task.get("candidates") or ()
                     if isinstance(item, dict) and item.get("id") == selected_id
                 ), None)
-                lines.append(str(candidate.get("label") if candidate else selected_id))
+                lines.append(
+                    self._candidate_display_text(candidate, str(selected_id))
+                    if candidate else labels["missing_candidate_text"]
+                )
             source_texts = answer.get("source_texts")
             if isinstance(source_texts, list):
                 lines.append(labels["saved_source_count"].format(count=len(source_texts)))
@@ -910,6 +1966,10 @@ def create_parse_review_window(
         def hideEvent(self, event):  # noqa: N802 - Qt API name
             if self._open:
                 self._remember_draft()
+                if self._compact_animation is not None:
+                    self._stop_compact_animation()
+                self._compact_detail_open = False
+                self._compact_transition_target = False
                 self._open = False
                 self._generation += 1
                 self._pulse.stop()
@@ -928,12 +1988,14 @@ def create_parse_review_window(
                 ("#1b1f24", "#edf3ff", "#101722", "#45546a", "#3979c7",
                  "#4c91e4", "#285c9b", "#273140", "#20354d", "#59c896", "#ff908c")
                 if dark else
-                ("#f4f6fa", "#18202a", "#ffffff", "#b7c6da", "#2457a6",
+                ("#f8fbfe", "#11183c", "#ffffff", "#d1def2", "#2457a6",
                  "#316dc1", "#184485", "#e8edf5", "#e9f2ff", "#16744b", "#b4232f")
             )
             self.setStyleSheet(
                 f"QDialog {{ background: {background}; color: {foreground}; }}"
                 f"QWidget {{ color: {foreground}; }}"
+                f"QWidget#parseReviewWorkspace {{ background: {background}; }}"
+                f"QScrollArea#parseReviewOverviewScroll, QWidget#parseReviewOverview {{ background: {background}; }}"
                 f"QScrollArea#parseReviewDetailScroll, QWidget#parseReviewDetail {{ background: {background}; }}"
                 f"QScrollArea#parseReviewDetailScroll > QWidget > QWidget {{ background: {background}; }}"
                 f"QPlainTextEdit, QLineEdit {{ background: {surface}; "
@@ -942,7 +2004,7 @@ def create_parse_review_window(
                 f"QTabBar#parseReviewTaskTabs::tab {{ background: {surface}; "
                 f"border: 1px solid {border}; border-bottom: none; "
                 f"border-top-left-radius: 5px; border-top-right-radius: 5px; "
-                f"padding: 8px 12px; min-width: 115px; max-width: 220px; }}"
+                f"padding: 8px 12px; min-width: 115px; }}"
                 f"QTabBar#parseReviewTaskTabs::tab:hover {{ background: {muted}; }}"
                 f"QTabBar#parseReviewTaskTabs::tab:pressed {{ background: {pressed}; color: white; }}"
                 f"QTabBar#parseReviewTaskTabs::tab:selected {{ background: {background}; "
@@ -952,6 +2014,19 @@ def create_parse_review_window(
                 f"QTabBar#parseReviewTaskTabs QToolButton:hover {{ background: {muted}; }}"
                 f"QTabBar#parseReviewTaskTabs QToolButton:pressed {{ background: {pressed}; }}"
                 f"QLabel#parseReviewProgress {{ color: {accent}; font-weight: 700; }}"
+                f"QLabel#parseReviewAssignmentQuestion {{ color: {accent}; font-size: 18px; font-weight: 700; }}"
+                f"QLabel#parseReviewOverviewHeading {{ font-size: 22px; font-weight: 700; }}"
+                f"QPushButton#parseReviewTaskCard {{ text-align: left; background: {surface}; border: 1px solid {border}; border-left: 6px solid #8490a3; border-radius: 6px; padding: 2px; }}"
+                f"QPushButton#parseReviewTaskCard:hover {{ background: {muted}; border-color: {accent}; }}"
+                f"QPushButton#parseReviewTaskCard:focus {{ border-color: {accent}; }}"
+                f"QPushButton#parseReviewTaskCard[selected='true'] {{ border-color: {accent}; }}"
+                f"QPushButton#parseReviewTaskCard[status='selected'] {{ border-left-color: {success}; }}"
+                f"QPushButton#parseReviewTaskCard[status='unresolved'] {{ border-left-color: {'#ffca66' if dark else '#a6600c'}; }}"
+                f"QLabel#parseReviewTaskTitle {{ font-weight: 700; }}"
+                f"QLabel#parseReviewTaskContext {{ color: {'#c0c9d8' if dark else '#48556a'}; }}"
+                f"QLabel#parseReviewTaskState[status='selected'] {{ color: {success}; font-weight: 700; }}"
+                f"QLabel#parseReviewTaskState[status='unresolved'] {{ color: {'#ffca66' if dark else '#a6600c'}; font-weight: 700; }}"
+                f"QLabel#parseReviewTaskState[status='pending'], QLabel#parseReviewTaskState[status='unknown'] {{ color: {'#a8b1c0' if dark else '#687386'}; }}"
                 f"QLabel#parseReviewHeading {{ font-size: 18px; font-weight: 700; }}"
                 f"QLabel#parseReviewSectionHeading, QLabel#parseReviewSavedHeading {{ font-weight: 700; }}"
                 f"QLabel#parseReviewGuidance {{ background: {guidance}; border-left: 4px solid {accent}; "
@@ -963,6 +2038,12 @@ def create_parse_review_window(
                 f"QWidget#parseReviewCandidateRow {{ background: {surface}; "
                 f"border: 1px solid {border}; border-radius: 4px; }}"
                 f"QWidget#parseReviewCandidateRow:hover {{ background: {muted}; }}"
+                f"QRadioButton {{ spacing: 10px; }}"
+                f"QRadioButton::indicator {{ width: 22px; height: 22px; "
+                f"border: 2px solid {border}; border-radius: 12px; background: {surface}; }}"
+                f"QRadioButton::indicator:hover {{ background: {muted}; border-color: {accent}; }}"
+                f"QRadioButton::indicator:checked {{ background: {accent}; border-color: {accent}; }}"
+                f"QRadioButton::indicator:checked:hover {{ background: {hover}; border-color: {hover}; }}"
                 f"QRadioButton:hover {{ color: {accent}; }}"
                 f"QRadioButton:pressed {{ color: {pressed}; }}"
                 f"QPushButton {{ background: {surface}; border: 1px solid {border}; "
@@ -982,6 +2063,37 @@ def create_parse_review_window(
                 f"QPushButton#parseReviewSkip:enabled {{ border-color: {accent}; color: {accent}; }}"
                 f"QPushButton#parseReviewSkip:enabled:hover {{ background: {muted}; }}"
                 f"QPushButton#parseReviewSkip:enabled:pressed {{ background: {pressed}; color: white; }}"
+                + atlante_stylesheet(
+                    dark=dark,
+                    font_size=getattr(self, "_font_size", 13),
+                )
+                + f"""
+                QFrame#parseAssignmentTarget {{ background: transparent; border: 0; border-right: 1px solid {border}; }}
+                QFrame#parseAssignmentTarget QLabel#parseReviewTarget {{ border: 0; font-size: 16px; }}
+                QWidget#parseReviewCandidateRow {{ background: {surface}; border: 1px solid {border}; border-radius: 5px; min-height: 120px; }}
+                QWidget#parseReviewCandidateRow:hover {{ background: {muted}; border-color: {accent}; }}
+                QLabel#parseReviewSectionHeading {{ font-size: {getattr(self, '_font_size', 13)+8}px; font-weight: 700; }}
+                QLabel#parseReviewCitationMarker {{ color: {accent}; font-size: {getattr(self, '_font_size', 13)+2}px; padding: 8px 0; }}
+                QLabel#parseReviewOriginalClaim {{ font-family: Georgia, serif; font-size: {getattr(self, '_font_size', 13)+10}px; }}
+                QLabel#parseCandidateDescription {{ font-size: {getattr(self, '_font_size', 13)+3}px; }}
+                QLabel#parseDecisionBanner {{ background: {'#4b3617' if dark else '#fff3d7'}; color: {'#ffd27b' if dark else '#98600c'}; border: 1px solid #e7ac36; border-radius: 5px; padding: 12px 12px 12px 44px; }}
+                QFrame#parseDecisionFooter {{ background: {surface}; border: 0; border-top: 1px solid {border}; }}
+                QLabel#parseReviewOriginalEntry {{ font-size: 18px; }}
+                QPushButton#parseReviewAction_keep_unresolved {{ text-align: left; padding-left: 24px; min-height: 74px; font-weight: 400; }}
+                QCheckBox:hover, QRadioButton:hover {{ color: {accent}; }}
+                QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
+                    background: {muted}; border-color: {accent}; }}
+                QCheckBox::indicator:pressed, QRadioButton::indicator:pressed {{
+                    background: {pressed}; border-color: {accent}; }}
+                """
             )
+            from core.gui.shell.navigation import set_back_button_presentation
+            set_back_button_presentation(
+                self.back_button, QtCore, QtGui, dark=dark,
+                label=labels["back_to_list"], text=labels["back_to_list"],
+            )
+            self.back_button.setToolTip(labels["back_to_list_tip"])
+            self._update_compact_navigation()
+            self._refresh_overview_cards()
 
     return ParseReviewWindow()

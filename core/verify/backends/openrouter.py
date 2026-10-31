@@ -62,6 +62,7 @@ def _call_openrouter_api(system: str, user: str, model: str,
 register(BackendSpec(
     name="openrouter",
     env_key=ENV_OPENROUTER_KEY,
+    env_model="OPENROUTER_MODEL",
     available=_available,
     call=_call_openrouter_api,
     auto_priority=50,

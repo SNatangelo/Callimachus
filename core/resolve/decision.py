@@ -1515,6 +1515,68 @@ def _resolution_identity(ref: dict, result: dict | None, status: str) -> Identit
     return declared
 
 
+def _discovered_identity_has_title_support(ref: dict, result: dict | None) -> bool:
+    """Require a real citation-title signal before discovered IDs become strong."""
+    if not isinstance(ref, dict) or not isinstance(result, dict):
+        return False
+    resolve_mod = _resolve_module()
+    expected_title = ref.get("title") or resolve_mod._article_title_candidate(ref)
+    matched_title = result.get("matched_title")
+    if not isinstance(expected_title, str) or not expected_title.strip():
+        return False
+    if not isinstance(matched_title, str) or not matched_title.strip():
+        return False
+    # Recompute from the citation title itself.  The serialized profile can be
+    # based on a raw-entry fallback when no parser span exists, which can borrow
+    # a corporate author name.  The title comparator also preserves meaningful
+    # symbol distinctions that a punctuation-stripped key would erase.
+    title_score = resolve_mod._title_match_score(expected_title, matched_title)
+    if not isinstance(title_score, (int, float)) or isinstance(title_score, bool):
+        return False
+    return float(title_score) >= 0.50
+
+
+def _discovered_identity_has_titleless_coordinate_support(
+    ref: dict,
+    result: dict | None,
+    identity: Identity,
+    *,
+    resolution_basis: str | None,
+    attempts: list[dict] | None,
+) -> bool:
+    """Accept a titleless DOI only after its complete coordinate proof is relocked."""
+    if (
+        not isinstance(result, dict)
+        or resolution_basis != "metadata_search"
+        or result.get("status") != "resolved"
+        or result.get("via") != "crossref_metadata"
+        or result.get("resolution_basis") != "metadata_search"
+    ):
+        return False
+    resolve_mod = _resolve_module()
+    resolved_identifier = resolve_mod._resolved_identifier_summary(result)
+    if (
+        not isinstance(resolved_identifier, dict)
+        or resolved_identifier.get("type") != "doi"
+        or resolved_identifier.get("validated_via")
+        != "crossref:complete_coordinate_certificate"
+        or not isinstance(resolved_identifier.get("value"), str)
+        or not isinstance(result.get("doi"), str)
+    ):
+        return False
+    resolved_doi = _normalize_identity_value(
+        "doi", resolved_identifier.get("value"),
+    )
+    if (
+        identity.scheme != "doi"
+        or not resolved_doi
+        or identity.value != resolved_doi
+        or _normalize_identity_value("doi", result.get("doi")) != resolved_doi
+    ):
+        return False
+    return resolve_mod._resolved_identity_is_locked(ref, {}, result, attempts)
+
+
 def _resolution_identity_state(
     ref: dict,
     *,
@@ -1522,6 +1584,9 @@ def _resolution_identity_state(
     reference_status_tag: str | None,
     identity: Identity,
     discovered_identity_validated: bool = False,
+    result: dict | None = None,
+    resolution_basis: str | None = None,
+    attempts: list[dict] | None = None,
     bibliographic_identity_status: str | None = None,
 ) -> str:
     declared = _declared_identity(ref)
@@ -1535,7 +1600,16 @@ def _resolution_identity_state(
                 and declared.value == identity.value
             ):
                 return IdentityState.RESOLVED_STRONG_DECLARED.value
-            if discovered_identity_validated:
+            if discovered_identity_validated and (
+                _discovered_identity_has_title_support(ref, result)
+                or _discovered_identity_has_titleless_coordinate_support(
+                    ref,
+                    result,
+                    identity,
+                    resolution_basis=resolution_basis,
+                    attempts=attempts,
+                )
+            ):
                 return IdentityState.RESOLVED_STRONG_DISCOVERED.value
         return IdentityState.WEAKLY_CORROBORATED.value
     if status in ("not_found", "identifier_mismatch"):
@@ -1793,6 +1867,9 @@ def _build_resolution_decision(
             reference_status_tag=reference_status_tag,
             identity=identity,
             discovered_identity_validated=discovered_identity_validated,
+            result=result,
+            resolution_basis=resolution_basis,
+            attempts=attempts,
             bibliographic_identity_status=bibliographic_identity_status,
         )
     )

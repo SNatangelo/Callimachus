@@ -165,11 +165,12 @@ def _direct_fetch_html(url: str, timeout: int = 30) -> bytes | None:
             url, headers={"User-Agent": "CitationVerifier/1.0"}
         )
         from core.resolve import transport_telemetry
+        from core.fetch.transport.http_headers import open_request
 
         started = time.monotonic()
         with transport_telemetry.physical_request(method="GET", url=url):
             try:
-                with urllib.request.urlopen(request, timeout=timeout) as response:
+                with open_request(request, timeout=timeout) as response:
                     body = response.read()
                     transport_telemetry.record_attempt(
                         method="GET",

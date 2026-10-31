@@ -243,6 +243,8 @@
     const guardTerminated = rejectedJury1Attempts.length > 0 || rejections.length > 0 || (pair.pair_state || {}).terminal_cause === "jury1_guard" || finalizer.terminal_cause === "jury1_guard" || finalizer.cause === "jury1_guard";
     drawer.append(detailCard("heading.pair_result", [
       ["field.semantic_outcome", status(outcome(pair))], ["field.assurance", status(verification.assurance || verification.resolution)],
+      ["field.reason", pairVerificationReason(pair)],
+      ["field.source_version", pairArxivVersion(pair)],
       ["field.result_class", status(verification.result_class)], ["field.evidence_scope", status(verification.scope || verification.evidence_scope)],
     ]));
     const rejectedJury2Attempts = pair.rejected_jury2_attempts || [];
@@ -378,6 +380,52 @@
     return typeof loc().messages[key] === "string" ? t(key) : "";
   };
   const sourceTextAvailabilityBadge = item => badge(sourceTextAvailability(item));
+  const pairVerificationReason = pair => {
+    const resolution = (pair.verification || {}).resolution || (pair.pair_state || {}).terminal_cause;
+    if (resolution) return (pair.verification || {}).semantic_outcome ? "" : status(resolution);
+    if (!(pair.dispatch_attempts || []).length) {
+      const source = sourceById.get(pair.ref_id);
+      if (source && !bestTier(source)) return sourceTextAvailabilityDetail(source);
+    }
+    return "";
+  };
+  const arxivVersionNode = (entry, reference = {}) => {
+    const version = (entry || {}).arxiv_version;
+    if (!version || typeof version !== "object" || !Number.isSafeInteger(version.version) || version.version <= 0
+      || !/^(?:\d{4}\.\d{4,5}|[a-z][a-z.-]*\/\d{7})$/i.test(version.arxiv_id || "")) return null;
+    const versionedUrl = "https://arxiv.org/pdf/" + version.arxiv_id + "v" + version.version;
+    if (version.versioned_url !== versionedUrl) return null;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(version.version_date || "") ? version.version_date : "";
+    const label = t("version.arxiv", {version: version.version}) + (date ? " · " + date : "");
+    const details = add(el("div", {class: "cv-table-secondary"}), el("a", {href: versionedUrl, target: "_blank", rel: "noopener noreferrer"}, label));
+    const observed = version.latest_observation || {};
+    const observedIds = new URLSearchParams(String(observed.request_url || "").split("?")[1] || "").getAll("id_list");
+    if (Number.isSafeInteger(version.latest_version) && version.latest_version > version.version
+      && /^https:\/\/export\.arxiv\.org\/api\/query\?/.test(observed.request_url || "")
+      && observedIds.length === 1 && observedIds[0] === version.arxiv_id
+      && /^[a-f0-9]{64}$/.test(observed.response_sha256 || "")) {
+      details.append(el("div", {}, t("version.newer_recorded", {version: version.latest_version})));
+    }
+    const citedYear = reference.year || reference.ay_year;
+    const versionYear = date ? Number(date.slice(0, 4)) : null;
+    if (Number.isInteger(citedYear) && versionYear && citedYear < versionYear) {
+      details.append(el("div", {}, t("version.citation_year_predates", {cited_year: citedYear, version_year: versionYear})));
+    }
+    return details;
+  };
+  const pairArxivVersion = pair => {
+    const source = sourceById.get(pair.ref_id);
+    if (!source) return null;
+    const representativeId = (pair.verification || {}).representative_candidate_id;
+    const representative = representativeId ? (pair.candidates || []).find(candidate => candidate.candidate_id === representativeId) : null;
+    if (representativeId && !representative) return null;
+    const hashes = new Set((representative ? [representative] : (pair.logical_requests || [])).map(item => item.source_hash).filter(hash => /^[a-f0-9]{64}$/.test(hash || "")));
+    if (hashes.size !== 1) return null;
+    const hash = [...hashes][0];
+    const entries = (source.manifest_entries || []).filter(entry => isVerifiableManifestEntry(entry) && entry.sha256 === hash);
+    const entry = entries.find(item => item.selected_for_verification) || (entries.length === 1 ? entries[0] : null);
+    return arxivVersionNode(entry, source.reference);
+  };
   const scoreText = value => typeof value === "number" ? new Intl.NumberFormat(localeId, {maximumFractionDigits: 3}).format(value) : value;
   const comparisonPanel = (titleKey, entries, extraClass = "") => {
     const details = detailList(entries);
@@ -509,6 +557,7 @@
         ["field.evidence_scope", status(acquired.tier)],
         ["field.acquisition_origin", acquired.origin ? status(acquired.origin) : null],
         ["field.source_location", acquired.source_ref || acquired.source_url || acquired.url],
+        ["field.source_version", arxivVersionNode(acquired, reference)],
         ["field.extraction_method", acquired.extraction_method],
         ["field.character_count", acquired.char_count ? t("value.character_count", {count: acquired.char_count}) : null],
         ["field.identity", acquired.identity_status ? badge(acquired.identity_status) : null],
@@ -952,7 +1001,7 @@
       {name: "completion", label: "filter.completion", get: item => (item.verification || {}).operational_complete ? "completed" : "incomplete", status: true},
     ];
     const items = match(state.projection.pairs || [], fields);
-    return section("heading.pairs", filters(state.projection.pairs || [], fields), items.length ? table([{label: "column.claim_text", value: item => primary(excerpt(claimText(claimById.get(item.claim_id))), sourceLabel(sourceById.get(item.ref_id)))}, {label: "column.outcome", value: item => badge(outcome(item))}, {label: "column.assurance", value: item => primary(status((item.verification || {}).assurance || (item.verification || {}).resolution), rejectedJury2Count(item) ? t("value.jury2_rejections", {count: rejectedJury2Count(item)}) : "")}, {label: "column.model", value: item => modelsFor([item])}], items, showPair) : card(el("p", {}, t("empty.no_results"))));
+    return section("heading.pairs", filters(state.projection.pairs || [], fields), items.length ? table([{label: "column.claim_text", value: item => primary(excerpt(claimText(claimById.get(item.claim_id))), sourceLabel(sourceById.get(item.ref_id)))}, {label: "column.outcome", value: item => add(el("div"), badge(outcome(item)), el("div", {class: "cv-table-secondary"}, pairVerificationReason(item)), pairArxivVersion(item))}, {label: "column.assurance", value: item => primary(status((item.verification || {}).assurance || (item.verification || {}).resolution), rejectedJury2Count(item) ? t("value.jury2_rejections", {count: rejectedJury2Count(item)}) : "")}, {label: "column.model", value: item => modelsFor([item])}], items, showPair) : card(el("p", {}, t("empty.no_results"))));
   };
   const structured = (titleKey, value) => {
     const entries = value && typeof value === "object" ? Object.entries(value) : [];

@@ -4,154 +4,106 @@
 name: CI
 
 on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main", "Callimachus-2.0.0"]
   workflow_dispatch:
+    inputs:
+      native_macos_fixture:
+        description: Run the selected native macOS Keychain fixture
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
-  source:
-    runs-on: ubuntu-latest
-    outputs:
-      ready: ${{ steps.check.outputs.ready }}
+  selected-suite:
+    name: Selected suite (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows 2022
+            os: windows-2022
+          - name: Ubuntu 22.04
+            os: ubuntu-22.04
+    env:
+      CITATION_VERIFIER_LLM_BACKEND: dummy
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Check release source
-        id: check
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13.15"
+      - name: Install selected-suite dependencies
         shell: bash
         run: |
-          if [[ -f run.py && -f core/app/run.py && -f requirements.txt ]]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Application source and requirements have not been imported yet; test jobs are pending."
-          fi
-
-  desktop-gui:
-    needs: source
-    if: needs.source.outputs.ready == 'true' && (github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install Linux Qt library
+          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: \
+            -c packaging/release-constraints.txt \
+            -r requirements.txt -r requirements-gui.txt \
+            -r requirements-ocr.txt -r requirements-rag.txt \
+            pytest pytest-subtests
+      - name: Run the retained selected suite
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1
-      - name: Install desktop test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements-gui.txt pytest
-      - name: Run desktop tests
-        env:
-          QT_QPA_PLATFORM: offscreen
-          PYTHONUTF8: "1"
-          CITATION_VERIFIER_LLM_BACKEND: dummy
-        run: >-
-          python -m pytest
-          tests/test_desktop_projection.py
-          tests/test_desktop_config.py
-          tests/test_cache_maintenance.py
-          tests/test_desktop_command.py
-          tests/test_desktop_gui_optional.py
-          tests/test_guided_fetch_viewmodel.py
-          tests/test_guided_fetch_controller.py
-          tests/test_guided_fetch_gui_optional.py
-          tests/test_gui_browser_worker.py
-          tests/test_store_disclosures.py
-          -q
-
-  fast:
-    needs: source
-    if: needs.source.outputs.ready == 'true' && (github.event_name == 'pull_request' || github.event_name == 'push')
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
-      - name: Run core tests
-        env:
-          CITATION_VERIFIER_LLM_BACKEND: dummy
-        run: >-
-          python -m pytest
-          tests/verify/claim_evidence/domain/test_policy.py
-          tests/test_hidden_source_grounding.py
-          tests/test_resume_hash_integrity.py
-          tests/test_pipeline_end_to_end.py
-          tests/test_db_persistence.py
-          tests/test_current_schema_rejection.py
-          tests/test_content_store_deployment.py
-          tests/test_fetch_content_version.py
-          tests/test_verdict_validation.py
-          tests/test_run_report.py
-          -q
-
-  full:
-    needs: source
-    if: needs.source.outputs.ready == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
-      - name: Run selected test suite
-        env:
-          CITATION_VERIFIER_LLM_BACKEND: dummy
         run: python -m pytest tests -q
+      - name: Run the retained selected suite
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force C:\cv-tmp | Out-Null
+          $env:TEMP = 'C:\cv-tmp'
+          $env:TMP = 'C:\cv-tmp'
+          python -m pytest tests -q
 
-  full-matrix:
-    needs: source
-    if: needs.source.outputs.ready == 'true' && github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+  native-macos-fixture:
+    if: github.event_name == 'workflow_dispatch' && inputs.native_macos_fixture
+    name: Native macOS Keychain fixture
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CITATION_VERIFIER_LLM_BACKEND: dummy
+      PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install Linux Qt library
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl1
-      - name: Install dependencies
+          python-version: "3.13.15"
+      - name: Install native fixture dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt pytest
-      - name: Use the release Qt binding
-        run: python -m pip install PySide6 -c packaging/release-constraints.txt
-      - name: Run selected test suite
+          python -m pip install --only-binary=:all: \
+            -c packaging/release-constraints.txt \
+            -r requirements.txt -r requirements-gui.txt pytest
+      - name: Create an isolated synthetic Keychain
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/callimachus-native-fixture.keychain-db"
+          password="$(openssl rand -base64 32)"
+          echo "::add-mask::$password"
+          if test -e "$keychain"; then security delete-keychain "$keychain"; fi
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "CALLIMACHUS_NATIVE_KEYCHAIN_PATH=$keychain" >> "$GITHUB_ENV"
+      - name: Run the selected native macOS fixture
         env:
-          CITATION_VERIFIER_LLM_BACKEND: dummy
-          QT_QPA_PLATFORM: offscreen
-          PYTHONUTF8: "1"
-        run: python -m pytest tests -q
+          CALLIMACHUS_RUN_NATIVE_KEYCHAIN_TESTS: "1"
+        run: python -m pytest tests/test_macos_single_vault_native.py -q
+      - name: Remove the synthetic Keychain
+        if: always()
+        run: |
+          keychain="$RUNNER_TEMP/callimachus-native-fixture.keychain-db"
+          if test -e "$keychain"; then security delete-keychain "$keychain"; fi

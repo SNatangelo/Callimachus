@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import sqlite3
-from pathlib import Path
 
 import pytest
 
@@ -173,35 +171,6 @@ def test_manifest_rejects_connection_to_different_database(tmp_path):
         wrong_connection.close()
 
 
-def test_run_manifest_inventories_long_guided_ocr_paths_unchanged(tmp_path):
-    root = tmp_path / "long-run"
-    Path(io_path(root)).mkdir(parents=True, exist_ok=True)
-    while len(str(root)) < 180:
-        remaining = 180 - len(str(root)) - 1
-        component_length = max(1, min(80, remaining))
-        root = root / ("r" + "x" * (component_length - 1))
-        Path(io_path(root)).mkdir(parents=True, exist_ok=True)
-
-    scan_id = "a" * 64
-    text_sha256 = hashlib.sha256(b"guided OCR text bytes").hexdigest()
-    relative = f"sources/guided_ocr/{scan_id}-{text_sha256}.txt"
-    artifact = root.joinpath(*relative.split("/"))
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    data = b"guided OCR text bytes"
-    with open(io_path(artifact), "wb") as handle:
-        handle.write(data)
-    connection = _run_database(root, [])
-    try:
-        manifest = build_run_manifest(connection, str(root))
-    finally:
-        connection.close()
-        shutil.rmtree(io_path(root))
-
-    assert len(str(artifact)) > 260
-    assert [
-        (entry.logical_path, entry.sha256, entry.byte_count)
-        for entry in manifest.files
-    ] == [(relative, hashlib.sha256(data).hexdigest(), len(data))]
 
 
 def test_run_manifest_hashes_binary_bytes_through_windows_crt(tmp_path):

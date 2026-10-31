@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import brotli as _brotli
 import contextlib
-import gzip
 import os
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+
+from core.shared import http_body_limits as _http_body_limits
 
 try:
     from core.fetch.extraction import fetch_html as _fetch_html
@@ -89,11 +90,88 @@ def _retry_after_seconds(err) -> float:
     return max(0.0, min(value, MAX_RETRY_AFTER))
 
 
-def _decompress_deflate(body: bytes) -> bytes:
+def _decompress_zlib_limited(body: bytes, wbits: int, max_output_bytes: int) -> bytes:
+    decoder = zlib.decompressobj(wbits)
+    output = bytearray()
+    pending = body
+    while True:
+        chunk = decoder.decompress(pending, max_output_bytes - len(output) + 1)
+        output.extend(chunk)
+        if len(output) > max_output_bytes:
+            raise _http_body_limits.HTTPBodyLimitError(
+                max_output_bytes, observed_bytes=len(output)
+            )
+        next_pending = decoder.unconsumed_tail
+        if next_pending and next_pending == pending and not chunk:
+            raise zlib.error("decompressor made no progress")
+        pending = next_pending
+        if not pending:
+            break
+    if not decoder.eof:
+        raise zlib.error("incomplete compressed stream")
+    return bytes(output)
+
+
+def _decompress_gzip_limited(body: bytes, max_output_bytes: int) -> bytes:
+    output = bytearray()
+    remaining = body.lstrip(b"\x00")
+    while remaining:
+        decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        pending = remaining
+        while True:
+            chunk = decoder.decompress(pending, max_output_bytes - len(output) + 1)
+            output.extend(chunk)
+            if len(output) > max_output_bytes:
+                raise _http_body_limits.HTTPBodyLimitError(
+                    max_output_bytes, observed_bytes=len(output)
+                )
+            if decoder.eof:
+                # Python's gzip.decompress accepts zero padding between members
+                # and at EOF. Keep that compatibility without treating arbitrary
+                # trailing bytes as a second gzip member.
+                remaining = decoder.unused_data.lstrip(b"\x00")
+                break
+            next_pending = decoder.unconsumed_tail
+            if next_pending and next_pending == pending and not chunk:
+                raise zlib.error("decompressor made no progress")
+            pending = next_pending
+            if not pending:
+                raise zlib.error("incomplete gzip stream")
+    return bytes(output)
+
+
+def _decompress_brotli_limited(body: bytes, max_output_bytes: int) -> bytes:
+    decoder = _brotli.Decompressor()
+    output = bytearray()
+    chunk = decoder.process(body, output_buffer_limit=max_output_bytes + 1)
+    output.extend(chunk)
+    if len(output) > max_output_bytes:
+        raise _http_body_limits.HTTPBodyLimitError(
+            max_output_bytes, observed_bytes=len(output)
+        )
+    while not decoder.is_finished():
+        remaining = max_output_bytes - len(output) + 1
+        chunk = decoder.process(
+            b"", output_buffer_limit=min(_http_body_limits.HTTP_READ_CHUNK_SIZE, remaining)
+        )
+        output.extend(chunk)
+        if len(output) > max_output_bytes:
+            raise _http_body_limits.HTTPBodyLimitError(
+                max_output_bytes, observed_bytes=len(output)
+            )
+        if not chunk and not decoder.is_finished():
+            raise ValueError("incomplete Brotli stream")
+    return bytes(output)
+
+
+def _decompress_deflate(body: bytes, max_output_bytes: int | None = None) -> bytes:
+    if max_output_bytes is None:
+        max_output_bytes = _http_body_limits.HTTP_DOCUMENT_BODY_LIMIT
     try:
-        return zlib.decompress(body)
+        return _decompress_zlib_limited(body, zlib.MAX_WBITS, max_output_bytes)
     except zlib.error:
-        return zlib.decompress(body, -zlib.MAX_WBITS)  # raw deflate, no zlib header
+        # Raw deflate (without a zlib wrapper) is common in legacy HTTP servers.
+        return _decompress_zlib_limited(body, -zlib.MAX_WBITS, max_output_bytes)
 
 
 class ContentDecodingError(ValueError):
@@ -110,15 +188,21 @@ class ContentDecodingError(ValueError):
         super().__init__(message)
 
 
-_BODY_DECODERS = {
-    "br": _brotli.decompress,
-    "gzip": gzip.decompress,
-    "x-gzip": gzip.decompress,
-    "deflate": _decompress_deflate,
-}
+def _response_body_limit(headers, *, profile: str, accept: str) -> int:
+    return _http_body_limits.response_body_limit(
+        headers, profile=profile, accept=accept
+    )
 
 
-def _decode_body(body: bytes, headers) -> bytes:
+def _read_response_body(response, *, limit_bytes: int, headers=None) -> bytes:
+    return _http_body_limits.read_limited_body(
+        response, limit_bytes=limit_bytes, headers=headers
+    )
+
+
+def _decode_body(
+    body: bytes, headers, *, max_output_bytes: int | None = None
+) -> bytes:
     """Undo any ``Content-Encoding`` the response declares.
 
     We never send an ``Accept-Encoding``, so a live server answers identity and
@@ -135,6 +219,8 @@ def _decode_body(body: bytes, headers) -> bytes:
     """
     if not body:
         return body
+    if max_output_bytes is None:
+        max_output_bytes = _http_body_limits.HTTP_DOCUMENT_BODY_LIMIT
     try:
         declared = str(headers.get("Content-Encoding") or "")
     except AttributeError:
@@ -142,11 +228,17 @@ def _decode_body(body: bytes, headers) -> bytes:
     for encoding in reversed([tok.strip().lower() for tok in declared.split(",") if tok.strip()]):
         if encoding == "identity":
             continue
-        decoder = _BODY_DECODERS.get(encoding)
-        if decoder is None:
+        if encoding not in {"br", "gzip", "x-gzip", "deflate"}:
             raise ContentDecodingError(encoding, "content_encoding_unsupported")
         try:
-            body = decoder(body)
+            if encoding == "br":
+                body = _decompress_brotli_limited(body, max_output_bytes)
+            elif encoding in {"gzip", "x-gzip"}:
+                body = _decompress_gzip_limited(body, max_output_bytes)
+            else:
+                body = _decompress_deflate(body, max_output_bytes)
+        except _http_body_limits.HTTPBodyLimitError:
+            raise
         except Exception as exc:
             raise ContentDecodingError(
                 encoding,
@@ -216,8 +308,15 @@ def _get(
     try:
         with _perf.span("fetch_download", host or None):
             with _http_headers_mod.open_request(req, timeout=timeout) as r:
-                raw_body = r.read()
-        body = _decode_body(raw_body, r.headers)
+                body_limit = _response_body_limit(
+                    r.headers, profile=profile, accept=accept
+                )
+                raw_body = _read_response_body(
+                    r, limit_bytes=body_limit, headers=r.headers
+                )
+        body = _decode_body(
+            raw_body, r.headers, max_output_bytes=body_limit
+        )
         status = r.status
         limiter.report_success_for_url(url)
         if _return_effective_url:
@@ -284,7 +383,7 @@ def _transport_error_result(exc: Exception) -> dict:
         "content_type": None,
         "url": None,
         "transport_error": {
-            "reason_code": "transport_error",
+            "reason_code": getattr(exc, "reason_code", "transport_error"),
             "exception_type": type(exc).__name__,
         },
     }
@@ -296,6 +395,8 @@ def _open_and_read(
     timeout: int,
     url: str,
     *,
+    profile: str = "document",
+    accept: str = "*/*",
     admission_token: int | None = None,
     limiter=None,
     attempt_kind: str = "primary",
@@ -314,25 +415,43 @@ def _open_and_read(
         with _perf.span("fetch_download", host or None):
             try:
                 with opener_open(req, timeout=timeout) as r:
-                    raw_body = r.read()
+                    body_limit = _response_body_limit(
+                        r.headers, profile=profile, accept=accept
+                    )
+                    raw_body = _read_response_body(
+                        r, limit_bytes=body_limit, headers=r.headers
+                    )
             except urllib.error.HTTPError as exc:
                 response_error = exc
+                status = exc.code
+                error = exc
+                if exc.code == 429:
+                    limiter.cooldown_for_url(
+                        url, _retry_after_seconds(exc), admission_token=admission_token
+                    )
                 try:
-                    raw_body = exc.read()
+                    body_limit = _response_body_limit(
+                        exc.headers, profile=profile, accept=accept
+                    )
+                    raw_body = _read_response_body(
+                        exc, limit_bytes=body_limit, headers=exc.headers
+                    )
+                except _http_body_limits.HTTPBodyLimitError:
+                    with contextlib.suppress(Exception):
+                        exc.close()
+                    raise
                 except Exception:
                     raw_body = b""
         if response_error is not None:
             e = response_error
             try:
-                status = e.code
-                error = e
-                if e.code == 429:
-                    limiter.cooldown_for_url(
-                        url, _retry_after_seconds(e), admission_token=admission_token
-                    )
                 try:
-                    body = _decode_body(raw_body, e.headers)
+                    body = _decode_body(
+                        raw_body, e.headers, max_output_bytes=body_limit
+                    )
                     decoding_error = None
+                except _http_body_limits.HTTPBodyLimitError:
+                    raise
                 except ContentDecodingError as exc:
                     body = b""
                     decoding_error = exc
@@ -349,8 +468,12 @@ def _open_and_read(
                 with contextlib.suppress(Exception):
                     e.close()
         try:
-            body = _decode_body(raw_body, r.headers)
+            body = _decode_body(
+                raw_body, r.headers, max_output_bytes=body_limit
+            )
             decoding_error = None
+        except _http_body_limits.HTTPBodyLimitError:
+            raise
         except ContentDecodingError as exc:
             body = b""
             decoding_error = exc
@@ -429,7 +552,17 @@ def _fetch_url_with_session(
             with _perf.span("fetch_download", _host_limiter.host_for_url(origin) or None):
                 warm_response = opener.open(warm_request, timeout=timeout)
                 try:
-                    warm_response.read()
+                    warm_headers = getattr(warm_response, "headers", {})
+                    warm_limit = _response_body_limit(
+                        warm_headers,
+                        profile="document",
+                        accept="text/html,application/xhtml+xml,*/*;q=0.8",
+                    )
+                    _read_response_body(
+                        warm_response,
+                        limit_bytes=warm_limit,
+                        headers=warm_headers,
+                    )
                     warm_status = getattr(warm_response, "status", None)
                 finally:
                     with contextlib.suppress(Exception):
@@ -470,6 +603,8 @@ def _fetch_url_with_session(
         urllib.request.Request(url, headers=headers),
         timeout,
         url,
+        profile=profile,
+        accept=accept,
         admission_token=admission_token,
         limiter=limiter,
         attempt_kind="cookie_replay",
@@ -505,6 +640,8 @@ def _fetch_url(
         req,
         timeout,
         url,
+        profile=profile,
+        accept=accept,
         admission_token=admission_token,
         limiter=limiter,
         attempt_kind="primary",

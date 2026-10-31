@@ -38,6 +38,7 @@ import json
 import os
 import re
 import sys
+from collections.abc import Iterable
 
 from core.invocation import format_run_examples, run_command
 
@@ -63,11 +64,26 @@ except ImportError:  # direct execution
 
 _PROV_RE = re.compile(
     r"citation-verifier-provenance alg=(\S+) sig=([0-9a-f]{64}) content=([0-9a-f]{64})")
-def _terminal_uncertain_by_cause(pair_states):
+
+
+def _check_cancelled(cancel_check):
+    if cancel_check is not None:
+        cancel_check()
+
+
+def _checked(values: Iterable, cancel_check):
+    """Yield verification records with bounded cancellation checkpoints."""
+    for index, value in enumerate(values):
+        if index % 128 == 0:
+            _check_cancelled(cancel_check)
+        yield value
+
+
+def _terminal_uncertain_by_cause(pair_states, cancel_check=None):
     """Classify terminal uncertain pairs using the authoritative pair state.
     """
     classified = {}
-    for state in latest_terminal_states(pair_states).values():
+    for state in _checked(latest_terminal_states(pair_states).values(), cancel_check):
         if state.get("status") != "uncertain":
             continue
         cause = str(state.get("terminal_cause") or "unknown")
@@ -86,34 +102,44 @@ def _repo_open(run_dir):
         raise
 
 
-def _report_summary(run_dir):
+def _report_summary(run_dir, *, cancel_check=None):
+    _check_cancelled(cancel_check)
     _md, summary = _report.render(run_dir)
+    _check_cancelled(cancel_check)
     return summary if isinstance(summary, dict) else {}
 
 
-def _load_run_projection(run_dir):
+def _load_run_projection(run_dir, *, cancel_check=None):
+    _check_cancelled(cancel_check)
     repo = _repo_open(run_dir)
     if repo is None:
         raise SystemExit(f"no sqlite run database found in {run_dir}")
     try:
+        _check_cancelled(cancel_check)
         raw = repo.verification_raw_payloads()
+        _check_cancelled(cancel_check)
         projection = {
             "parse": repo.effective_parse_payload(),
+        }
+        _check_cancelled(cancel_check)
+        projection.update({
             "manifest": repo.source_manifest_payload(),
             "unreadable": repo.unreadable_payload(),
             "pair_states": repo.verification_pair_state_payloads(),
             "verification_raw": raw,
-        }
+        })
+        _check_cancelled(cancel_check)
         projection["verification_projection"] = project_verification_pairs(
             raw["pair_states"], raw["candidates"], raw["candidate_events"]
         )
+        _check_cancelled(cancel_check)
         return projection
     finally:
         repo.close()
 
 
 def verify(run_dir, *, strict_crediting=False, require_signature=False,
-           _projection=None, _report_summary_val=None):
+           _projection=None, _report_summary_val=None, cancel_check=None):
     """Run the completion gate.
 
     ``_projection``/``_report_summary_val`` are private, keyword-only
@@ -132,21 +158,27 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
         projection = (
             _projection
             if _projection is not None
-            else _load_run_projection(run_dir)
+            else _load_run_projection(run_dir, cancel_check=cancel_check)
         )
     except RuntimeError as exc:
+        # Cancellation is also a RuntimeError. Keep callback-mode failures
+        # propagating so it cannot be downgraded into a gate failure.
+        if cancel_check is not None:
+            _check_cancelled(cancel_check)
+            raise
         return {
             "ok": False,
             "failures": [f"run database validation failed: {exc}"],
             "warnings": [],
             "info": {},
         }
+    _check_cancelled(cancel_check)
     parse = projection["parse"]
     if not parse:
         return {"ok": False, "failures": ["parse payload missing — pipeline never ran"],
                 "warnings": [], "info": {}}
     claims = parse.get("claims", [])
-    refs = {r["id"]: r for r in parse.get("references", [])}
+    refs = {r["id"]: r for r in _checked(parse.get("references", []), cancel_check)}
     if not claims:
         failures.append("parse payload has zero claims — nothing was parsed")
 
@@ -155,7 +187,7 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
     # coverage set cannot diverge from what was actually emitted for verification.
     expected_pairs = {
         (ci["claim_id"], ci["ref_id"])
-        for ci in parse.get("citations", [])
+        for ci in _checked(parse.get("citations", []), cancel_check)
         # Link-silent resolved markers deliberately have no claim.  They are
         # Parse coverage/provenance, not claim-to-source work for Verify.
         if not (
@@ -165,47 +197,54 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
         and ci.get("ref_id")
     }
     info["expected_pairs"] = len(expected_pairs)
+    _check_cancelled(cancel_check)
 
     # Which refs have retrievable source text (any tier)?
     manifest = projection["manifest"]
-    refs_with_text, unavailable_sources = usable_verification_source_refs(run_dir, manifest)
+    refs_with_text, unavailable_sources = usable_verification_source_refs(
+        run_dir, manifest, cancel_check=cancel_check,
+    )
+    _check_cancelled(cancel_check)
     if unavailable_sources:
         failures.append(
             "persisted source integrity failure: " + "; ".join(unavailable_sources)
         )
     # Unreadable scans pending OCR: text located but NOT readable -> not "skipped".
     unreadable_refs = {e["ref_id"]
-                       for e in projection["unreadable"].get("entries", [])
+                       for e in _checked(projection["unreadable"].get("entries", []), cancel_check)
                        if e.get("ref_id") and e.get("ocr_status") != "done"}
 
     raw_verify = projection.get("verification_raw") or {}
     verification_rows = select_verification_pair_rows(
         projection.get("verification_projection") or []
     )
-    operational_pairs = {(row["claim_id"], row["ref_id"]) for row in verification_rows
+    operational_pairs = {(row["claim_id"], row["ref_id"]) for row in _checked(verification_rows, cancel_check)
                          if row["operational_complete"]}
     crediting_projection_pairs = {
         (row["claim_id"], row["ref_id"])
-        for row in verification_rows if row["crediting"]
+        for row in _checked(verification_rows, cancel_check) if row["crediting"]
     }
     accepted_lifecycle_pairs = {
         (state.get("claim_id"), state.get("ref_id"))
-        for state in raw_verify.get("pair_states", ())
+        for state in _checked(raw_verify.get("pair_states", ()), cancel_check)
         if state.get("status") == "accepted"
     }
     strict_crediting_pairs = crediting_projection_pairs & accepted_lifecycle_pairs
+    _check_cancelled(cancel_check)
 
     # (3) Coverage: a pair WITH text but no typed terminal = silently skipped.
     skipped = sorted(
-        p for p in expected_pairs
+        p for p in _checked(expected_pairs, cancel_check)
         if p[1] in refs_with_text and p[1] not in unreadable_refs
         and p not in operational_pairs)
     no_text = sorted(
-        p for p in expected_pairs
+        p for p in _checked(expected_pairs, cancel_check)
         if p[1] not in refs_with_text and p[1] not in unreadable_refs)
-    pending_ocr = sorted(p for p in expected_pairs if p[1] in unreadable_refs)
+    pending_ocr = sorted(
+        p for p in _checked(expected_pairs, cancel_check) if p[1] in unreadable_refs
+    )
     info["pairs_with_text_verified"] = len(
-        {p for p in expected_pairs if p[1] in refs_with_text}
+        {p for p in _checked(expected_pairs, cancel_check) if p[1] in refs_with_text}
         & operational_pairs
     )
     info["pairs_skipped"] = len(skipped)
@@ -233,7 +272,9 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
     # Terminal uncertain outcomes are classified by their persisted cause.  A
     # cause-specific warning keeps soft disagreement, contested negatives,
     # attribution, identity, and isolated evidence distinct.
-    uncertain_by_cause = _terminal_uncertain_by_cause(projection.get("pair_states"))
+    uncertain_by_cause = _terminal_uncertain_by_cause(
+        projection.get("pair_states"), cancel_check=cancel_check,
+    )
     uncertain_pairs = sorted({
         pair for pairs in uncertain_by_cause.values() for pair in pairs
     })
@@ -261,23 +302,28 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
     # a decision-quality result can inspect these explicit dimensions instead
     # of inferring reliability from an exit code.
     expected_with_text = {
-        p for p in expected_pairs
+        p for p in _checked(expected_pairs, cancel_check)
         if p[1] in refs_with_text and p[1] not in unreadable_refs
     }
     evidence_matched_pairs = {
-        (row["claim_id"], row["ref_id"]) for row in verification_rows
+        (row["claim_id"], row["ref_id"])
+        for row in _checked(verification_rows, cancel_check)
         if row["evidence_bearing"] and row["evidence"]
     }
-    projected_by_pair = {(row["claim_id"], row["ref_id"]): row for row in verification_rows}
+    projected_by_pair = {
+        (row["claim_id"], row["ref_id"]): row
+        for row in _checked(verification_rows, cancel_check)
+    }
     evidence_required_pairs = {
-        pair for pair in expected_with_text
+        pair for pair in _checked(expected_with_text, cancel_check)
         if pair not in projected_by_pair or projected_by_pair[pair]["evidence_bearing"]
     }
     semantic_decision_complete = all(
         pair in projected_by_pair
         and projected_by_pair[pair]["result_class"] != "unresolved"
-        for pair in expected_pairs
+        for pair in _checked(expected_pairs, cancel_check)
     )
+    _check_cancelled(cancel_check)
     terminal_causes_for_quality = _report.latest_terminal_causes(
         projection.get("pair_states"),
     )
@@ -344,8 +390,10 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
     if not os.path.exists(report_md_path):
         failures.append("report.md missing — run core.report.")
     else:
+        _check_cancelled(cancel_check)
         with open(report_md_path, encoding="utf-8") as f:
             report_text = f.read()
+        _check_cancelled(cancel_check)
         m = _PROV_RE.search(report_text)
         if not m:
             failures.append(
@@ -354,7 +402,7 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
         else:
             alg, sig, content = m.group(1), m.group(2), m.group(3)
             summary = (_report_summary_val if _report_summary_val is not None
-                       else _report_summary(run_dir))
+                       else _report_summary(run_dir, cancel_check=cancel_check))
             # Recompute over the SAME payload core.report signed: input fields + a hash of
             # the report body (seal stripped). Catches both stale inputs and edited prose.
             body_sha256 = hashlib.sha256(
@@ -370,8 +418,10 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
                     "artifacts "
                     "(stale or hand-edited report). Regenerate with core.report.")
             if os.path.exists(report_journal_path):
+                _check_cancelled(cancel_check)
                 with open(report_journal_path, encoding="utf-8") as f:
                     journal_text = f.read()
+                _check_cancelled(cancel_check)
                 latest_entry = _report.latest_report_entry(journal_text)
                 if not latest_entry:
                     failures.append(
@@ -428,6 +478,7 @@ def verify(run_dir, *, strict_crediting=False, require_signature=False,
         and quality["semantic_decision_complete"]
     )
 
+    _check_cancelled(cancel_check)
     return {"ok": not failures, "failures": failures,
             "warnings": warnings, "info": info}
 

@@ -135,6 +135,122 @@ def test_missing_asset_is_terminal_and_never_registers_source_text(tmp_path):
         repo.close()
 
 
+def test_arxiv_document_version_survives_materialization_and_manifest_roundtrip(tmp_path):
+    run = str(tmp_path)
+    _repo(run).close()
+    lines = ["JudgeSense title"] * 10
+    lines.append("Abstract")
+    lines.extend(["Abstract text"] * 14)
+    lines.append("1 Introduction")
+    lines.extend(["First-page body text"] * 16)
+    lines.append("arXiv:2604.23478v3  [cs.CL]  18 Sep 2026")
+    lines.extend(["Body continues."] * 8)
+    lines.extend(["References", "arXiv:2604.23478v1 [cs.CL] 1 Jan 2025"])
+    text = "\n".join(lines)
+    expected = {
+        "arxiv_id": "2604.23478",
+        "version": 3,
+        "version_date": "2026-09-18",
+        "versioned_url": "https://arxiv.org/pdf/2604.23478v3",
+        "version_evidence": "document_header",
+    }
+
+    with mock.patch.object(sources, "_after_materialization_replace", side_effect=RuntimeError("stop")):
+        with pytest.raises(RuntimeError, match="stop"):
+            sources.store_text(
+                run, REF, "fulltext", "arxiv", text,
+                source_ref="https://arxiv.org/pdf/2604.23478",
+            )
+
+    repo = RunRepository.open(run)
+    try:
+        assert repo.list_source_texts() == []
+        intent = repo._conn.execute(
+            "SELECT arxiv_version_json FROM source_text_materialization_intents"
+        ).fetchone()
+        assert intent["arxiv_version_json"] == db_repository._arxiv_version_json(expected)
+    finally:
+        repo.close()
+
+    assert sources.reconcile_materialized_texts(run) == 1
+    manifest = sources.load_manifest(run)
+    assert manifest["entries"][0]["arxiv_version"] == expected
+    sources.save_manifest(run, manifest)
+
+    repo = RunRepository.open(run)
+    try:
+        source = repo.list_source_texts()[0]
+        assert source.arxiv_version == expected
+        assert source.sha256 == hashlib.sha256(text.encode("utf-8")).hexdigest()
+        assert repo.export_report_inputs()["source_texts"][0]["arxiv_version"] == expected
+    finally:
+        repo.close()
+
+
+def test_arxiv_version_url_and_identity_gates_fail_closed():
+    header = "arXiv:2604.23478v3 [cs.CL] 18 Sep 2026\nAbstract\nBody"
+    for route in ("pdf", "abs", "html"):
+        assert sources._arxiv_version_for_source(
+            REF, f"https://arxiv.org/{route}/2604.23478v3", "No version header."
+        ) == {
+            "arxiv_id": "2604.23478",
+            "version": 3,
+            "version_date": None,
+            "versioned_url": "https://arxiv.org/pdf/2604.23478v3",
+            "version_evidence": "versioned_source_url",
+        }
+    assert sources._arxiv_version_for_source(
+        REF, "https://example.org/paper.pdf", header
+    ) is None
+    assert sources._arxiv_version_for_source(
+        REF, "https://arxiv.org/pdf/2604.23478", "References\n" + header
+    ) is None
+    assert sources._arxiv_version_for_source(
+        REF,
+        "https://arxiv.org/pdf/2604.23478",
+        "arXiv:2604.23479v3 [cs.CL] 18 Sep 2026\nAbstract\nBody",
+    ) is None
+    assert sources._arxiv_version_for_source(
+        REF,
+        "https://arxiv.org/pdf/2604.23478v2",
+        "arXiv:2604.23478v3 [cs.CL] 18 Sep 2026\nAbstract\nBody",
+    ) is None
+    assert sources._arxiv_version_for_source(
+        REF,
+        "https://arxiv.org/pdf/2604.23478",
+        "x" * sources.DOCUMENT_IDENTITY_HEAD_CHARS
+        + "\narXiv:2604.23478v3 [cs.CL] 18 Sep 2026",
+    ) is None
+
+
+def test_arxiv_latest_version_requires_exact_unversioned_id_list_observation(tmp_path):
+    run = str(tmp_path)
+    _repo(run).close()
+    text = "arXiv:2604.23478v3 [cs.CL] 18 Sep 2026\nAbstract\nBody"
+    observation = {
+        "request_url": "https://export.arxiv.org/api/query?id_list=2604.23478",
+        "response_sha256": "a" * 64,
+    }
+    entry = sources.store_text(
+        run, REF, "fulltext", "arxiv", text,
+        source_ref="https://arxiv.org/pdf/2604.23478",
+        arxiv_latest_version=4,
+        arxiv_latest_observation=observation,
+    )
+    assert entry["arxiv_version"]["latest_version"] == 4
+    assert entry["arxiv_version"]["latest_observation"] == observation
+    assert sources.load_manifest(run)["entries"][0]["arxiv_version"] == entry["arxiv_version"]
+
+    with pytest.raises(ValueError, match="unversioned arXiv id_list query"):
+        db_repository._arxiv_version_json({
+            **entry["arxiv_version"],
+            "latest_observation": {
+                **observation,
+                "request_url": "https://export.arxiv.org/api/query?id_list=2604.23478v3",
+            },
+        })
+
+
 def test_intent_uses_existing_empty_flag_normalization(tmp_path):
     run = str(tmp_path)
     _repo(run).close()

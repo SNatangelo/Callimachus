@@ -13,19 +13,20 @@ from concurrent.futures import ThreadPoolExecutor
 
 from core.app.runtime.repository import _load_parse_payload, _repo_open
 from core.app.runtime.fetch_audit import record_identity_anomaly
-from core.app.runtime.settings import ACTION_REQUIRED, _debug_mode_enabled, _progress
+from core.app.runtime.settings import _debug_mode_enabled, _progress
 from core.app.runtime.sources import (
+    ABSTRACT_SCOPES,
     _load_manifest_payload,
     _load_unreadable_payload,
     _materialize_resolve_abstracts,
     _resolve_map,
     _scope_for_source,
 )
-from core.app.runtime.tasks import _create_task, _pending_tasks, _pause
-from core.invocation import run_command
+from core.app.runtime.tasks import _create_task, _pending_tasks
 from core.parse.footnotes import cross_reference_map
 from core.resolve import sources as _sources
 from core.verify.identity_gate import (
+    bibliographic_abstract_identity_admitted,
     bibliographic_identity_admitted,
     source_identity_attestation_block_reason,
 )
@@ -152,6 +153,7 @@ def _source_identity_attestation_task_id(source_text_id: str) -> str:
 
 def _identity_gate_task(target: dict) -> dict:
     return {
+        "source_tier": target["source_tier"],
         "reference": target["reference"],
         "source_identity_evidence": {
             **target["source_identity"],
@@ -393,6 +395,26 @@ def _terminalize_identity_unverified(
         repository.apply_task(task_id, task_payload=payload)
 
 
+def _close_unanswered_verify_identity_task(repository, record) -> None:
+    """Close an old Verify review without treating it as an identity decision."""
+    if record is None:
+        return
+    if record.slot != "verify":
+        raise SystemExit(
+            "unapplied Fetch source-identity attestation reached Verify"
+        )
+    if record.status == "pending":
+        repository.cancel_task(record.task_id)
+    elif record.status == "cancelled":
+        return
+    elif record.status == "answered":
+        raise SystemExit("source-identity attestation answer was not applied")
+    elif record.status == "applied":
+        raise SystemExit("applied source-identity attestation has no decision")
+    else:
+        raise SystemExit("source-identity attestation has an unsupported status")
+
+
 def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
     run = st["run_dir"]
     pairs = _verify_pairs(run, ref_id=ref_id)
@@ -401,8 +423,21 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
         raise SystemExit(f"no sqlite run database found in {run}")
     created = 0
     identity_created = 0
+    automatic_skips: list[tuple[str, str, str]] = []
+    automatic_skip_task_ids: set[str] = set()
     try:
         contract = _selected_contract(repository)
+        from core.app.commands.tasks import (
+            guided_fetch_identity_skip_answer_id,
+            guided_fetch_identity_skip_intents,
+        )
+
+        try:
+            skip_intents = guided_fetch_identity_skip_intents(repository, run)
+        except ValueError as exc:
+            raise SystemExit(
+                f"guided Fetch identity skip intent is invalid: {exc}"
+            ) from exc
         for record in repository.list_tasks(slot="verify"):
             _require_verify_task(record)
         for claim, reference, scope, path, entry in pairs:
@@ -460,7 +495,9 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
                     "supplied_via": entry.get("supplied_via"),
                 },
             }
-            if scope.startswith("fulltext") and _operator_kept_source_unverified(
+            if (
+                scope.startswith("fulltext") or scope in ABSTRACT_SCOPES
+            ) and _operator_kept_source_unverified(
                 repository, entry,
             ):
                 _terminalize_identity_unverified(
@@ -468,6 +505,7 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
                 )
                 continue
             identity_admitted = True
+            identity_gate_unavailable = False
             if scope.startswith("fulltext"):
                 try:
                     identity_admitted = bibliographic_identity_admitted(
@@ -483,7 +521,47 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
                         error=exc,
                     )
                     identity_admitted = False
-            if scope.startswith("fulltext") and not identity_admitted:
+                    identity_gate_unavailable = True
+            elif scope in ABSTRACT_SCOPES:
+                identity_task["source_tier"] = entry.get("tier")
+                try:
+                    identity_admitted = bibliographic_abstract_identity_admitted(
+                        identity_task, source_text,
+                    )
+                except Exception as exc:
+                    owner_ref_id = (entry.get("_identity_reference") or {}).get("id")
+                    record_identity_anomaly(
+                        repository,
+                        owner_ref_id or reference.get("id"),
+                        phase="verify",
+                        stage="identity_admission",
+                        error=exc,
+                    )
+                    identity_admitted = False
+                    identity_gate_unavailable = True
+            if (
+                (scope.startswith("fulltext") or scope in ABSTRACT_SCOPES)
+                and identity_admitted
+            ):
+                source_text_id = entry.get("source_text_id")
+                owner_ref_id = (entry.get("_identity_reference") or {}).get("id")
+                if (
+                    isinstance(source_text_id, str)
+                    and source_text_id
+                    and isinstance(owner_ref_id, str)
+                    and owner_ref_id
+                ):
+                    existing = repository.get_task(
+                        _source_identity_attestation_task_id(source_text_id)
+                    )
+                    if existing is not None and existing.status == "pending":
+                        _require_identity_attestation_task(existing)
+                        _close_unanswered_verify_identity_task(
+                            repository, existing,
+                        )
+            if (
+                scope.startswith("fulltext") or scope in ABSTRACT_SCOPES
+            ) and not identity_admitted:
                 source_text_id = entry.get("source_text_id")
                 owner_ref_id = (entry.get("_identity_reference") or {}).get("id")
                 if (
@@ -571,17 +649,43 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
                             repository, claim, reference, scope,
                         )
                         continue
-                    if decision.get("action") != "attest_identity" or not (
-                        bibliographic_identity_admitted(
+                    admitted_after_attestation = (
+                        bibliographic_abstract_identity_admitted(
                             identity_task,
                             source_text,
                             identity_attested=True,
                         )
-                    ):
+                        if scope in ABSTRACT_SCOPES
+                        else bibliographic_identity_admitted(
+                            identity_task,
+                            source_text,
+                            identity_attested=True,
+                        )
+                    )
+                    if decision.get("action") != "attest_identity" or not admitted_after_attestation:
                         raise SystemExit(
                             "applied source-identity attestation is not admissible"
                         )
                 else:
+                    identity_task_id = _source_identity_attestation_task_id(
+                        source_text_id,
+                    )
+                    existing = repository.get_task(identity_task_id)
+                    if existing is not None:
+                        _require_identity_attestation_task(existing)
+                        existing_payload = existing.task_payload or {}
+                        if existing_payload.get("source_text_id") != source_text_id:
+                            raise SystemExit(
+                                "persisted source-identity task id collides with another source"
+                            )
+                        if existing.status == "applied":
+                            raise SystemExit(
+                                "applied source-identity attestation has no decision"
+                            )
+                        if existing.status == "answered":
+                            raise SystemExit(
+                                "source-identity attestation answer was not applied"
+                            )
                     try:
                         block_reason = source_identity_attestation_block_reason(
                             identity_task, source_text,
@@ -594,6 +698,10 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
                             stage="identity_attestation_eligibility",
                             error=exc,
                         )
+                        if existing is not None:
+                            _close_unanswered_verify_identity_task(
+                                repository, existing,
+                            )
                         _terminalize_identity_unverified(
                             repository,
                             claim,
@@ -602,25 +710,61 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
                             cause="source_identity_check_unavailable",
                         )
                         continue
-                    identity_task_id = _source_identity_attestation_task_id(
-                        source_text_id,
+
+                    existing_matches_target = existing is None or all(
+                        (existing.task_payload or {}).get(key) == target.get(key)
+                        for key in (
+                            "ref_id",
+                            "source_text_id",
+                            "source_text_sha256",
+                            "target_sha256",
+                        )
                     )
-                    existing = repository.get_task(identity_task_id)
-                    if existing is not None:
-                        _require_identity_attestation_task(existing, target)
-                        if existing.status == "applied":
-                            raise SystemExit(
-                                "applied source-identity attestation has no decision"
+                    if existing is not None and existing.status == "pending":
+                        if existing_matches_target:
+                            _require_identity_attestation_task(existing, target)
+                        else:
+                            record_identity_anomaly(
+                                repository,
+                                owner_ref_id,
+                                phase="verify",
+                                stage="identity_target_binding",
+                                error=RuntimeError(
+                                    "pending source-identity review has a stale target"
+                                ),
                             )
-                        if existing.status == "answered":
-                            raise SystemExit(
-                                "source-identity attestation answer was not applied"
+                            _close_unanswered_verify_identity_task(
+                                repository, existing,
                             )
-                        if existing.status == "cancelled":
-                            raise SystemExit(
-                                "source-identity attestation was cancelled"
+                            _terminalize_identity_unverified(
+                                repository,
+                                claim,
+                                reference,
+                                scope,
+                                cause="source_identity_target_unavailable",
                             )
-                    if block_reason is None:
+                            continue
+
+                    if block_reason is not None:
+                        if existing is not None:
+                            _close_unanswered_verify_identity_task(
+                                repository, existing,
+                            )
+                        _terminalize_identity_unverified(
+                            repository, claim, reference, scope,
+                        )
+                        continue
+
+                    source_record = repository.get_source_text(source_text_id)
+                    skip_answer_id = guided_fetch_identity_skip_answer_id(
+                        source_record,
+                        owner_ref_id,
+                        entry.get("tier"),
+                        skip_intents,
+                    )
+                    if skip_answer_id is not None and (
+                        existing is None or existing.status == "pending"
+                    ):
                         if existing is None:
                             repository.create_source_identity_attestation(
                                 task_id=identity_task_id,
@@ -633,13 +777,29 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
                                 ),
                             )
                             identity_created += 1
+                        if identity_task_id not in automatic_skip_task_ids:
+                            automatic_skips.append((
+                                identity_task_id,
+                                target["target_sha256"],
+                                skip_answer_id,
+                            ))
+                            automatic_skip_task_ids.add(identity_task_id)
                         continue
+
                     if existing is not None:
-                        raise SystemExit(
-                            "pending source-identity attestation is no longer eligible"
+                        _close_unanswered_verify_identity_task(
+                            repository, existing,
                         )
                     _terminalize_identity_unverified(
-                        repository, claim, reference, scope,
+                        repository,
+                        claim,
+                        reference,
+                        scope,
+                        cause=(
+                            "source_identity_check_unavailable"
+                            if identity_gate_unavailable
+                            else "bibliographic_identity_not_corroborated"
+                        ),
                     )
                     continue
             task = _claim_evidence_task(
@@ -657,8 +817,32 @@ def _emit_verify_tasks(st: dict, *, ref_id: str | None = None) -> dict:
                 created += 1
             else:
                 _require_final_task(existing, task)
+            repository.ensure_verification_pair(
+                claim_id=claim.get("id"),
+                ref_id=reference.get("id"),
+                scope=scope,
+            )
     finally:
         repository.close()
+    if automatic_skips:
+        from core.app.commands.tasks import admit_source_identity_review
+
+        for identity_task_id, target_sha256, answer_id in automatic_skips:
+            admit_source_identity_review(
+                run,
+                identity_task_id,
+                action="keep_unverified",
+                target_sha256=target_sha256,
+                reason=(
+                    "The human operator confirmed Guided Fetch Proceed / skip remaining "
+                    f"in Fetch answer {answer_id}; this exact source remains unverified."
+                ),
+            )
+        _apply_answered_source_identity_attestations(run)
+        resumed = _emit_verify_tasks(st, ref_id=ref_id)
+        resumed["created"] += created
+        resumed["identity_created"] += identity_created
+        return resumed
     return {
         "pairs": pairs,
         "created": created,
@@ -689,6 +873,124 @@ def _execute_claim_evidence_tasks(st: dict) -> int:
         raise SystemExit(f"no sqlite run database found in {run}")
     runtime = None
     try:
+        current_pairs = None
+        prepared = []
+        for handle, task in pending:
+            source_text = _claim_evidence_source_text(repository, run, task)
+            source_record = repository.get_source_text(task.get("source_text_id"))
+            if source_record is None:
+                raise SystemExit(
+                    "claim-evidence task source is missing from the current ledger"
+                )
+            task_scope = task.get("scope")
+            is_abstract_task = (
+                source_record.tier == "abstract"
+                or task_scope in ABSTRACT_SCOPES
+            )
+            if is_abstract_task:
+                if current_pairs is None:
+                    current_pairs = {
+                        (claim.get("id"), reference.get("id"), scope): (
+                            claim, reference, scope, entry,
+                        )
+                        for claim, reference, scope, _path, entry
+                        in _verify_pairs(run)
+                    }
+                if task_scope not in ABSTRACT_SCOPES:
+                    raise SystemExit(
+                        "abstract claim-evidence task has an invalid scope"
+                    )
+                claim_id = task.get("claim_id")
+                ref_id = task.get("ref_id")
+                current = current_pairs.get((claim_id, ref_id, task_scope))
+                if current is None or handle != _verify_task_id(
+                    claim_id, ref_id, task_scope,
+                ):
+                    raise SystemExit(
+                        "abstract claim-evidence task is not present in the current run"
+                    )
+                claim, reference, scope, entry = current
+                owner_reference = entry.get("_identity_reference")
+                owner_ref_id = (
+                    owner_reference.get("id")
+                    if isinstance(owner_reference, dict) else None
+                )
+                if (
+                    source_record.tier != "abstract"
+                    or entry.get("tier") != "abstract"
+                    or not owner_ref_id
+                    or source_record.ref_id != owner_ref_id
+                    or entry.get("ref_id") != owner_ref_id
+                    or source_record.source_text_id != entry.get("source_text_id")
+                    or source_record.sha256 != entry.get("sha256")
+                    or task.get("source_text_id") != source_record.source_text_id
+                    or task.get("source_text_sha256") != source_record.sha256
+                ):
+                    raise SystemExit(
+                        "abstract claim-evidence task differs from the current source ledger"
+                    )
+                try:
+                    target = repository.source_identity_attestation_target(
+                        ref_id=owner_ref_id,
+                        source_text_id=source_record.source_text_id,
+                    )
+                except (RuntimeError, ValueError) as exc:
+                    raise SystemExit(
+                        "abstract claim-evidence identity target is unavailable"
+                    ) from exc
+                if (
+                    target.get("source_tier") != "abstract"
+                    or target.get("source_text_sha256") != source_record.sha256
+                    or target.get("source_text_id") != source_record.source_text_id
+                ):
+                    raise SystemExit(
+                        "abstract claim-evidence identity target changed"
+                    )
+                identity_task = _identity_gate_task(target)
+                current_resolve = entry.get("_resolve_result")
+                if not isinstance(current_resolve, dict):
+                    raise SystemExit(
+                        "abstract claim-evidence Resolve record is unavailable"
+                    )
+                identity_task["source_identity_evidence"]["resolve"] = {
+                    **current_resolve,
+                    **target["resolve_identity"],
+                }
+                decision = repository.source_identity_attestation_for(
+                    source_record.source_text_id,
+                )
+                identity_attested = False
+                if decision is not None:
+                    if (
+                        decision.get("ref_id") != owner_ref_id
+                        or decision.get("target_sha256") != target.get("target_sha256")
+                    ):
+                        raise SystemExit(
+                            "applied abstract source-identity attestation is inconsistent"
+                        )
+                    if decision.get("action") == "keep_unverified":
+                        _terminalize_identity_unverified(
+                            repository, claim, reference, scope,
+                        )
+                        continue
+                    if decision.get("action") != "attest_identity":
+                        raise SystemExit(
+                            "applied abstract source-identity decision is unsupported"
+                        )
+                    identity_attested = True
+                if not bibliographic_abstract_identity_admitted(
+                    identity_task,
+                    source_text,
+                    identity_attested=identity_attested,
+                ):
+                    raise SystemExit(
+                        "abstract claim-evidence task failed source identity admission"
+                    )
+            prepared.append((handle, task, source_text))
+
+        if not prepared:
+            return len(pending)
+
         runtime_env = dict(os.environ)
         model = st.get("model")
         if isinstance(model, str) and model and not runtime_env.get(
@@ -702,11 +1004,6 @@ def _execute_claim_evidence_tasks(st: dict) -> int:
         except ConfigError as exc:
             raise SystemExit(_verify_config_error_message(exc)) from None
         _sync_verify_runtime_setting(repository)
-
-        prepared = [
-            (handle, task, _claim_evidence_source_text(repository, run, task))
-            for handle, task in pending
-        ]
 
         def execute_task(item):
             _handle, task, source_text = item
@@ -751,7 +1048,7 @@ def _execute_claim_evidence_tasks(st: dict) -> int:
                 outcomes.append(None)
                 if first_error is None:
                     first_error = exc
-        for (handle, _task), terminal in zip(pending, outcomes):
+        for (handle, _task, _source_text), terminal in zip(prepared, outcomes):
             if terminal is None:
                 continue
             apply_terminal(handle)
@@ -773,7 +1070,10 @@ def _apply_answered_source_identity_attestations(run: str) -> None:
             task for task in repository.list_tasks()
             if task.task_kind == "source_identity_attestation"
         ]
-        cancelled = [task.task_id for task in tasks if task.status == "cancelled"]
+        cancelled = [
+            task.task_id for task in tasks
+            if task.status == "cancelled" and task.slot != "verify"
+        ]
         if cancelled:
             raise SystemExit(
                 "source-identity attestation cancelled: "
@@ -788,20 +1088,6 @@ def _apply_answered_source_identity_attestations(run: str) -> None:
                         "source-identity attestation application failed for "
                         f"{task.task_id}: {exc}"
                     ) from exc
-    finally:
-        repository.close()
-
-
-def _pending_source_identity_attestations(run: str) -> int:
-    repository = _repo_open(run)
-    if repository is None:
-        raise SystemExit(f"no sqlite run database found in {run}")
-    try:
-        return sum(
-            task.task_kind == "source_identity_attestation"
-            and task.status == "pending"
-            for task in repository.list_tasks()
-        )
     finally:
         repository.close()
 
@@ -830,19 +1116,6 @@ def phase_verify(st):
     _materialize_resolve_abstracts(run)
     _apply_answered_source_identity_attestations(run)
     emitted = _emit_verify_tasks(st)
-    pending_identity = _pending_source_identity_attestations(run)
-    if pending_identity:
-        return _pause(
-            "verify",
-            run,
-            pending_identity,
-            (
-                "Inspect each source-identity task and answer with "
-                f"`{run_command('tasks', 'answer-review', '--action', 'attest-identity')}` "
-                "or skip all of them while keeping their sources unverified with "
-                f"`{run_command('tasks', 'skip-identity', '--run', run)}`."
-            ),
-        )
     if not emitted["pairs"]:
         return "web_research"
     _execute_claim_evidence_tasks(st)

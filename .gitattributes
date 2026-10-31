@@ -1,10 +1,41 @@
-# Preserve publication artifacts byte-for-byte for their provenance hashes.
-examples/report/index.html -text
-examples/report/index.html.redaction.json -text
+# Auto-detect text files and normalize to LF
+*       text=auto eol=lf
 
-# Keep the public CLA copy and its versioned source byte-stable for hashing.
-CLA.md text eol=lf
-.github/cla/agreements/CLA-v1.1.md text eol=lf
+# Explicit overrides for known text types
+*.py        text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.toml      text eol=lf
+*.cfg       text eol=lf
+*.ini       text eol=lf
+*.html      text eol=lf
+*.css       text eol=lf
+*.js        text eol=lf
+*.ts        text eol=lf
+*.xml       text eol=lf
+*.svg       text eol=lf
+*.csv       text eol=lf
+*.sql       text eol=lf
+.env.example text eol=lf
+.gitignore  text eol=lf
+.gitattributes text eol=lf
+LICENSE     text eol=lf
+Dockerfile  text eol=lf
+Makefile    text eol=lf
 
-# Preserve the synthetic PDF smoke fixture without newline conversion.
-tests/fixtures/parse_golden/inputs/pdf_author_year_basic.pdf -text
+# Binary files
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.db        binary
+*.sqlite    binary
+*.sqlite3   binary
+*.pyc       binary
+*.egg-info  binary

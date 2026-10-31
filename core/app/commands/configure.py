@@ -79,6 +79,12 @@ ENV_VERIFY_PACING_INTERVAL_MS = "CITATION_VERIFIER_VERIFY_PACING_INTERVAL_MS"
 ENV_OPENAI_BASE_URL = "OPENAI_BASE_URL"
 ENV_OPENAI_MODEL = "OPENAI_MODEL"
 ENV_OPENAI_KEY = "OPENAI_API_KEY"
+ENV_DEEPSEEK_KEY = "DEEPSEEK_API_KEY"
+ENV_DEEPSEEK_MODEL = "DEEPSEEK_MODEL"
+ENV_GROQ_KEY = "GROQ_API_KEY"
+ENV_GROQ_MODEL = "GROQ_MODEL"
+ENV_XAI_KEY = "XAI_API_KEY"
+ENV_XAI_MODEL = "XAI_MODEL"
 ENV_ANTHROPIC_KEY = "ANTHROPIC_API_KEY"
 ENV_GEMINI_KEY = "GEMINI_API_KEY"
 ENV_OPENROUTER_KEY = "OPENROUTER_API_KEY"
@@ -105,6 +111,10 @@ GOOGLE_BOOKS_HELP = (
 
 ARM_SCRIPT = os.path.join("adapters", "claude-code", "hooks", "citation_arm.py")
 STOP_SCRIPT = os.path.join("adapters", "claude-code", "hooks", "citation_verify_stop.py")
+FROZEN_CONFIGURE_MESSAGE = (
+    "The standalone Configure command is unavailable in the installed application. "
+    "Use Settings in the Callimachus desktop app instead."
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -203,16 +213,25 @@ def render_env(mailto, google_key, accuracy):
         "# Generic model fallback. Provider-specific model variables below win.\n"
         f"{ENV_MODEL}=\n\n"
         "# -- LLM Backend - API keys / endpoints ---------------------------------\n"
-        "# DeepSeek / OpenAI-compatible  (OPENAI_BASE_URL + OPENAI_API_KEY + OPENAI_MODEL)\n"
+        "# OpenAI / OpenAI-compatible custom endpoint  (OPENAI_BASE_URL + OPENAI_API_KEY + OPENAI_MODEL)\n"
         f"{ENV_OPENAI_BASE_URL}=\n"
         f"{ENV_OPENAI_KEY}=\n"
         f"{ENV_OPENAI_MODEL}=\n\n"
+        "# DeepSeek (https://api.deepseek.com)\n"
+        f"{ENV_DEEPSEEK_KEY}=\n"
+        f"{ENV_DEEPSEEK_MODEL}=\n\n"
         "# Anthropic / Claude CLI\n"
         f"{ENV_ANTHROPIC_KEY}=\n\n"
         "# Google Gemini\n"
         f"{ENV_GEMINI_KEY}=\n\n"
         "# OpenRouter\n"
         f"{ENV_OPENROUTER_KEY}=\n\n"
+        "# Groq (https://api.groq.com/openai/v1)\n"
+        f"{ENV_GROQ_KEY}=\n"
+        f"{ENV_GROQ_MODEL}=\n\n"
+        "# Grok (xAI; https://api.x.ai/v1)\n"
+        f"{ENV_XAI_KEY}=\n"
+        f"{ENV_XAI_MODEL}=\n\n"
         "# GLM (ZhipuAI / z.ai)\n"
         f"{ENV_ZHIPUAI_KEY}=\n"
         f"{ENV_ZHIPUAI_MODEL}=\n\n"
@@ -618,6 +637,10 @@ def apply_all(*, env_path, mailto=None, google_key=None, accuracy=None,
               gen_key=None, prepare_claude_hooks=False, settings_path=None, state_dir=None,
               claude_hook_target="native", wsl_distro=None):
     """Run the selected steps and return a log (list of strings). Used by both front-ends."""
+    from core.app.runtime_paths import is_frozen
+
+    if is_frozen():
+        return False, ["ERROR: " + FROZEN_CONFIGURE_MESSAGE]
     pkg = pkg_dir()
     log = []
     instructions = None
@@ -790,6 +813,11 @@ def launch_gui():
 # --------------------------------------------------------------------------- #
 
 def main(argv=None):
+    from core.app.runtime_paths import is_frozen
+
+    if is_frozen():
+        sys.stderr.write(FROZEN_CONFIGURE_MESSAGE + "\n")
+        return 2
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):

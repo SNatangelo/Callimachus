@@ -1,3 +1,6 @@
+# packaging/build_windows_installer.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Build the per-user Windows x64 NSIS installer and its SHA-256 sidecar."""

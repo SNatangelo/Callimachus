@@ -14,6 +14,7 @@ import socket
 import stat
 import struct
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
@@ -30,8 +31,12 @@ from .client import IntegrityAuthorityClient, receive_frame, send_frame
 from .admission import admit_task_answer
 
 
+_REQUEST_RECEIVE_TIMEOUT_SECONDS = 30.0
+
+
 _WORKER_MUTATIONS = frozenset(
     {
+        "check",
         "enroll",
         "begin_transition",
         "commit_transition",
@@ -44,6 +49,7 @@ _WORKER_MUTATIONS = frozenset(
         "content_store_abort_transition",
         "content_store_heartbeat_transition",
         "content_store_override",
+        "content_store_check",
     }
 )
 _ADMIN_MUTATIONS = frozenset({"content_store_enroll"})
@@ -587,10 +593,14 @@ def serve(
     try:
         while max_requests is None or served < max_requests:
             connection, _ = listener.accept()
+            receive_deadline = time.monotonic() + _REQUEST_RECEIVE_TIMEOUT_SECONDS
             with connection:
                 try:
                     peer_pid, peer_uid, _peer_gid = _peer_credentials(connection)
-                    request = receive_frame(connection)
+                    try:
+                        request = receive_frame(connection, deadline=receive_deadline)
+                    except TimeoutError:
+                        continue
                     result = dispatch_request(
                         authority,
                         request,

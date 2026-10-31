@@ -1,0 +1,4 @@
+<!-- core/gui/assets/atlante/loading.svg -->
+<!-- Copyright (C) 2026 Stefano Natangelo -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="9" stroke="currentColor" opacity=".2"/><path d="M12 3a9 9 0 0 1 9 9" stroke="currentColor" transform="rotate(0 12 12)"/></svg>

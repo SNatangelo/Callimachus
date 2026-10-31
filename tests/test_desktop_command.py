@@ -10,8 +10,101 @@ import pytest
 
 from core.app.commands import desktop
 from core.app import runtime_paths
+from core.app.settings.config import _dotenv_values
 from core.fetch.storage import content_store
 from core.infra.db import RunRepository
+
+
+@pytest.fixture(autouse=True)
+def no_saved_language_preference(monkeypatch):
+    monkeypatch.setattr("core.gui.desktop._load_language_preference", lambda: None)
+    monkeypatch.setattr("core.gui.desktop._load_settings_environment_preferences", lambda: [])
+
+
+@pytest.mark.parametrize("updates", [
+    {"CALLIMACHUS_INSTITUTIONAL_PROFILE": "../other-profile"},
+    {"CALLIMACHUS_INSTITUTIONAL_LOGIN_URL": "https://user:password@login.example.edu/"},
+    {"CALLIMACHUS_INSTITUTIONAL_LOGIN_URL": "https://login.example.edu/callback?access_token=secret"},
+])
+def test_settings_saver_rejects_unsafe_institutional_values_before_writing(tmp_path, monkeypatch, updates):
+    root = tmp_path / "project"
+    root.mkdir()
+    original = "CALLIMACHUS_INSTITUTIONAL_PROFILE=campus\n"
+    env_path = root / ".env"
+    env_path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(desktop, "process_environment_without_dotenv", lambda: {})
+    monkeypatch.setattr(desktop, "load_environment_file", lambda _path: None)
+    captured = {}
+    monkeypatch.setattr("core.gui.desktop.run_desktop", lambda **kwargs: captured.update(kwargs) or 0)
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+    with pytest.raises(ValueError):
+        captured["settings_saver"](updates)
+    assert env_path.read_text(encoding="utf-8") == original
+
+
+def test_model_check_callbacks_use_saved_env_and_only_transient_check_updates(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "project"
+    root.mkdir()
+    env_path = root / ".env"
+    original = "OPENAI_API_KEY=saved-key\nOPENAI_MODEL=saved-model\n"
+    env_path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(desktop, "process_environment_without_dotenv", lambda: {})
+    captured = {}
+    calls = []
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+    monkeypatch.setattr(
+        desktop, "discover_local_providers",
+        lambda env: calls.append(("preflight", env)) or {"providers": []},
+    )
+    monkeypatch.setattr(
+        desktop, "institutional_access_config",
+        lambda env: {
+            "enabled": env.get("CALLIMACHUS_INSTITUTIONAL_FETCH") == "1",
+            "profile": env.get("CALLIMACHUS_INSTITUTIONAL_PROFILE", "guided_fetch"),
+            "institution": env.get("CALLIMACHUS_INSTITUTION", ""),
+            "login_url": env.get("CALLIMACHUS_INSTITUTIONAL_LOGIN_URL", ""),
+        },
+    )
+    monkeypatch.setattr(
+        desktop, "check_provider",
+        lambda provider, env: calls.append((provider, env)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        desktop, "catalog_verify_preview",
+        lambda env, catalogs, selected, **kwargs: calls.append(
+            ("preview", env, catalogs, selected, kwargs)
+        ) or {"available": True, "overlay": {}},
+    )
+
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+    assert captured["llm_preflight_loader"]() == {"providers": []}
+    assert captured["institutional_access_config_loader"]() == {
+        "enabled": False,
+        "profile": "guided_fetch",
+        "institution": "",
+        "login_url": "",
+    }
+    assert captured["institutional_settings_saver"] is captured["settings_saver"]
+    assert captured["provider_check_callback"](
+        "openai", {"OPENAI_API_KEY": "staged-key"},
+    ) == {"ok": True}
+    catalogs = {"openai": {"ok": True, "models": ["checked-model"]}}
+    selected = {"jury1": ["openai:checked-model"], "jury2": []}
+    assert captured["verify_catalog_preview_loader"](
+        catalogs, selected, "off",
+    )["available"] is True
+    assert calls[0][1]["OPENAI_API_KEY"] == "saved-key"
+    assert calls[1][1]["OPENAI_API_KEY"] == "staged-key"
+    assert calls[2][1]["OPENAI_API_KEY"] == "saved-key"
+    assert calls[2][2:] == (catalogs, selected, {"jury2_level": "off"})
+    assert env_path.read_text(encoding="utf-8") == original
 
 
 def test_installed_settings_save_replaces_startup_loaded_env_value(tmp_path, monkeypatch):
@@ -80,8 +173,8 @@ def test_desktop_command_builds_a_references_only_run_without_llm(
         "CITATION_VERIFIER_VERIFY_JURY2_LEVEL=medium\n",
         encoding="utf-8",
     )
-    (root / "docs" / "guide").mkdir(parents=True)
-    (root / "docs" / "guide" / "README.md").write_text(
+    (root / "docs" / "user" / "en").mkdir(parents=True)
+    (root / "docs" / "user" / "en" / "README.md").write_text(
         "# Guide", encoding="utf-8"
     )
     captured = {}
@@ -109,7 +202,7 @@ def test_desktop_command_loads_and_saves_env_and_complete_guide(tmp_path, monkey
     monkeypatch.delenv("GOOGLE_BOOKS_API_KEY", raising=False)
     monkeypatch.delenv("CITATION_VERIFIER_FETCH_WORKERS", raising=False)
     root = tmp_path / "project"
-    guide = root / "docs" / "guide"
+    guide = root / "docs" / "user" / "en"
     guide.mkdir(parents=True)
     (root / ".env").write_text("GOOGLE_BOOKS_API_KEY=\n", encoding="utf-8")
     (root / ".env.example").write_text(
@@ -127,6 +220,7 @@ def test_desktop_command_loads_and_saves_env_and_complete_guide(tmp_path, monkey
     )
 
     assert desktop.main(["--language", "en"]) == 0
+    assert captured["language"] == "en"
     rows = {row["name"]: row for row in captured["settings_loader"]()}
     google = rows["GOOGLE_BOOKS_API_KEY"]
     assert google["group"] == "resolution"
@@ -135,20 +229,247 @@ def test_desktop_command_loads_and_saves_env_and_complete_guide(tmp_path, monkey
     assert google["value"] == google["display_value"] == ""
     assert rows["CITATION_VERIFIER_FETCH_WORKERS"]["source"] == "default"
 
-    captured["settings_saver"]({"GOOGLE_BOOKS_API_KEY": "replacement"})
+    captured["settings_saver"]({"GOOGLE_BOOKS_API_KEY": " \treplacement\r\n"})
     assert (root / ".env").read_text(encoding="utf-8") == (
         "GOOGLE_BOOKS_API_KEY=replacement\n"
     )
+    monkeypatch.setattr("core.gui.desktop._load_language_preference", lambda: "it")
     assert captured["docs_loader"]() == {
         "README.md": "# Complete guide",
         "01-quickstart.md": "# Quickstart",
     }
 
 
-def test_docs_library_includes_linked_deployment_guides(tmp_path):
+def test_gui_command_uses_versioned_engine_defaults_and_source_service_callbacks(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".env").write_text(
+        "CITATION_VERIFIER_VERIFY_CONTEXT_MODE=extractive_rag\n"
+        "CITATION_VERIFIER_CONTEXT_PROFILE=small\n"
+        "CITATION_VERIFIER_MAX_SOURCE_CHARS=12000\n"
+        "CITATION_VERIFIER_VERIFY_MAX_TOKENS=9000\n"
+        "CITATION_VERIFIER_MAILTO=person@example.test\n"
+        "CORE_API_KEY=source-secret\n"
+        "OPENAI_API_KEY=llm-secret\n",
+        encoding="utf-8",
+    )
+    (root / ".env.example").write_text(
+        "CITATION_VERIFIER_ACCURACY=standard\n"
+        "CITATION_VERIFIER_VERIFY_BACKENDS=\n"
+        "CITATION_VERIFIER_VERIFY_JURY2_LEVEL=medium\n"
+        "CITATION_VERIFIER_VERIFY_CONTEXT_MODE=auto\n"
+        "CITATION_VERIFIER_CONTEXT_PROFILE=large\n"
+        "CITATION_VERIFIER_MAX_SOURCE_CHARS=\n"
+        "CITATION_VERIFIER_VERIFY_MAX_TOKENS=4000\n"
+        "CITATION_VERIFIER_MAILTO=\n"
+        "CORE_API_KEY=\n",
+        encoding="utf-8",
+    )
+    captured = {}
+    preview_environments = []
+    check_calls = []
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(desktop, "process_environment_without_dotenv", lambda: {})
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+    monkeypatch.setattr(
+        desktop,
+        "preview_verify_configuration",
+        lambda env, **kwargs: preview_environments.append(dict(env)) or {"available": True},
+    )
+    monkeypatch.setattr(
+        desktop,
+        "check_source_service_key",
+        lambda name, updates, *, environ: check_calls.append(
+            (name, dict(updates), dict(environ))
+        ) or {"ok": True, "error": None},
+    )
+
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+    defaults = captured["run_environment_defaults"]
+    assert defaults == {
+        "CITATION_VERIFIER_VERIFY_CONTEXT_MODE": "auto",
+        "CITATION_VERIFIER_CONTEXT_PROFILE": "large",
+        "CITATION_VERIFIER_MAX_SOURCE_CHARS": "",
+        "CITATION_VERIFIER_VERIFY_MAX_TOKENS": "4000",
+    }
+    assert "CITATION_VERIFIER_ACCURACY" not in defaults
+    assert "CITATION_VERIFIER_VERIFY_BACKENDS" not in defaults
+
+    rows = {row["name"]: row for row in captured["settings_loader"]()}
+    assert rows["CITATION_VERIFIER_VERIFY_CONTEXT_MODE"]["value"] == "auto"
+    assert rows["CITATION_VERIFIER_VERIFY_CONTEXT_MODE"]["locked"] is True
+    assert rows["CITATION_VERIFIER_VERIFY_MAX_TOKENS"]["value"] == "4000"
+    assert rows["CITATION_VERIFIER_MAILTO"]["value"] == "person@example.test"
+
+    captured["verify_preview_loader"]("medium")
+    effective = preview_environments[-1]
+    assert effective["CITATION_VERIFIER_VERIFY_CONTEXT_MODE"] == "auto"
+    assert effective["CITATION_VERIFIER_CONTEXT_PROFILE"] == "large"
+    assert effective["CITATION_VERIFIER_MAX_SOURCE_CHARS"] == ""
+    assert effective["CITATION_VERIFIER_VERIFY_MAX_TOKENS"] == "4000"
+    assert captured["source_contact_loader"]() == {"has_mail": True, "has_keys": True}
+    assert captured["source_service_check_callback"](
+        "CORE_API_KEY", {"CORE_API_KEY": "staged-source-key"},
+    ) == {"ok": True, "error": None}
+    assert check_calls[0][0:2] == (
+        "CORE_API_KEY", {"CORE_API_KEY": "staged-source-key"},
+    )
+    assert check_calls[0][2]["CORE_API_KEY"] == "source-secret"
+    assert "OPENAI_API_KEY" not in repr(captured["source_contact_loader"]())
+
+
+def test_import_or_reset_masks_stale_process_environment_only_in_gui(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "project"
+    root.mkdir()
+    env_path = root / ".env"
+    env_path.write_text(
+        "OPENAI_API_KEY=file-key\nCORE_API_KEY=file-source-key\n",
+        encoding="utf-8",
+    )
+    (root / ".env.example").write_text(
+        "OPENAI_API_KEY=\nCORE_API_KEY=\nCITATION_VERIFIER_VERIFY_BACKENDS=\n",
+        encoding="utf-8",
+    )
+    captured = {}
+    process_environment = {
+        "OPENAI_API_KEY": "stale-process-key",
+        "CORE_API_KEY": "stale-process-source-key",
+    }
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(
+        desktop, "process_environment_without_dotenv", lambda: dict(process_environment),
+    )
+    monkeypatch.setattr(desktop, "load_environment_file", lambda _path: None)
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+
+    result = captured["settings_transfer_callback"](
+        "reset", {"keep_api_keys": False},
+    )
+    assert result["ok"] is True
+    assert set(result["environment_names"]) == {
+        "OPENAI_API_KEY", "CORE_API_KEY", "CITATION_VERIFIER_VERIFY_BACKENDS",
+    }
+    assert "stale-process-key" not in repr(result)
+    assert captured["source_contact_loader"]() == {"has_mail": False, "has_keys": False}
+    rows = {row["name"]: row for row in captured["settings_loader"]()}
+    assert rows["OPENAI_API_KEY"]["value"] == ""
+    assert rows["CORE_API_KEY"]["value"] == ""
+    # The running user's actual process environment was only masked for this GUI.
+    assert process_environment["OPENAI_API_KEY"] == "stale-process-key"
+    assert process_environment["CORE_API_KEY"] == "stale-process-source-key"
+
+
+def test_persisted_gui_environment_mask_is_template_limited_and_used_by_commands(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / ".env").write_text(
+        "OPENAI_API_KEY=\nCITATION_VERIFIER_VERIFY_BACKENDS=openai\n",
+        encoding="utf-8",
+    )
+    (root / ".env.example").write_text(
+        "OPENAI_API_KEY=\nCITATION_VERIFIER_VERIFY_BACKENDS=\n",
+        encoding="utf-8",
+    )
+    captured = {}
+    process_environment = {
+        "OPENAI_API_KEY": "stale-process-key",
+        "PATH": "kept-process-path",
+    }
+    provider_environments = []
+    preview_environments = []
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(
+        desktop, "process_environment_without_dotenv", lambda: dict(process_environment),
+    )
+    monkeypatch.setattr(desktop, "load_environment_file", lambda _path: None)
+    monkeypatch.setattr(
+        "core.gui.desktop._load_settings_environment_preferences",
+        lambda: ["OPENAI_API_KEY", "PATH"],
+    )
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+    monkeypatch.setattr(
+        desktop, "check_provider",
+        lambda _provider, environ: provider_environments.append(dict(environ)) or {"ok": True},
+    )
+    monkeypatch.setattr(
+        desktop, "preview_verify_configuration",
+        lambda environ, **_kwargs: preview_environments.append(dict(environ)) or {"available": True},
+    )
+
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+    rows = {row["name"]: row for row in captured["settings_loader"]()}
+    assert rows["OPENAI_API_KEY"]["source"] == "env_file"
+    captured["provider_check_callback"]("openai", {})
+    assert provider_environments[-1]["OPENAI_API_KEY"] == ""
+    assert provider_environments[-1]["PATH"] == "kept-process-path"
+    captured["command_builder"]("paper.pdf", "standard", "medium")
+    assert preview_environments[-1]["OPENAI_API_KEY"] == ""
+    assert preview_environments[-1]["PATH"] == "kept-process-path"
+    assert process_environment["OPENAI_API_KEY"] == "stale-process-key"
+
+
+def test_settings_backup_preserves_effective_process_only_api_values(
+    tmp_path, monkeypatch,
+):
+    root = tmp_path / "project"
+    root.mkdir()
+    env_path = root / ".env"
+    env_path.write_text("OPENAI_API_KEY=\nOPENAI_BASE_URL=\n", encoding="utf-8")
+    (root / ".env.example").write_text(
+        "OPENAI_API_KEY=\nOPENAI_BASE_URL=https://api.openai.com/v1\n",
+        encoding="utf-8",
+    )
+    captured = {}
+    process_environment = {
+        "OPENAI_API_KEY": "process-only-api-secret",
+        "OPENAI_BASE_URL": "https://process-endpoint.example/v1",
+        "PATH": "unrelated-path-secret",
+    }
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(
+        desktop, "process_environment_without_dotenv", lambda: dict(process_environment),
+    )
+    monkeypatch.setattr(desktop, "load_environment_file", lambda _path: None)
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+
+    result = captured["settings_transfer_callback"](
+        "reset", {"keep_api_keys": True},
+    )
+    assert result["ok"] is True
+    values = _dotenv_values(env_path)
+    assert values["OPENAI_API_KEY"] == "process-only-api-secret"
+    assert values["OPENAI_BASE_URL"] == "https://process-endpoint.example/v1"
+    assert "PATH" not in values
+    assert "process-only-api-secret" not in repr(result)
+    assert "unrelated-path-secret" not in env_path.read_text(encoding="utf-8")
+
+
+def test_docs_library_excludes_cli_and_deployment_material(tmp_path):
     root = tmp_path / "project"
     paths = {
-        "README.md": root / "docs" / "guide" / "README.md",
+        "README.md": root / "docs" / "user" / "en" / "README.md",
+        "01-quickstart.md": root / "docs" / "user" / "en" / "01-quickstart.md",
+        "02-cli-reference.md": root / "docs" / "reference" / "02-cli-reference.md",
         "../deployment/agent-guide.md": root / "docs" / "deployment" / "agent-guide.md",
         "../deployment/administrator-guide.md": root / "docs" / "deployment" / "administrator-guide.md",
         "../architecture/artifact-integrity.md": root / "docs" / "architecture" / "artifact-integrity.md",
@@ -157,33 +478,99 @@ def test_docs_library_includes_linked_deployment_guides(tmp_path):
     for key, path in paths.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"# {key}", encoding="utf-8")
+    legacy_guide = root / "docs" / "reference"
+    legacy_guide.mkdir(parents=True, exist_ok=True)
+    (legacy_guide / "README.md").write_text("# CLI guide", encoding="utf-8")
+    (legacy_guide / "01-quickstart.md").write_text("# CLI quickstart", encoding="utf-8")
 
-    assert desktop._docs_library(root) == {
-        key: f"# {key}" for key in paths
+    documents = desktop._docs_library(root, "en")
+    assert documents == {
+        "README.md": "# README.md",
+        "01-quickstart.md": "# 01-quickstart.md",
     }
 
 
-def test_docs_library_loads_real_guide_chapters_including_cli_reference():
+@pytest.mark.parametrize(
+    "language,privacy,readme_title",
+    [("en", "privacy.md", "Callimachus Desktop Guide"),
+     ("it", "privacy-it.md", "Guida desktop di Callimachus")],
+)
+def test_docs_library_loads_only_selected_language(language, privacy, readme_title):
     root = Path(__file__).resolve().parents[1]
-    documents = desktop._docs_library(root)
-    chapter_paths = [
-        f"{index:02d}-{name}.md"
-        for index, name in enumerate((
-            "quickstart", "cli-reference", "configuration", "pipeline",
-            "tasks-and-recovery", "verification-and-evidence",
-            "artifacts-and-provenance", "capabilities-and-limits",
-            "troubleshooting", "keys-and-credentials", "environment-reference",
-            "desktop-packages",
-        ), 1)
-    ]
+    documents = desktop._docs_library(root, language)
+    chapter_paths = (
+        "01-quickstart.md",
+        "02-analysis.md",
+        "03-settings.md",
+        "04-reviews-and-sources.md",
+        "05-results-and-history.md",
+        "06-library-and-cache.md",
+        "07-capabilities-and-limits.md",
+        "08-troubleshooting.md",
+    )
 
     assert all(path in documents and documents[path].strip() for path in chapter_paths)
-    assert "CLI" in documents["02-cli-reference.md"]
+    assert documents["README.md"].splitlines()[0].lstrip("# ") == readme_title
+    assert privacy in documents and documents[privacy].strip()
+    assert not ({"privacy.md", "privacy-it.md"} - {privacy}).intersection(documents)
+    assert not {"02-cli-reference.md", "10-keys-and-credentials.md"} & documents.keys()
+
+
+def test_docs_library_has_no_cross_language_fallback(tmp_path):
+    root = tmp_path / "project"
+    english = root / "docs" / "user" / "en"
+    english.mkdir(parents=True)
+    (english / "README.md").write_text("# English guide", encoding="utf-8")
+    italian = root / "docs" / "user" / "it"
+    italian.mkdir(parents=True)
+    (italian / "README.md").write_text("# Guida italiana", encoding="utf-8")
+    (english / "01-quickstart.md").write_text("# English quickstart", encoding="utf-8")
+
+    documents = desktop._docs_library(root, "it")
+    assert documents["README.md"] == "# Guida italiana"
+    assert "01-quickstart.md" not in documents
+
+
+@pytest.mark.parametrize("language", ["", "auto", "fr", "EN"])
+def test_docs_library_rejects_unsupported_language(tmp_path, language):
+    with pytest.raises(ValueError, match="unsupported documentation language"):
+        desktop._docs_library(tmp_path, language)
+
+
+@pytest.mark.parametrize(
+    "explicit,saved,expected",
+    [("en", "it", "en"), ("it", "en", "it"),
+     (None, "it", "it"), (None, "en", "en"), (None, None, "en")],
+)
+def test_desktop_language_precedence_and_frozen_docs_loader(
+    tmp_path, monkeypatch, explicit, saved, expected,
+):
+    root = tmp_path / "project"
+    guide = root / "docs" / "user" / expected
+    guide.mkdir(parents=True)
+    (guide / "README.md").write_text(f"# {expected} guide", encoding="utf-8")
+    (root / ".env.example").write_text("", encoding="utf-8")
+    captured = {}
+    preference = {"language": saved}
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(
+        "core.gui.desktop._load_language_preference", lambda: preference["language"],
+    )
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+
+    argv = ["--language", explicit] if explicit else []
+    assert desktop.main(argv) == 0
+    assert captured["language"] == expected
+    preference["language"] = "it" if expected == "en" else "en"
+    assert captured["docs_loader"]()["README.md"] == f"# {expected} guide"
 
 
 def test_desktop_signing_key_generator_persists_only_key_path(tmp_path, monkeypatch):
     root = tmp_path / "project"
-    guide = root / "docs" / "guide"
+    guide = root / "docs" / "user" / "en"
     guide.mkdir(parents=True)
     (guide / "README.md").write_text("# Guide", encoding="utf-8")
     (root / ".env.example").write_text(
@@ -239,10 +626,10 @@ def test_delete_history_rows_rejects_outside_root_and_active_runs(tmp_path, monk
         desktop._delete_history_rows(runs_root, [{"run_dir": str(outside)}])
     with pytest.raises(ValueError):
         desktop._delete_history_rows(runs_root, [{"run_dir": str(active)}])
-    with pytest.raises(ValueError):
-        desktop._delete_history_rows(
-            runs_root, [{"run_dir": str(paused)}], protected_run_dir=str(paused)
-        )
+    desktop._delete_history_rows(
+        runs_root, [{"run_dir": str(paused)}], protected_run_dir=str(paused)
+    )
+    assert not paused.exists()
     desktop._delete_history_rows(
         runs_root,
         [{"run_dir": str(valid)}],
@@ -305,6 +692,8 @@ def test_reference_rows_keep_source_and_verdict_lifecycles_separate():
         "review_labels": "Incomplete bibliographic source",
         "review_tooltip": "Informational only; not proof of fabrication.",
         "result": "supported",
+        "verification_in_progress": False,
+        "verification_pending": False,
         "details": {
             "parsed": {"title": "A source"},
             "resolved": {"status": "resolved"},
@@ -436,7 +825,8 @@ def test_reference_rows_show_jury1_only_after_jury2_acceptance():
             },
             {
                 "ref_id": "r1", "claim_id": "c2", "scope": "fulltext_complete",
-                "status": "open", "winner_call_id": "candidate-in-retry",
+                "status": "open", "in_progress": True,
+                "winner_call_id": "candidate-in-retry",
                 "jury1_outcome": "contradicts",
             },
         ],
@@ -445,6 +835,22 @@ def test_reference_rows_show_jury1_only_after_jury2_acceptance():
     assert rows[0]["status"] == "in_corso"
     assert rows[0]["result"] == "Jury1: supports"
     assert "contradicts" not in rows[0]["result"]
+
+
+def test_reference_rows_mark_queued_open_verification_pairs_waiting():
+    rows = desktop._reference_rows({
+        "phase": "verify",
+        "source_inventory": [{
+            "ref_id": "r1", "parsed": {"title": "A source"},
+            "resolve": {}, "fetch": {},
+        }],
+        "verification_pairs": [{
+            "ref_id": "r1", "claim_id": "c1", "status": "open",
+        }],
+    })
+
+    assert rows[0]["phase"] == "verify"
+    assert rows[0]["status"] == "in_attesa"
 
 
 def test_reference_rows_leave_missing_verdict_empty_for_localized_gui_fallback():
@@ -480,8 +886,8 @@ def test_desktop_cache_loader_keeps_external_root_after_run_selection(
     runs_root = tmp_path / "external-runs"
     root.mkdir()
     (root / ".env.example").write_text("", encoding="utf-8")
-    (root / "docs" / "guide").mkdir(parents=True)
-    (root / "docs" / "guide" / "README.md").write_text("# Guide", encoding="utf-8")
+    (root / "docs" / "user" / "en").mkdir(parents=True)
+    (root / "docs" / "user" / "en" / "README.md").write_text("# Guide", encoding="utf-8")
     monkeypatch.delenv(content_store.ENV_STATE_DIR, raising=False)
     captured = {}
     cache_loads = []
@@ -546,8 +952,8 @@ def test_desktop_builds_completed_verify_fork_with_selected_backends(
     tmp_path, monkeypatch
 ):
     root = tmp_path / "project"
-    (root / "docs" / "guide").mkdir(parents=True)
-    (root / "docs" / "guide" / "README.md").write_text(
+    (root / "docs" / "user" / "en").mkdir(parents=True)
+    (root / "docs" / "user" / "en" / "README.md").write_text(
         "# Guide", encoding="utf-8"
     )
     captured = {}
@@ -577,7 +983,8 @@ def test_desktop_builds_completed_verify_fork_with_selected_backends(
     }]
     specification = captured["verify_fork_command_builder"](
         {"run_dir": str(root / "runs" / "parent"), "paper": "paper.pdf"},
-        ["freetoken:local-model"],
+        {"jury1": ["freetoken:local-model"], "jury2": []},
+        {},
     )
 
     assert "--fork-completed-verify" in specification["command"]
@@ -596,14 +1003,17 @@ def test_desktop_builds_completed_verify_fork_with_selected_backends(
             "paper": "paper.pdf",
             "references_only": True,
         },
-        ["freetoken:local-model"],
+        {"jury1": ["freetoken:local-model"], "jury2": []},
+        {},
     )
     assert "--fork-reference-only-fetch" in reference_preview["command"]
     assert "--fork-completed-verify" not in reference_preview["command"]
     assert str(root / "runs" / "preview") in reference_preview["command"]
-    with pytest.raises(ValueError, match="available Verify"):
+    with pytest.raises(ValueError, match="valid policy"):
         captured["verify_fork_command_builder"](
-            {"run_dir": str(root / "runs" / "parent")}, ["unknown"]
+            {"run_dir": str(root / "runs" / "parent")},
+            {"jury1": ["unknown"], "jury2": []},
+            {},
         )
 
 
@@ -611,8 +1021,8 @@ def test_desktop_history_verify_uses_deepseek_without_backend_flag(
     tmp_path, monkeypatch
 ):
     root = tmp_path / "project"
-    (root / "docs" / "guide").mkdir(parents=True)
-    (root / "docs" / "guide" / "README.md").write_text(
+    (root / "docs" / "user" / "en").mkdir(parents=True)
+    (root / "docs" / "user" / "en" / "README.md").write_text(
         "# Guide", encoding="utf-8"
     )
     captured = {}
@@ -635,15 +1045,75 @@ def test_desktop_history_verify_uses_deepseek_without_backend_flag(
     ]
     specification = captured["verify_fork_command_builder"](
         {"run_dir": str(root / "runs" / "parent"), "paper": "paper.pdf"},
-        [options[0]["selector"]],
+        {
+            "jury1": [options[0]["selector"]],
+            "jury2": [],
+        },
+        {},
     )
     assert specification["environment"]["CITATION_VERIFIER_VERIFY_BACKENDS"] == (
         "openai_compatible"
     )
     assert specification["environment"]["OPENAI_MODEL"] == "deepseek-v4-flash"
     assert specification["environment"]["CITATION_VERIFIER_VERIFY_JURY2_LEVEL"] == (
-        "medium"
+        "off"
     )
+
+
+def test_desktop_history_verify_uses_independent_roles_and_catalog_model(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "project"
+    (root / "docs" / "user" / "en").mkdir(parents=True)
+    (root / "docs" / "user" / "en" / "README.md").write_text(
+        "# Guide", encoding="utf-8"
+    )
+    captured = {}
+    monkeypatch.setattr(desktop, "_root", lambda: root)
+    monkeypatch.setattr(
+        desktop, "effective_environment", lambda **_kwargs: {
+            "OPENAI_BASE_URL": "https://api.deepseek.com",
+            "OPENAI_API_KEY": "synthetic-key",
+            "OPENAI_MODEL": "deepseek-v4-flash",
+            "CITATION_VERIFIER_VERIFY_JURY2_LEVEL": "medium",
+            "OLLAMA_HOST": "http://127.0.0.1:11434",
+        },
+    )
+    monkeypatch.setattr(
+        "core.gui.desktop.run_desktop",
+        lambda **kwargs: captured.update(kwargs) or 0,
+    )
+    assert desktop.main(["--runs-root", str(root / "runs")]) == 0
+    ollama_catalog = {
+        "provider": "ollama_local", "ok": True,
+        "models": ["catalog-only-model"], "model_env": "OLLAMA_MODEL",
+        "options": [{
+            "selector": "ollama_local:catalog-only-model", "backend": "ollama_local",
+            "model": "catalog-only-model", "model_env": "OLLAMA_MODEL",
+        }],
+    }
+    specification = captured["verify_fork_command_builder"](
+        {"run_dir": str(root / "runs" / "parent"), "paper": "paper.pdf"},
+        {
+            "jury1": ["openai_compatible:deepseek-v4-flash"],
+            "jury2": ["ollama_local:catalog-only-model"],
+        },
+        {"ollama_local": ollama_catalog},
+    )
+
+    overlay = specification["environment"]
+    assert set(overlay["CITATION_VERIFIER_VERIFY_BACKENDS"].split(",")) == {
+        "openai_compatible", "ollama_local",
+    }
+    assert overlay["CITATION_VERIFIER_VERIFY_JURY1_ONLY"] == (
+        "openai_compatible:deepseek-v4-flash"
+    )
+    assert overlay["CITATION_VERIFIER_VERIFY_JURY2_ONLY"] == (
+        "ollama_local:catalog-only-model"
+    )
+    assert overlay["OPENAI_MODEL"] == "deepseek-v4-flash"
+    assert overlay["OLLAMA_MODEL"] == "catalog-only-model"
+    assert overlay["CITATION_VERIFIER_VERIFY_JURY2_LEVEL"] == "medium"
 
 
 @pytest.mark.parametrize("references_only", [True, False])
@@ -651,8 +1121,8 @@ def test_desktop_resume_rejects_completed_run(
     tmp_path, monkeypatch, references_only
 ):
     root = tmp_path / "project"
-    (root / "docs" / "guide").mkdir(parents=True)
-    (root / "docs" / "guide" / "README.md").write_text(
+    (root / "docs" / "user" / "en").mkdir(parents=True)
+    (root / "docs" / "user" / "en" / "README.md").write_text(
         "# Guide", encoding="utf-8"
     )
     captured = {}
@@ -724,3 +1194,16 @@ def test_desktop_skip_manual_waives_retrieval_and_keeps_identity_unverified(
     with pytest.raises(ValueError, match="automatic manual-task skip cannot handle"):
         captured["skip_manual_callback"]("run")
     assert calls == []
+
+def test_reference_rows_use_full_citation_when_parsed_title_is_placeholder():
+    citation = "Bruner. The process of education. 1960. ISBN 978-0-306-40615-7."
+    rows = desktop._reference_rows({
+        "source_inventory": [{
+            "ref_id": "r1",
+            "ref_number": 1,
+            "parsed": {"title": "non identificato", "raw_entry": citation},
+            "resolve": {"matched_title": "Unverified resolver suggestion"},
+        }],
+    })
+
+    assert rows[0]["title"] == citation

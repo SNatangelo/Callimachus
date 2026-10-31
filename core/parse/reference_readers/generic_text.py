@@ -1,3 +1,6 @@
+# core/parse/reference_readers/generic_text.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Explicit last-resort field reader backed by current deterministic heuristics."""
 
 from __future__ import annotations
@@ -30,6 +33,19 @@ def parse_fields(entry: str, *, chicago_hanging: bool = False) -> dict | None:
         if start >= 0 and entry.find(title, start + 1) < 0:
             fields["title"] = _field(title, entry, start, start + len(title),
                                      "generic-title-heuristic")
+    # A closed numbered institutional report separates the report's embedded
+    # year/number from its terminal publication year. Keep all fields grounded
+    # in that same literal shape rather than inferring a year from the title.
+    report = pc._CORPORATE_NUMBERED_REPORT_RE.fullmatch(entry)
+    if report:
+        fields["authors"] = _field(
+            [report.group("authors")], entry, *report.span("authors"),
+            "corporate-numbered-report",
+        )
+        fields["year"] = _field(
+            int(report.group("year")), entry, *report.span("year"),
+            "corporate-numbered-report",
+        )
     doi_match = re.search(r"10\.\d{4,9}/\S+", entry)
     if doi_match:
         doi = doi_match.group(0).rstrip(".,;)]}>")

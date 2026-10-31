@@ -1,3 +1,6 @@
+# core/parse/reference_readers/dated_book.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Personal author-year book entries with an explicit place-publisher tail."""
 
 from __future__ import annotations

@@ -99,9 +99,9 @@ def test_root_help_is_operator_facing_and_complete():
         "parse -> resolve -> fetch -> gaps -> style -> verify -> "
         "web_research -> report -> done"
     ) in output
-    assert "docs/guide/README.md" in output
-    assert "docs/guide/10-keys-and-credentials.md" in output
-    assert "docs/guide/11-environment-reference.md" in output
+    assert "docs/reference/README.md" in output
+    assert "docs/reference/10-keys-and-credentials.md" in output
+    assert "docs/reference/11-environment-reference.md" in output
     assert f"{_child_run_prefix()} <command> --help" in output
     assert "10  operator action is required" in output
     assert "20  report or completion gate failed" in output
@@ -170,9 +170,9 @@ def test_root_help_uses_only_the_standard_library(flag):
     for marker in (
         "Callimachus — audit-ready citation verification",
         "parse -> resolve -> fetch -> gaps -> style -> verify -> web_research -> report -> done",
-        "docs/guide/README.md",
-        "docs/guide/10-keys-and-credentials.md",
-        "docs/guide/11-environment-reference.md",
+        "docs/reference/README.md",
+        "docs/reference/10-keys-and-credentials.md",
+        "docs/reference/11-environment-reference.md",
         f"{_child_run_prefix()} <command> --help",
         "10  operator action is required",
         "20  report or completion gate failed",
@@ -191,9 +191,13 @@ def test_missing_requirements_are_reported_without_a_traceback(argv, tmp_path):
         (PROJECT_ROOT / "run.py").read_text(encoding="utf-8"), encoding="utf-8",
     )
     (tmp_path / ".env").write_text("SETTING=value\n", encoding="utf-8")
+    child_env = os.environ.copy()
+    child_env.pop("PYTHONPATH", None)
+    child_env.pop("PYTHONHOME", None)
     completed = subprocess.run(
         [sys.executable, "-S", str(entrypoint), *argv],
         cwd=tmp_path,
+        env=child_env,
         capture_output=True,
         encoding="utf-8",
         timeout=30,
@@ -504,9 +508,9 @@ def test_pdf_backend_preflight_accepts_pdfminer_or_pdftotext(monkeypatch):
 def test_standalone_entrypoints_do_not_require_autonomous_flag():
     paths = [
         PROJECT_ROOT / "README.md",
-        PROJECT_ROOT / "docs" / "guide" / "01-quickstart.md",
-        PROJECT_ROOT / "docs" / "guide" / "02-cli-reference.md",
-        PROJECT_ROOT / "docs" / "guide" / "05-tasks-and-recovery.md",
+        PROJECT_ROOT / "docs" / "reference" / "01-quickstart.md",
+        PROJECT_ROOT / "docs" / "reference" / "02-cli-reference.md",
+        PROJECT_ROOT / "docs" / "reference" / "05-tasks-and-recovery.md",
     ]
     documents = {path: path.read_text(encoding="utf-8") for path in paths}
 
@@ -540,14 +544,14 @@ def test_readme_describes_standalone_and_harness_invocation():
 
 
 def test_guide_surfaces_setup_references_and_report_layout():
-    guide_index = (PROJECT_ROOT / "docs" / "guide" / "README.md").read_text(
+    guide_index = (PROJECT_ROOT / "docs" / "reference" / "README.md").read_text(
         encoding="utf-8"
     )
-    quickstart = (PROJECT_ROOT / "docs" / "guide" / "01-quickstart.md").read_text(
+    quickstart = (PROJECT_ROOT / "docs" / "reference" / "01-quickstart.md").read_text(
         encoding="utf-8"
     )
     artifacts = (
-        PROJECT_ROOT / "docs" / "guide" / "07-artifacts-and-provenance.md"
+        PROJECT_ROOT / "docs" / "reference" / "07-artifacts-and-provenance.md"
     ).read_text(encoding="utf-8")
 
     assert guide_index.count("**Setup reference:**") == 2
@@ -567,10 +571,10 @@ def test_guide_surfaces_setup_references_and_report_layout():
 def test_environment_reference_covers_template_and_active_controls():
     template = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
     reference = (
-        PROJECT_ROOT / "docs" / "guide" / "11-environment-reference.md"
+        PROJECT_ROOT / "docs" / "reference" / "11-environment-reference.md"
     ).read_text(encoding="utf-8")
     configuration = (
-        PROJECT_ROOT / "docs" / "guide" / "03-configuration.md"
+        PROJECT_ROOT / "docs" / "reference" / "03-configuration.md"
     ).read_text(encoding="utf-8")
     labels = set(re.findall(r"^([A-Z][A-Z0-9_]*)=", template, re.MULTILINE))
     active_controls = {
@@ -582,6 +586,8 @@ def test_environment_reference_covers_template_and_active_controls():
         "CITATION_VERIFIER_OA_ALTERNATES",
         "CITATION_VERIFIER_WAYBACK",
         "CITATION_VERIFIER_PERMA",
+        "XAI_API_KEY",
+        "XAI_MODEL",
     }
     removed_controls = {
         "CITATION_VERIFIER_LLM_HOST_TOOLS",
@@ -589,7 +595,7 @@ def test_environment_reference_covers_template_and_active_controls():
         "CITATION_VERIFIER_SUPPLEMENT_FALLBACK",
     }
 
-    assert len(labels) == 95
+    assert len(labels) == 114
     assert active_controls <= labels
     assert removed_controls.isdisjoint(labels)
     for label in removed_controls:

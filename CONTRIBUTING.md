@@ -6,11 +6,11 @@ Callimachus project code, tests and accompanying documentation are available und
 
 ## Contributor License Agreement
 
-Before a contribution is merged, the relevant contributor or rights holder must accept the [Callimachus Contributor License Agreement, version 1.0](CLA.md).
+Before a contribution is merged, the relevant contributor or rights holder must accept the [Callimachus Contributor License Agreement, version 1.1](CLA.md).
 
 **You keep your copyright. The CLA authorises Stefano Natangelo to include your contribution in Callimachus and distribute it under other licences, including paid proprietary licences, without seeking your permission again or owing you royalties solely under the CLA. In return, an included contribution must also remain available under the public project licence that applied when you submitted it.** See the complete CLA for the terms.
 
-The designated CLA Assistant process asks you to authenticate with GitHub and identify yourself and the rights holder. Accept the version presented by the bot before merge. Acceptance normally covers later contributions within the scope of that version; a revised agreement requires fresh acceptance. If the check is unavailable, contact hello@callimachus.science for an alternative written acceptance. A checkbox in a pull request is not a substitute for acceptance of the CLA.
+The repository CLA check records acceptance through the designated GitHub comment and checks the applicable agreement before merge. Follow the instructions posted by the bot and identify the rights holder when required. Acceptance normally covers later contributions within the scope of that version; a revised agreement requires fresh acceptance. If the check is unavailable, contact hello@callimachus.science for an alternative written acceptance. A checkbox in a pull request is not a substitute for acceptance of the CLA.
 
 Sign in your own capacity only for rights you own or have authority to license. For company-owned contributions, an authorised representative must identify and bind the actual rights holder, or provide adequate written authorisation. Opening a pull request does not entitle you to license another contributor's work. We may request confirmation from the rights holder before merging.
 

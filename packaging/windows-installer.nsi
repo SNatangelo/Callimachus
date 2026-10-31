@@ -12,6 +12,10 @@ ShowUninstDetails show
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "WinVer.nsh"
+
+; GetVersionEx used by WinVer.nsh needs an explicit Windows 10 compatibility declaration.
+ManifestSupportedOS {8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}
 
 ; NSIS_VERSION includes the leading "v" (for example, "v3.10").
 !if "${NSIS_VERSION}" != "v3.10"
@@ -62,6 +66,24 @@ Var WindowStyleArgument
 Var PreflightExitCode
 
 Function .onInit
+  ${IfNot} ${AtLeastWin10}
+    Goto windows_unsupported
+  ${EndIf}
+  ${IfNot} ${AtLeastBuild} 17763
+    Goto windows_unsupported
+  ${EndIf}
+  Goto windows_supported
+
+windows_unsupported:
+  IfSilent windows_unsupported_silent windows_unsupported_interactive
+windows_unsupported_interactive:
+  MessageBox MB_ICONSTOP|MB_OK "Callimachus requires Windows 10 version 1809 (build 17763) or later. Setup has not installed the application."
+windows_unsupported_silent:
+  DetailPrint "Callimachus requires Windows 10 version 1809 (build 17763) or later."
+  SetErrorLevel 2
+  Abort
+
+windows_supported:
   ; Keep the mutex handle open for the lifetime of this setup process.
   System::Call 'kernel32::CreateMutex(i 0, i 0, t "Local\CallimachusSetup-7B99D628-D948-41E9-96C5-8EB5A06FB2AE") i .r1 ?e'
   Pop $R0

@@ -1,3 +1,6 @@
+# tests/test_windows_installer_build.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 # Copyright (C) 2026 Stefano Natangelo
 # SPDX-License-Identifier: AGPL-3.0-only
 """Windows installer builder and prerequisite contract regressions."""
@@ -173,6 +176,19 @@ def test_installer_runs_runtime_preflight_before_copying_bundle():
     assert "NSIS-3.10.txt" in source
     assert '!if "${NSIS_VERSION}" != "v3.10"' in source
     assert "vc_redist" not in source.lower()
+
+
+def test_installer_rejects_unsupported_windows_before_plugin_staging():
+    source = (ROOT / "packaging" / "windows-installer.nsi").read_text(encoding="utf-8")
+    on_init = source.split("Function .onInit", 1)[1].split("FunctionEnd", 1)[0]
+    windows_version_gate = on_init.index("${AtLeastWin10}")
+    windows_build_gate = on_init.index("${AtLeastBuild} 17763")
+    plugin_staging = on_init.index("InitPluginsDir")
+
+    assert '!include "WinVer.nsh"' in source
+    assert "ManifestSupportedOS {8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" in source
+    assert windows_version_gate < windows_build_gate < plugin_staging
+    assert "Windows 10 version 1809 (build 17763) or later" in on_init
 
 
 def test_installer_license_page_is_informational_and_uses_distribution_license():

@@ -32,8 +32,29 @@ QT_TERMS = {
     "GPL-2.0-only.txt": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
     "Qt-GPL-exception-1.0.txt": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2",
 }
-QT_SOURCE = "https://raw.githubusercontent.com/qtproject/pyside-pyside-setup/v6.11.2/LICENSES/"
-QT_VERSION = "6.11.2"
+def _qt_version(platform: str | None = None) -> str:
+    return "6.12.0"
+
+
+def _qt_source(platform: str | None = None) -> str:
+    return (
+        "https://raw.githubusercontent.com/qtproject/pyside-pyside-setup/"
+        f"v{_qt_version(platform)}/LICENSES/"
+    )
+
+
+def _qt_doc_source(platform: str | None = None) -> str:
+    major_minor = ".".join(_qt_version(platform).split(".")[:2])
+    return f"https://doc.qt.io/qt-{major_minor}/"
+
+
+def _qt_gfdl_source(platform: str | None = None) -> str:
+    return (
+        "https://raw.githubusercontent.com/qt/qtbase/"
+        f"v{_qt_version(platform)}/LICENSES/GFDL-1.3-no-invariants-only.txt"
+    )
+
+
 NCURSES_VERSION = "6.5"
 NCURSES_SOURCE = "https://ftp.gnu.org/gnu/ncurses/ncurses-6.5.tar.gz"
 NCURSES_SHA256 = "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6"
@@ -50,8 +71,6 @@ LIBFFI_SOURCE = "https://github.com/libffi/libffi/releases/download/v3.4.4/libff
 LIBFFI_SHA256 = "d66c56ad259a82cf2a9dfc408b32bf5da52371500b84745f7fb8b645712df676"
 SQLITE_SOURCE = "https://www.sqlite.org/2025/sqlite-autoconf-3500400.tar.gz"
 SQLITE_SHA256 = "a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18"
-QT_DOC_SOURCE = "https://doc.qt.io/qt-6.11/"
-QT_GFDL_SOURCE = "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/GFDL-1.3-no-invariants-only.txt"
 QT_ATTRIBUTION_MODULES = {
     "Core": "qt-core", "DBus": "qt-d-bus", "Gui": "qt-gui",
     "Network": "qt-network", "Pdf": "qt-pdf", "Qml": "qt-qml",
@@ -457,16 +476,19 @@ def _qt_sections(binaries: list[tuple[str, Path]]) -> set[str]:
 def _fetch_qt_document(filename: str) -> bytes:
     if not re.fullmatch(r"[a-z0-9-]+\.html", filename):
         raise RuntimeError(f"unexpected Qt attribution path: {filename}")
-    with urllib.request.urlopen(QT_DOC_SOURCE + filename, timeout=30) as response:
+    qt_version = _qt_version()
+    with urllib.request.urlopen(_qt_doc_source() + filename, timeout=30) as response:
         body = response.read()
-    if b"Qt 6.11.2" not in body or b"<h1" not in body:
-        raise RuntimeError(f"Qt attribution page is not for {QT_VERSION}: {filename}")
+    if f"Qt {qt_version}".encode("ascii") not in body or b"<h1" not in body:
+        raise RuntimeError(f"Qt attribution page is not for {qt_version}: {filename}")
     return body
 
 
 def add_qt_attributions(destination: Path, analysis_toc: Path) -> None:
     """Bundle Qt's own component notices for the modules in the frozen app."""
-    if metadata.distribution("PySide6").version != QT_VERSION:
+    qt_version = _qt_version()
+    qt_doc_source = _qt_doc_source()
+    if metadata.distribution("PySide6").version != qt_version:
         raise RuntimeError("PySide6 version changed; review Qt third-party attributions")
     sections = _qt_sections(_bundled_binaries(analysis_toc))
     index_body = _fetch_qt_document("licenses-used-in-qt.html")
@@ -486,7 +508,7 @@ def add_qt_attributions(destination: Path, analysis_toc: Path) -> None:
         )
     if not pages or "qt-core" not in sections:
         raise RuntimeError("Qt attribution index did not identify the bundled modules")
-    with urllib.request.urlopen(QT_GFDL_SOURCE, timeout=30) as response:
+    with urllib.request.urlopen(_qt_gfdl_source(), timeout=30) as response:
         gfdl = response.read()
     if b"GNU Free Documentation License" not in gfdl:
         raise RuntimeError("Qt documentation license text is missing")
@@ -501,13 +523,13 @@ def add_qt_attributions(destination: Path, analysis_toc: Path) -> None:
         (target / filename).write_bytes(body)
         hashes[filename] = hashlib.sha256(body).hexdigest()
     (target / "manifest.json").write_text(json.dumps({
-        "qt_version": QT_VERSION, "source": QT_DOC_SOURCE,
+        "qt_version": qt_version, "source": qt_doc_source,
         "sections": sorted(sections), "sha256": hashes,
     }, indent=2) + "\n", encoding="utf-8")
     inventory_path = destination / "index.json"
     inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
     inventory.append({
-        "name": "Qt third-party attributions", "version": QT_VERSION,
+        "name": "Qt third-party attributions", "version": qt_version,
         "license": "Component licenses in individual pages; documentation under GFDL 1.3",
         "directory": "Qt-PySide6/attributions",
         "files": ["GFDL-1.3-no-invariants-only.txt", "licenses-used-in-qt.html", "manifest.json", *sorted(pages)],
@@ -515,7 +537,7 @@ def add_qt_attributions(destination: Path, analysis_toc: Path) -> None:
     inventory_path.write_text(json.dumps(inventory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     with (destination / "README.txt").open("a", encoding="utf-8") as readme:
         readme.write(
-            f"Qt {QT_VERSION} component attribution pages are copied from {QT_DOC_SOURCE} "
+            f"Qt {qt_version} component attribution pages are copied from {qt_doc_source} "
             "for the Qt modules found in the frozen analysis. Their source URLs and "
             "SHA-256 digests are in Qt-PySide6/attributions/manifest.json.\n"
         )
@@ -674,12 +696,16 @@ def collect(destination: Path) -> Path:
 
     qt_directory = destination / "Qt-PySide6"
     qt_directory.mkdir()
+    qt_source = _qt_source()
     for filename, expected_hash in QT_TERMS.items():
-        url = QT_SOURCE + filename
+        url = qt_source + filename
         body = _download_checked(url, expected_hash)
         (qt_directory / filename).write_bytes(body)
     for item in inventory:
-        if _normalize(str(item["name"])) in {"pyside6", "pyside6-essentials", "pyside6-addons", "shiboken6"}:
+        if _normalize(str(item["name"])) in {
+            "pyside6", "pyside6-essentials", "pyside6-addons", "shiboken6",
+            "pyside6-pdf", "pyside6-webengine",
+        }:
             target = destination / f"{_normalize(str(item['name']))}-{item['version']}"
             target.mkdir(exist_ok=True)
             for filename in QT_TERMS:
@@ -695,7 +721,7 @@ def collect(destination: Path) -> Path:
     (qt_directory / "SOURCE.txt").write_text(
         "Qt for Python community packages are licensed under LGPLv3/GPLv3; "
         "the exact package metadata and version appear in index.json.\n"
-        f"License texts: {QT_SOURCE}\n"
+        f"License texts: {qt_source}\n"
         "Qt licensing information: https://doc.qt.io/qtforpython-6/\n",
         encoding="utf-8",
     )

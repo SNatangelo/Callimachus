@@ -18,6 +18,7 @@ import urllib.request
 from contextlib import contextmanager
 from contextvars import ContextVar
 
+from core.shared import http_body_limits as _http_body_limits
 from . import transport_telemetry as _transport_telemetry
 
 try:
@@ -114,6 +115,8 @@ def error_category(exc: BaseException) -> str:
     be transient.
     """
     if isinstance(exc, MemoryError):
+        return "resource_exhausted"
+    if isinstance(exc, _http_body_limits.HTTPBodyLimitError):
         return "resource_exhausted"
     if isinstance(exc, _host_limiter.HostCooldownExceeded):
         return "rate_limit"
@@ -340,7 +343,16 @@ def _get_recorded_admitted(
                 with open_request(req, timeout=TIMEOUT) as r:
                     response_status = r.status
                     final_url = r.geturl() if include_final_url else None
-                    raw_body = r.read()
+                    response_headers = getattr(r, "headers", {})
+                    body_limit = _http_body_limits.response_body_limit(
+                        response_headers,
+                        profile="api",
+                        accept=accept,
+                        force_document=not decode,
+                    )
+                    raw_body = _http_body_limits.read_limited_body(
+                        r, limit_bytes=body_limit, headers=response_headers
+                    )
                     body = raw_body.decode("utf-8", errors="replace") if decode else raw_body
                     if memo_key is not None and 200 <= response_status < 300:
                         with _memo_lock:
@@ -397,6 +409,8 @@ def _get_recorded_admitted(
             time.sleep(1.0 * (attempt + 1))
             continue
         except Exception as e:
+            if isinstance(e, _http_body_limits.HTTPBodyLimitError):
+                _record_provider_failure(e)
             _transport_telemetry.record_attempt(
                 method="GET",
                 url=url,
@@ -519,7 +533,13 @@ def _post_json_recorded(url, payload, *, accept, headers_extra, preserve_cooldow
             with _perf.span("http", host):
                 with open_request(req, timeout=TIMEOUT) as r:
                     response_status = r.status
-                    body = r.read().decode("utf-8", errors="replace")
+                    response_headers = getattr(r, "headers", {})
+                    body_limit = _http_body_limits.response_body_limit(
+                        response_headers, profile="api", accept=accept
+                    )
+                    body = _http_body_limits.read_limited_body(
+                        r, limit_bytes=body_limit, headers=response_headers
+                    ).decode("utf-8", errors="replace")
             limiter.report_success(host)
             _transport_telemetry.record_attempt(
                 method="POST",
@@ -570,6 +590,8 @@ def _post_json_recorded(url, payload, *, accept, headers_extra, preserve_cooldow
             time.sleep(1.0 * (attempt + 1))
             continue
         except Exception as e:
+            if isinstance(e, _http_body_limits.HTTPBodyLimitError):
+                _record_provider_failure(e)
             _transport_telemetry.record_attempt(
                 method="POST",
                 url=url,

@@ -77,6 +77,7 @@ def _call_api(system: str, user: str, model: str, max_tokens: int = 1500) -> str
 register(BackendSpec(
     name="anthropic",
     env_key=ENV_ANTHROPIC_KEY,
+    env_model="ANTHROPIC_MODEL",
     available=_available,
     call=_call_api,
     supports_tools=True,

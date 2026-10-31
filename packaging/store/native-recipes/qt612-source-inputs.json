@@ -1,0 +1,23 @@
+{
+  "status": "candidate; requires native build and package qualification",
+  "qt": {
+    "version": "6.12.0",
+    "url": "https://download.qt.io/archive/qt/6.12/6.12.0/single/qt-everywhere-src-6.12.0.tar.xz",
+    "checksum_url": "https://download.qt.io/archive/qt/6.12/6.12.0/single/qt-everywhere-src-6.12.0.tar.xz.sha256",
+    "sha256": "98ff4f44bac6ec3e1e62ee2a4316ae0e3d15badb015d753cc0268a20db52f165"
+  },
+  "pyside": {
+    "version": "6.12.0",
+    "url": "https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.12.0-src/pyside-setup-everywhere-src-6.12.0.tar.xz",
+    "checksum_url": "https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.12.0-src/pyside-setup-everywhere-src-6.12.0.tar.xz.sha256",
+    "sha256": "099c1a597cf33c1b000e11cf68a0b82d216fb802bf81726efc720394f10c7751"
+  },
+  "qtwebengine_pdf": {
+    "version": "6.140.0",
+    "url": "https://download.qt.io/online/qtsdkrepository/all_os/extensions/qtwebengine/6120/61400/src_doc_examples/extensions.qtwebengine.6120.61400.src/6.12.0-0-202609281005qtwebengine-everywhere-src-6.140.0.tar.xz",
+    "checksum_url": "https://download.qt.io/online/qtsdkrepository/all_os/extensions/qtwebengine/6120/61400/src_doc_examples/extensions.qtwebengine.6120.61400.src/6.12.0-0-202609281005qtwebengine-everywhere-src-6.140.0.tar.xz.sha1",
+    "sha1": "0c0fddbfb4daf3da64d9c323ff1d81db53152901",
+    "sha256": "141e9b230e5ec9ee65a7357ca4b87d702e4badc515289eeade1047a788bb96e7",
+    "sha256_provenance": "computed after matching Qt published SHA-1; not a separately published upstream SHA-256"
+  }
+}

@@ -7,13 +7,13 @@ present.py — the deterministic system shows the report; the model never does.
 
 The report is the authoritative artifact. If the LLM retypes or "summarizes" it, that prose
 is no longer the verified output — it is the model talking, exactly what this tool exists to
-prevent. So the report reaches the user through THIS command's stdout (verbatim), not through
+prevent. So the report reaches the user through THIS command's stdout, not through
 the assistant's message. The flow is:
 
   1. verify the run actually passed the gate (and the signature, when a key is configured);
      refuse to present anything that did not — there is no "show it anyway".
-  2. print report.md byte-for-byte, between clear banners that mark it as the verified,
-     signed, deterministic output.
+  2. print the verified report between clear banners. Escape terminal control characters
+     in the display only, labelling that view; leave report.md and its signature unchanged.
   3. print a divider. ONLY BELOW it may the model add its interpretation, clearly labelled
      as commentary — never mixed into, nor passed off as, the verified report.
 
@@ -83,6 +83,9 @@ def present(run_dir) -> tuple[bool, str]:
         _BAR,
         "",
     ]
+    if _terminal_safe(body) != body:
+        head[1] = "VERIFIED CITATION REPORT - terminal-safe view by the deterministic system"
+        head[3] = "Control characters are escaped in this view; the verified report.md is unchanged."
     foot = [
         "",
         _BAR,
@@ -94,13 +97,30 @@ def present(run_dir) -> tuple[bool, str]:
     return True, "\n".join(head) + body.rstrip("\n") + "\n" + "\n".join(foot)
 
 
+
+def _terminal_safe(text: str) -> str:
+    """Escape terminal controls without modifying the verified artifact."""
+    bidi_controls = {0x061c, 0x200e, 0x200f, *range(0x202a, 0x202f), *range(0x2066, 0x206a)}
+    parts = []
+    for char in text:
+        code = ord(char)
+        if (code < 32 and char not in "\n\t") or 0x7f <= code <= 0x9f or code in bidi_controls:
+            parts.append(f"\\x{code:02x}" if code <= 0xff else f"\\u{code:04x}")
+        else:
+            parts.append(char)
+    return "".join(parts)
+
+
 def main():
     ap = argparse.ArgumentParser(description=format_run_examples(__doc__),
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", required=True, help="run directory (runs/<ts>)")
     args = ap.parse_args()
     ok, text = present(args.run)
-    print(text)
+    safe_text = _terminal_safe(text)
+    if safe_text != text:
+        print("Terminal-safe view: controls escaped; the original artifact is unchanged.")
+    print(safe_text)
     sys.exit(0 if ok else REFUSED)
 
 

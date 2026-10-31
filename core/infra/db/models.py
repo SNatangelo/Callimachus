@@ -183,6 +183,7 @@ class SourceTextRecord:
     file_format: str | None
     extraction_flags: list[str]
     extraction_method: str | None
+    arxiv_version: JsonDict | None
     recorded_at: str
 
 

@@ -1,0 +1,4 @@
+<!-- core/gui/assets/atlante/sun.svg -->
+<!-- Copyright (C) 2026 Stefano Natangelo -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 1v2 M12 21v2 M1 12h2 M21 12h2 M4 4l1.5 1.5 M18.5 18.5 20 20 M4 20l1.5-1.5 M18.5 5.5 20 4"/></svg>

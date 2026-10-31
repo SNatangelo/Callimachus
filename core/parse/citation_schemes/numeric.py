@@ -74,7 +74,8 @@ def find_markers(sentence: str, suppressed_out: list | None = None,
                  sentence_index: int = 0, force_affil_block: bool = False) -> list[object]:
     """Every plausible citation marker in the sentence, with formula guards:
     * '[n]' attached to a single-letter identifier or a digit is array/matrix
-      indexing (x[1]), not a citation;
+      indexing (x[1]), not a citation; a standalone calendar year immediately
+      before the bracket is exempt from the digit guard;
     * '[n]' attached to a multi-letter identifier IN formula context
       (head[1], h_i[1], W_O[1]) is suppressed -- AND gate requires BOTH
       adjacency AND mathematical operators / function names / subscripts
@@ -129,7 +130,11 @@ def find_markers(sentence: str, suppressed_out: list | None = None,
             # same formula-context guard applies: single-letter (x¹) → skip,
             # multi-letter + formula context (head¹) → suppress.
             if kind == "brk" and sentence[start - 1].isdigit():
-                continue
+                standalone_year = re.search(
+                    r"(?<![\w.])(?:19|20)\d{2}$", sentence[:start]
+                )
+                if not standalone_year:
+                    continue
             mb = re.search(r"([A-Za-z_]\w*)$", sentence[:start])
             if mb and len(mb.group(1)) == 1:
                 continue

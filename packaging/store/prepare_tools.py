@@ -1,3 +1,6 @@
+# packaging/store/prepare_tools.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """Acquire hash-pinned public tool inputs for the Microsoft Store native build.
 
 Requires Python 3.13.15 on Windows x64. Downloads and verifies public inputs,

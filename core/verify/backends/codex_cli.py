@@ -9,21 +9,24 @@ installed and logged in) verify claims without a separate API key. A fresh
 context, mirroring core/backends/claude_cli.py.
 """
 import os
-import shutil
 import subprocess
 import tempfile
 
+from core.infra._local_executables import cli_argv, cli_environment, find_cli
 from core.verify.backends._chat_transport import llm_timeout
 from core.verify.backends._registry import BackendSpec, register
-from core.verify.backends.errors import cli_failure_error, cli_timeout_error
+from core.verify.backends.errors import ConfigError, cli_failure_error, cli_timeout_error
 
 
 def _resolve_cli() -> str:
-    return shutil.which("codex") or "codex"
+    executable = find_cli("codex")
+    if executable is None:
+        raise ConfigError("Codex CLI was not found in supported installation locations.", backend="codex_cli")
+    return executable
 
 
 def _available() -> bool:
-    return shutil.which("codex") is not None
+    return find_cli("codex") is not None
 
 
 def _call_codex_cli(system: str, user: str, model: str | None, max_tokens: int = 1500) -> str:
@@ -45,8 +48,10 @@ def _call_codex_cli(system: str, user: str, model: str | None, max_tokens: int =
         cmd += ["-"]
         timeout = llm_timeout()
         try:
-            p = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=timeout)
+            child_env = cli_environment("codex")
+            p = subprocess.run(cli_argv(cmd, child_env), input=prompt, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=timeout,
+                               env=child_env)
         except subprocess.TimeoutExpired:
             raise cli_timeout_error("codex_cli", timeout)
         if p.returncode != 0:
@@ -67,6 +72,7 @@ def _call_codex_cli(system: str, user: str, model: str | None, max_tokens: int =
 register(BackendSpec(
     name="codex_cli",
     env_key="",              # uses the codex CLI's own login, no API key
+    env_model="CODEX_CLI_MODEL",
     available=_available,
     call=_call_codex_cli,
     requires_model=False,

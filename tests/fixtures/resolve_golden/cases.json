@@ -1,0 +1,3447 @@
+[
+  {
+    "name": "doi_crossref_resolved",
+    "ref": {
+      "id": "golden-doi-resolved",
+      "ref_number": 1,
+      "doi": "10.1000/valid",
+      "pmid": null,
+      "title": null,
+      "url": null,
+      "year": 2018,
+      "source_type": "article",
+      "raw_entry": "Smith AB. Treatment effects. J Clin Med. 2018."
+    },
+    "responses": [
+      {
+        "match": "api.crossref.org/works/10.1000/valid",
+        "json": {
+          "message": {
+            "title": [
+              "Treatment effects"
+            ],
+            "abstract": "An abstract.",
+            "type": "journal-article",
+            "link": [
+              {
+                "URL": "https://example.org/paper.pdf",
+                "content-type": "application/pdf"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-doi-resolved",
+      "ref_number": 1,
+      "status": "resolved",
+      "via": "crossref",
+      "matched_title": "Treatment effects",
+      "abstract": "An abstract.",
+      "retracted": false,
+      "fulltext_exists": true,
+      "oa_status": "unknown",
+      "work_type": "journal-article",
+      "fulltext_links": [
+        {
+          "url": "https://example.org/paper.pdf",
+          "content_type": "application/pdf",
+          "intended_application": null,
+          "discovered_via": "crossref",
+          "identity_context": {
+            "title": "Treatment effects",
+            "provider": "crossref",
+            "source_confidence": 0.0,
+            "canonical_host": false
+          }
+        }
+      ],
+      "title_overlap": null,
+      "title_flag": null,
+      "resolution_basis": "doi",
+      "existence_confidence": "high",
+      "reason": null,
+      "reference_status_tag": "verified",
+      "fabrication_risk": "low",
+      "tag_reason": "strong identifier or authoritative resolver confirmed the source",
+      "evidence_profile": {
+        "has_identifier": true,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "crossref",
+          "europepmc"
+        ],
+        "minimum_checks_completed": true,
+        "best_candidate": {
+          "source": "crossref",
+          "title": "Treatment effects",
+          "title_overlap": null,
+          "metadata_match": {
+            "score": 0.0,
+            "title_overlap": null,
+            "author_match": false,
+            "cited_first_author": "smith",
+            "matched_first_author": null,
+            "year_match": false,
+            "matched_year": null,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "authors": null,
+          "status": "resolved",
+          "reason": null
+        },
+        "resolution_basis": "doi",
+        "existence_confidence": "high",
+        "title_overlap": null,
+        "metadata_match": {
+          "score": 0.0,
+          "title_overlap": null,
+          "author_match": false,
+          "cited_first_author": "smith",
+          "matched_first_author": null,
+          "year_match": false,
+          "matched_year": null,
+          "venue_overlap": null,
+          "matched_venue": null
+        },
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "identified",
+          "identity_status": "identified",
+          "check_status": "complete",
+          "correction_status": "not_needed",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": 0,
+          "band": "none",
+          "reason": "strong_identifier_corroborated",
+          "signals": [
+            "strong_identifier_corroborated"
+          ]
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "resolved",
+          "via": "crossref",
+          "matched_title": "Treatment effects",
+          "abstract": "An abstract.",
+          "retracted": false,
+          "reason": null,
+          "metadata_match": {
+            "score": 0.0,
+            "title_overlap": null,
+            "author_match": false,
+            "cited_first_author": "smith",
+            "matched_first_author": null,
+            "year_match": false,
+            "matched_year": null,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "fulltext_exists": true,
+          "oa_status": "unknown",
+          "work_type": "journal-article",
+          "fulltext_links": [
+            {
+              "url": "https://example.org/paper.pdf",
+              "content_type": "application/pdf",
+              "intended_application": null
+            }
+          ]
+        },
+        {
+          "via": "europepmc",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "network: AssertionError"
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:54.162401+00:00",
+      "identity": {
+        "scheme": "doi",
+        "value": "10.1000/valid",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "resolved_strong_declared",
+      "evidence_payload": {
+        "fulltext_links": [
+          {
+            "url": "https://example.org/paper.pdf",
+            "content_type": "application/pdf",
+            "intended_application": null,
+            "discovered_via": "crossref",
+            "identity_context": {
+              "title": "Treatment effects",
+              "provider": "crossref",
+              "source_confidence": 0.0,
+              "canonical_host": false
+            }
+          }
+        ],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "unknown",
+        "fulltext_exists": true,
+        "abstract": "An abstract.",
+        "matched_title": "Treatment effects",
+        "work_type": "journal-article",
+        "via": "crossref"
+      },
+      "retraction": {
+        "status": "not_retracted",
+        "checked_via": "authority_metadata",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "crossref",
+          "attempt_via": "crossref"
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "present",
+          "detail": {
+            "scheme": "doi",
+            "value": "10.1000/valid",
+            "is_strong": true,
+            "class_": "global"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "declared_cache_lookup",
+          "outcome": "not_checked",
+          "detail": {
+            "reason": "resolver has no declared-identity cache gate"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "declared_validation",
+          "outcome": "matched",
+          "detail": {
+            "status": "resolved",
+            "via": "crossref"
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "strong_confirmed",
+          "outcome": "confirmed",
+          "detail": {
+            "identity_state": "resolved_strong_declared",
+            "resolution_basis": "doi"
+          },
+          "at": "stage_04"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "not_retracted",
+          "detail": {
+            "checked_via": "authority_metadata",
+            "retracted": false
+          },
+          "at": "stage_05"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "resolved_strong_declared",
+          "detail": {
+            "status": "resolved",
+            "via": "crossref",
+            "attempt_count": 2
+          },
+          "at": "stage_06"
+        }
+      ]
+    }
+  },
+  {
+    "name": "doi_crossref_and_handle_not_found",
+    "ref": {
+      "id": "golden-doi-not-found",
+      "ref_number": 2,
+      "doi": "10.1000/missing",
+      "pmid": null,
+      "title": null,
+      "url": null,
+      "year": 2018,
+      "source_type": "article",
+      "raw_entry": "Ghost AB. Missing paper. J Clin Med. 2018."
+    },
+    "responses": [
+      {
+        "match": "api.crossref.org/works/10.1000/missing",
+        "http_error": 404
+      },
+      {
+        "match": "doi.org/api/handles/10.1000/missing",
+        "http_error": 404
+      },
+      {
+        "match": "api.crossref.org/works?query.bibliographic=Ghost+AB.+Missing+paper.+J+Clin+Med.+2018.&rows=5",
+        "json": {
+          "message": {
+            "items": []
+          }
+        }
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-doi-not-found",
+      "ref_number": 2,
+      "status": "not_found",
+      "via": "crossref+doi.org",
+      "matched_title": null,
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": "unknown",
+      "oa_status": "unknown",
+      "work_type": null,
+      "fulltext_links": [],
+      "title_overlap": null,
+      "title_flag": null,
+      "resolution_basis": "doi",
+      "existence_confidence": "high",
+      "reason": "DOI not found on Crossref or DOI resolver (hard identifier error)",
+      "reference_status_tag": "suspected_fabricated",
+      "fabrication_risk": "high",
+      "tag_reason": "strong identifier failed or points elsewhere, and independent metadata did not corroborate the source identity",
+      "evidence_profile": {
+        "has_identifier": true,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "crossref",
+          "doi.org",
+          "crossref_metadata"
+        ],
+        "minimum_checks_completed": true,
+        "best_candidate": null,
+        "resolution_basis": "doi",
+        "existence_confidence": "high",
+        "title_overlap": null,
+        "metadata_match": null,
+        "identifier_fallback": {
+          "status": "unverified",
+          "via": "crossref_metadata",
+          "reason": "no usable parsed title; raw-citation search found no candidate"
+        },
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "refuted",
+          "identity_status": "not_identified",
+          "check_status": "complete",
+          "correction_status": "not_found",
+          "refutations": [
+            {
+              "kind": "identifier_not_found",
+              "field": "doi",
+              "cited_value": "10.1000/missing",
+              "observed_value": null,
+              "source": "crossref+doi.org",
+              "basis": "DOI not found on Crossref or DOI resolver (hard identifier error)"
+            }
+          ]
+        },
+        "synthetic_reference_risk": {
+          "score": 1,
+          "band": "low",
+          "signals": [
+            "hard_identifier_error",
+            "complete_core_bibliography",
+            "expected_checks_completed",
+            "low_indexability"
+          ]
+        }
+      },
+      "identifier_check": {
+        "status": "not_found",
+        "reason": "DOI not found on Crossref or DOI resolver (hard identifier error)",
+        "fallback_attempted": true,
+        "fallback_status": "unverified",
+        "fallback_via": "crossref_metadata",
+        "fallback_reason": "no usable parsed title; raw-citation search found no candidate",
+        "fallback_matched_title": null,
+        "fallback_metadata_match": null
+      },
+      "attempts": [
+        {
+          "status": "not_found",
+          "via": "crossref",
+          "reason": "DOI not found on Crossref (404; hard identifier error)"
+        },
+        {
+          "status": "not_found",
+          "via": "doi.org",
+          "reason": "DOI not found by DOI resolver (HTTP 404)"
+        },
+        {
+          "attempt_kind": "identifier_fallback",
+          "provider_via": "crossref_metadata",
+          "status": "unverified",
+          "via": "crossref_metadata",
+          "reason": "no usable parsed title; raw-citation search found no candidate",
+          "identity_search": {
+            "resolver": "crossref",
+            "query_contract": "Crossref bounded bibliographic title search; issued request URLs: https://api.crossref.org/works?query.bibliographic=Ghost+AB.+Missing+paper.+J+Clin+Med.+2018.&rows=5",
+            "completion": "incomplete",
+            "outcome": "inconclusive"
+          }
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:54.795089+00:00",
+      "identity": {
+        "scheme": "doi",
+        "value": "10.1000/missing",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "fabricated",
+      "evidence_payload": {
+        "fulltext_links": [],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "unknown",
+        "fulltext_exists": "unknown",
+        "abstract": null,
+        "matched_title": null,
+        "work_type": null,
+        "via": "crossref+doi.org"
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "crossref+doi.org",
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "present",
+          "detail": {
+            "scheme": "doi",
+            "value": "10.1000/missing",
+            "is_strong": true,
+            "class_": "global"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "declared_cache_lookup",
+          "outcome": "not_checked",
+          "detail": {
+            "reason": "resolver has no declared-identity cache gate"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "declared_validation",
+          "outcome": "failed",
+          "detail": {
+            "status": "not_found",
+            "via": "crossref+doi.org"
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "weak_aggregation",
+          "outcome": "fabricated",
+          "detail": {
+            "status": "not_found",
+            "reference_status_tag": "suspected_fabricated",
+            "fabrication_risk": "high"
+          },
+          "at": "stage_04"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_05"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "fabricated",
+          "detail": {
+            "status": "not_found",
+            "via": "crossref+doi.org",
+            "attempt_count": 3
+          },
+          "at": "stage_06"
+        }
+      ]
+    }
+  },
+  {
+    "name": "doi_identifier_mismatch",
+    "ref": {
+      "id": "golden-doi-mismatch",
+      "ref_number": 3,
+      "doi": "10.1000/wrong",
+      "pmid": null,
+      "title": null,
+      "url": null,
+      "year": 2018,
+      "source_type": "article",
+      "raw_entry": "Smith AB. Treatment effects. J Clin Med. 2018."
+    },
+    "responses": [
+      {
+        "match": "api.crossref.org/works/10.1000/wrong",
+        "json": {
+          "message": {
+            "title": [
+              "Completely different paper about astronomy"
+            ],
+            "type": "journal-article"
+          }
+        }
+      },
+      {
+        "match": "api.crossref.org/works?",
+        "json": {
+          "message": {
+            "items": []
+          }
+        }
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-doi-mismatch",
+      "ref_number": 3,
+      "status": "identifier_mismatch",
+      "via": "crossref",
+      "matched_title": "Completely different paper about astronomy",
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": "unknown",
+      "oa_status": "unknown",
+      "work_type": "journal-article",
+      "fulltext_links": [],
+      "title_overlap": 0.0,
+      "title_flag": "mismatch",
+      "resolution_basis": "doi",
+      "existence_confidence": "high",
+      "reason": null,
+      "reference_status_tag": "suspected_fabricated",
+      "fabrication_risk": "high",
+      "tag_reason": "strong identifier failed or points elsewhere, and independent metadata did not corroborate the source identity",
+      "evidence_profile": {
+        "has_identifier": true,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "crossref",
+          "europepmc",
+          "openalex",
+          "pubmed",
+          "crossref_metadata"
+        ],
+        "minimum_checks_completed": true,
+        "best_candidate": {
+          "source": "crossref",
+          "title": "Completely different paper about astronomy",
+          "title_overlap": 0.0,
+          "metadata_match": {
+            "score": 0.0,
+            "title_overlap": 0.0,
+            "author_match": false,
+            "cited_first_author": "smith",
+            "matched_first_author": null,
+            "year_match": false,
+            "matched_year": null,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "authors": null,
+          "status": "resolved",
+          "reason": null
+        },
+        "resolution_basis": "doi",
+        "existence_confidence": "high",
+        "title_overlap": 0.0,
+        "metadata_match": {
+          "score": 0.0,
+          "title_overlap": 0.0,
+          "author_match": false,
+          "cited_first_author": "smith",
+          "matched_first_author": null,
+          "year_match": false,
+          "matched_year": null,
+          "venue_overlap": null,
+          "matched_venue": null
+        },
+        "identifier_fallback": {
+          "status": "unverified",
+          "via": "crossref_metadata",
+          "reason": "no usable parsed title; raw-citation search found no candidate"
+        },
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "refuted",
+          "identity_status": "not_identified",
+          "check_status": "complete",
+          "correction_status": "not_found",
+          "refutations": [
+            {
+              "kind": "identifier_targets_other_work",
+              "field": "doi",
+              "cited_value": "10.1000/wrong",
+              "observed_value": "Completely different paper about astronomy",
+              "source": "crossref",
+              "basis": "identifier metadata contradicts the cited work"
+            }
+          ]
+        },
+        "synthetic_reference_risk": {
+          "score": 3,
+          "band": "medium",
+          "signals": [
+            "hard_identifier_error",
+            "complete_core_bibliography",
+            "expected_checks_completed",
+            "plausible_candidate_bibliographically_incoherent",
+            "low_indexability"
+          ]
+        }
+      },
+      "identifier_check": {
+        "status": "identifier_mismatch",
+        "reason": null,
+        "fallback_attempted": true,
+        "fallback_status": "unverified",
+        "fallback_via": "crossref_metadata",
+        "fallback_reason": "no usable parsed title; raw-citation search found no candidate",
+        "fallback_matched_title": null,
+        "fallback_metadata_match": null
+      },
+      "attempts": [
+        {
+          "status": "resolved",
+          "via": "crossref",
+          "matched_title": "Completely different paper about astronomy",
+          "abstract": null,
+          "retracted": false,
+          "reason": null,
+          "metadata_match": {
+            "score": 0.0,
+            "title_overlap": 0.0,
+            "author_match": false,
+            "cited_first_author": "smith",
+            "matched_first_author": null,
+            "year_match": false,
+            "matched_year": null,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "fulltext_exists": "unknown",
+          "oa_status": "unknown",
+          "work_type": "journal-article",
+          "fulltext_links": []
+        },
+        {
+          "via": "europepmc",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "network: AssertionError"
+        },
+        {
+          "via": "openalex",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "network: AssertionError"
+        },
+        {
+          "via": "pubmed",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "PMID lookup unavailable"
+        },
+        {
+          "attempt_kind": "identifier_fallback",
+          "provider_via": "crossref_metadata",
+          "status": "unverified",
+          "via": "crossref_metadata",
+          "reason": "no usable parsed title; raw-citation search found no candidate",
+          "identity_search": {
+            "resolver": "crossref",
+            "query_contract": "Crossref bounded bibliographic title search; issued request URLs: https://api.crossref.org/works?query.bibliographic=Smith+AB.+Treatment+effects.+J+Clin+Med.+2018.&rows=5",
+            "completion": "incomplete",
+            "outcome": "inconclusive"
+          }
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:55.424314+00:00",
+      "identity": {
+        "scheme": "doi",
+        "value": "10.1000/wrong",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "fabricated",
+      "evidence_payload": {
+        "fulltext_links": [],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "unknown",
+        "fulltext_exists": "unknown",
+        "abstract": null,
+        "matched_title": "Completely different paper about astronomy",
+        "work_type": "journal-article",
+        "via": "crossref"
+      },
+      "retraction": {
+        "status": "not_retracted",
+        "checked_via": "authority_metadata",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "crossref",
+          "attempt_via": "crossref"
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "present",
+          "detail": {
+            "scheme": "doi",
+            "value": "10.1000/wrong",
+            "is_strong": true,
+            "class_": "global"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "declared_cache_lookup",
+          "outcome": "not_checked",
+          "detail": {
+            "reason": "resolver has no declared-identity cache gate"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "declared_validation",
+          "outcome": "failed",
+          "detail": {
+            "status": "identifier_mismatch",
+            "via": "crossref"
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "weak_aggregation",
+          "outcome": "fabricated",
+          "detail": {
+            "status": "identifier_mismatch",
+            "reference_status_tag": "suspected_fabricated",
+            "fabrication_risk": "high"
+          },
+          "at": "stage_04"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "not_retracted",
+          "detail": {
+            "checked_via": "authority_metadata",
+            "retracted": false
+          },
+          "at": "stage_05"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "fabricated",
+          "detail": {
+            "status": "identifier_mismatch",
+            "via": "crossref",
+            "attempt_count": 5
+          },
+          "at": "stage_06"
+        }
+      ]
+    }
+  },
+  {
+    "name": "pmid_pubmed_confirms_after_epmc_empty",
+    "ref": {
+      "id": "golden-pmid-confirmed",
+      "ref_number": 4,
+      "doi": null,
+      "pmid": "12345",
+      "title": null,
+      "url": null,
+      "year": 2010,
+      "source_type": "article",
+      "raw_entry": "Real A. Indexed elsewhere. 2010."
+    },
+    "responses": [
+      {
+        "match": "europepmc",
+        "json": {
+          "resultList": {
+            "result": []
+          }
+        }
+      },
+      {
+        "match": "esummary.fcgi",
+        "json": {
+          "result": {
+            "uids": [
+              "12345"
+            ],
+            "12345": {
+              "uid": "12345"
+            }
+          }
+        }
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-pmid-confirmed",
+      "ref_number": 4,
+      "status": "resolved",
+      "via": "pubmed",
+      "matched_title": null,
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": "unknown",
+      "oa_status": "unknown",
+      "work_type": null,
+      "fulltext_links": [],
+      "title_overlap": null,
+      "title_flag": null,
+      "resolution_basis": "pmid",
+      "existence_confidence": "high",
+      "reason": "PMID found on PubMed (not indexed in Europe PMC)",
+      "reference_status_tag": "verified",
+      "fabrication_risk": "low",
+      "tag_reason": "strong identifier or authoritative resolver confirmed the source",
+      "evidence_profile": {
+        "has_identifier": true,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "europepmc",
+          "pubmed"
+        ],
+        "minimum_checks_completed": true,
+        "best_candidate": null,
+        "resolution_basis": "pmid",
+        "existence_confidence": "high",
+        "title_overlap": null,
+        "metadata_match": null,
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "identified",
+          "identity_status": "identified",
+          "check_status": "complete",
+          "correction_status": "not_needed",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": 0,
+          "band": "none",
+          "reason": "strong_identifier_corroborated",
+          "signals": [
+            "strong_identifier_corroborated"
+          ]
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "_empty_strong",
+          "via": "europepmc",
+          "reason": "no match on Europe PMC (strong ID)"
+        },
+        {
+          "status": "resolved",
+          "via": "pubmed",
+          "reason": "esummary: exists"
+        },
+        {
+          "via": "europepmc",
+          "enrichment_only": true,
+          "status": "_empty_strong",
+          "reason": "no match on Europe PMC (strong ID)"
+        },
+        {
+          "via": "pubmed",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "PubMed metadata unavailable"
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:56.117054+00:00",
+      "identity": {
+        "scheme": "pmid",
+        "value": "12345",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "resolved_strong_declared",
+      "evidence_payload": {
+        "fulltext_links": [],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "unknown",
+        "fulltext_exists": "unknown",
+        "abstract": null,
+        "matched_title": null,
+        "work_type": null,
+        "via": "pubmed"
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "pubmed",
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "present",
+          "detail": {
+            "scheme": "pmid",
+            "value": "12345",
+            "is_strong": true,
+            "class_": "global"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "declared_cache_lookup",
+          "outcome": "not_checked",
+          "detail": {
+            "reason": "resolver has no declared-identity cache gate"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "declared_validation",
+          "outcome": "matched",
+          "detail": {
+            "status": "resolved",
+            "via": "pubmed"
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "strong_confirmed",
+          "outcome": "confirmed",
+          "detail": {
+            "identity_state": "resolved_strong_declared",
+            "resolution_basis": "pmid"
+          },
+          "at": "stage_04"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_05"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "resolved_strong_declared",
+          "detail": {
+            "status": "resolved",
+            "via": "pubmed",
+            "attempt_count": 4
+          },
+          "at": "stage_06"
+        }
+      ]
+    }
+  },
+  {
+    "name": "title_only_openalex_resolved",
+    "ref": {
+      "id": "golden-openalex-resolved",
+      "ref_number": 5,
+      "doi": null,
+      "pmid": null,
+      "title": "Attention Is All You Need",
+      "url": null,
+      "year": 2017,
+      "source_type": "article",
+      "raw_entry": "Vaswani A. Attention Is All You Need. NeurIPS. 2017."
+    },
+    "responses": [
+      {
+        "match": "europepmc",
+        "json": {
+          "resultList": {
+            "result": []
+          }
+        }
+      },
+      {
+        "match": "api.crossref.org/works?",
+        "json": {
+          "message": {
+            "items": [
+              {
+                "title": [
+                  "Attention mechanisms in healthcare"
+                ],
+                "author": [
+                  {
+                    "family": "Other"
+                  }
+                ],
+                "published-print": {
+                  "date-parts": [
+                    [
+                      2017
+                    ]
+                  ]
+                },
+                "type": "journal-article"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "match": "api.openalex.org/works?",
+        "json": {
+          "results": [
+            {
+              "id": "https://openalex.org/W1",
+              "title": "Attention Is All You Need",
+              "doi": "https://doi.org/10.48550/arXiv.1706.03762",
+              "publication_year": 2017,
+              "authorships": [
+                {
+                  "author": {
+                    "display_name": "Ashish Vaswani"
+                  }
+                }
+              ],
+              "abstract_inverted_index": null,
+              "open_access": {
+                "oa_status": "open",
+                "oa_url": "https://arxiv.org/pdf/1706.03762"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-openalex-resolved",
+      "ref_number": 5,
+      "status": "resolved",
+      "via": "openalex_search",
+      "matched_title": "Attention Is All You Need",
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": true,
+      "oa_status": "open",
+      "work_type": null,
+      "fulltext_links": [
+        {
+          "url": "https://doi.org/10.48550/arXiv.1706.03762",
+          "content_type": "doi",
+          "discovered_via": "openalex_search",
+          "identity_context": {
+            "title": "Attention Is All You Need",
+            "year": 2017,
+            "identifiers": {
+              "doi": "10.48550/arXiv.1706.03762"
+            },
+            "provider": "openalex_search",
+            "source_confidence": 0.85,
+            "canonical_host": false
+          }
+        },
+        {
+          "url": "https://arxiv.org/pdf/1706.03762",
+          "content_type": "pdf",
+          "discovered_via": "openalex_search",
+          "identity_context": {
+            "title": "Attention Is All You Need",
+            "year": 2017,
+            "identifiers": {
+              "doi": "10.48550/arXiv.1706.03762",
+              "arxiv_id": "1706.03762"
+            },
+            "provider": "openalex_search",
+            "source_confidence": 0.85,
+            "canonical_host": true
+          }
+        }
+      ],
+      "title_overlap": 1.0,
+      "title_flag": null,
+      "resolution_basis": "metadata_search",
+      "existence_confidence": "medium",
+      "reason": "OpenAlex title search match",
+      "reference_status_tag": "weakly_verified",
+      "fabrication_risk": "low",
+      "tag_reason": "metadata/catalog match found, but identifier-level evidence is absent",
+      "evidence_profile": {
+        "has_identifier": false,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "europepmc",
+          "crossref_metadata",
+          "openalex_search",
+          "identifier_validation:crossref",
+          "openalex",
+          "pubmed"
+        ],
+        "minimum_checks_completed": false,
+        "best_candidate": {
+          "source": "crossref_metadata",
+          "title": "Attention mechanisms in healthcare",
+          "title_overlap": null,
+          "metadata_match": {
+            "score": 0.15,
+            "title_overlap": null,
+            "author_match": false,
+            "cited_first_author": "vaswani",
+            "matched_first_author": "other",
+            "year_match": true,
+            "matched_year": 2017,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "authors": null,
+          "status": "unverified",
+          "reason": "metadata candidate below confidence threshold (overlap None, score 0.15)"
+        },
+        "resolution_basis": "metadata_search",
+        "existence_confidence": "medium",
+        "title_overlap": 1.0,
+        "metadata_match": {
+          "score": 0.85,
+          "title_overlap": 1.0,
+          "author_match": true,
+          "cited_first_author": "vaswani",
+          "matched_first_author": "vaswani",
+          "year_match": true,
+          "matched_year": 2017,
+          "venue_overlap": null,
+          "matched_venue": null
+        },
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "identified",
+          "identity_status": "identified",
+          "check_status": "incomplete",
+          "correction_status": "not_needed",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": null,
+          "band": "not_scored",
+          "reason": "checks_incomplete",
+          "signals": []
+        },
+        "fulltext_availability": {
+          "status": "available",
+          "scope": "provider",
+          "observed_by": "openalex_search",
+          "reason": "OpenAlex exposed a fetchable full-text location"
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "unverified",
+          "via": "europepmc",
+          "reason": "no title match on Europe PMC (indirect verification recommended)",
+          "identity_search": {
+            "resolver": "europepmc",
+            "query_contract": "Europe PMC bounded title search",
+            "completion": "complete",
+            "outcome": "no_compatible_identity"
+          }
+        },
+        {
+          "status": "unverified",
+          "via": "crossref_metadata",
+          "matched_title": "Attention mechanisms in healthcare",
+          "reason": "metadata candidate below confidence threshold (overlap None, score 0.15)",
+          "resolution_basis": "metadata_search",
+          "existence_confidence": "low",
+          "metadata_match": {
+            "score": 0.15,
+            "title_overlap": null,
+            "author_match": false,
+            "cited_first_author": "vaswani",
+            "matched_first_author": "other",
+            "year_match": true,
+            "matched_year": 2017,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "identity_search": {
+            "resolver": "crossref",
+            "query_contract": "Crossref bounded bibliographic title search; issued request URLs: https://api.crossref.org/works?query.bibliographic=Attention+Is+All+You+Need+vaswani&rows=5&filter=from-pub-date%3A2016%2Cuntil-pub-date%3A2018 | https://api.crossref.org/works?query.bibliographic=Attention+Is+All+You+Need+vaswani&rows=5 | https://api.crossref.org/works?query.bibliographic=Attention+Is+All+You+Need&rows=5 | https://api.crossref.org/works?query.bibliographic=Vaswani+A.+Attention+Is+All+You+Need.+NeurIPS.+2017.&rows=5",
+            "completion": "complete",
+            "outcome": "candidate_incompatible"
+          }
+        },
+        {
+          "status": "resolved",
+          "via": "openalex_search",
+          "matched_title": "Attention Is All You Need",
+          "abstract": null,
+          "retracted": false,
+          "reason": "OpenAlex title search match",
+          "resolution_basis": "metadata_search",
+          "existence_confidence": "medium",
+          "fulltext_exists": true,
+          "fulltext_availability": {
+            "status": "available",
+            "scope": "provider",
+            "observed_by": "openalex_search",
+            "reason": "OpenAlex exposed a fetchable full-text location"
+          },
+          "oa_status": "open",
+          "fulltext_links": [
+            {
+              "url": "https://doi.org/10.48550/arXiv.1706.03762",
+              "content_type": "doi"
+            },
+            {
+              "url": "https://arxiv.org/pdf/1706.03762",
+              "content_type": "pdf"
+            }
+          ],
+          "metadata_match": {
+            "score": 0.85,
+            "title_overlap": 1.0,
+            "author_match": true,
+            "cited_first_author": "vaswani",
+            "matched_first_author": "vaswani",
+            "year_match": true,
+            "matched_year": 2017,
+            "venue_overlap": null,
+            "matched_venue": null
+          }
+        },
+        {
+          "status": "unresolved",
+          "via": "identifier_validation:crossref",
+          "reason": "network: AssertionError",
+          "identifier_type": "doi",
+          "identifier_value": "10.48550/arXiv.1706.03762"
+        },
+        {
+          "status": "unresolved",
+          "via": "identifier_validation:crossref",
+          "reason": "network: AssertionError",
+          "identifier_type": "doi",
+          "identifier_value": "10.48550/arXiv.1706.03762"
+        },
+        {
+          "status": "unresolved",
+          "via": "identifier_validation:crossref",
+          "reason": "network: AssertionError",
+          "identifier_type": "doi",
+          "identifier_value": "10.48550/arXiv.1706.03762"
+        },
+        {
+          "via": "europepmc",
+          "enrichment_only": true,
+          "status": "_empty_strong",
+          "reason": "no match on Europe PMC (strong ID)"
+        },
+        {
+          "via": "openalex",
+          "enrichment_only": true,
+          "status": "resolved",
+          "matched_title": "Attention Is All You Need",
+          "abstract": null,
+          "fulltext_links": [
+            {
+              "url": "https://doi.org/10.48550/arXiv.1706.03762",
+              "content_type": "doi"
+            },
+            {
+              "url": "https://arxiv.org/pdf/1706.03762",
+              "content_type": "pdf"
+            }
+          ],
+          "reason": null
+        },
+        {
+          "via": "pubmed",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "PMID lookup unavailable"
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:56.803648+00:00",
+      "fulltext_availability": {
+        "status": "available",
+        "scope": "provider",
+        "observed_by": "openalex_search",
+        "reason": "OpenAlex exposed a fetchable full-text location"
+      },
+      "auxiliary_fulltext_links": [
+        {
+          "url": "https://doi.org/10.48550/arXiv.1706.03762",
+          "content_type": "doi",
+          "discovered_via": "openalex",
+          "identity_context": {
+            "title": "Attention Is All You Need",
+            "identifiers": {
+              "doi": "10.48550/arXiv.1706.03762"
+            },
+            "provider": "openalex",
+            "canonical_host": false
+          }
+        },
+        {
+          "url": "https://arxiv.org/pdf/1706.03762",
+          "content_type": "pdf",
+          "discovered_via": "openalex",
+          "identity_context": {
+            "title": "Attention Is All You Need",
+            "identifiers": {
+              "doi": "10.48550/arXiv.1706.03762",
+              "arxiv_id": "1706.03762"
+            },
+            "provider": "openalex",
+            "canonical_host": true
+          }
+        }
+      ],
+      "identity": {
+        "scheme": "doi",
+        "value": "10.48550/arxiv.1706.03762",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "weakly_corroborated",
+      "evidence_payload": {
+        "fulltext_links": [
+          {
+            "url": "https://doi.org/10.48550/arXiv.1706.03762",
+            "content_type": "doi",
+            "discovered_via": "openalex_search",
+            "identity_context": {
+              "title": "Attention Is All You Need",
+              "year": 2017,
+              "identifiers": {
+                "doi": "10.48550/arXiv.1706.03762"
+              },
+              "provider": "openalex_search",
+              "source_confidence": 0.85,
+              "canonical_host": false
+            }
+          },
+          {
+            "url": "https://arxiv.org/pdf/1706.03762",
+            "content_type": "pdf",
+            "discovered_via": "openalex_search",
+            "identity_context": {
+              "title": "Attention Is All You Need",
+              "year": 2017,
+              "identifiers": {
+                "doi": "10.48550/arXiv.1706.03762",
+                "arxiv_id": "1706.03762"
+              },
+              "provider": "openalex_search",
+              "source_confidence": 0.85,
+              "canonical_host": true
+            }
+          }
+        ],
+        "auxiliary_fulltext_links": [
+          {
+            "url": "https://doi.org/10.48550/arXiv.1706.03762",
+            "content_type": "doi",
+            "discovered_via": "openalex",
+            "identity_context": {
+              "title": "Attention Is All You Need",
+              "identifiers": {
+                "doi": "10.48550/arXiv.1706.03762"
+              },
+              "provider": "openalex",
+              "canonical_host": false
+            }
+          },
+          {
+            "url": "https://arxiv.org/pdf/1706.03762",
+            "content_type": "pdf",
+            "discovered_via": "openalex",
+            "identity_context": {
+              "title": "Attention Is All You Need",
+              "identifiers": {
+                "doi": "10.48550/arXiv.1706.03762",
+                "arxiv_id": "1706.03762"
+              },
+              "provider": "openalex",
+              "canonical_host": true
+            }
+          }
+        ],
+        "oa_status": "open",
+        "fulltext_exists": true,
+        "abstract": null,
+        "matched_title": "Attention Is All You Need",
+        "work_type": null,
+        "via": "openalex_search",
+        "fulltext_availability": {
+          "status": "available",
+          "scope": "provider",
+          "observed_by": "openalex_search",
+          "reason": "OpenAlex exposed a fetchable full-text location"
+        }
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "openalex_search",
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "absent",
+          "detail": {
+            "scheme": "none",
+            "value": "",
+            "is_strong": false,
+            "class_": "none"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "weak_aggregation",
+          "outcome": "weakly_corroborated",
+          "detail": {
+            "status": "resolved",
+            "reference_status_tag": "weakly_verified",
+            "fabrication_risk": "low"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "weakly_corroborated",
+          "detail": {
+            "status": "resolved",
+            "via": "openalex_search",
+            "attempt_count": 9
+          },
+          "at": "stage_04"
+        }
+      ]
+    }
+  },
+  {
+    "name": "title_only_openalex_late_correct",
+    "ref": {
+      "id": "golden-openalex-late-correct",
+      "ref_number": 6,
+      "doi": null,
+      "pmid": null,
+      "title": "Neural Attention for Translation Tasks",
+      "url": null,
+      "year": 2016,
+      "source_type": "article",
+      "raw_entry": "Doe J, Smith A. Neural Attention for Translation Tasks. EMNLP. 2016."
+    },
+    "responses": [
+      {
+        "match": "europepmc",
+        "json": {
+          "resultList": {
+            "result": []
+          }
+        }
+      },
+      {
+        "match": "api.crossref.org/works?",
+        "json": {
+          "message": {
+            "items": [
+              {
+                "title": [
+                  "Neural models for speech recognition"
+                ],
+                "author": [
+                  {
+                    "family": "Other"
+                  }
+                ],
+                "published-print": {
+                  "date-parts": [
+                    [
+                      2016
+                    ]
+                  ]
+                },
+                "type": "journal-article"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "match": "api.openalex.org/works?",
+        "json": {
+          "results": [
+            {
+              "id": "https://openalex.org/W-noise",
+              "title": "Completely unrelated astronomy survey",
+              "doi": "https://doi.org/10.1000/noise",
+              "publication_year": 2016,
+              "authorships": [
+                {
+                  "author": {
+                    "display_name": "Jane Doe"
+                  }
+                }
+              ],
+              "abstract_inverted_index": null,
+              "open_access": {
+                "oa_status": "closed",
+                "oa_url": null
+              }
+            },
+            {
+              "id": "https://openalex.org/W-good",
+              "title": "Neural Attention for Translation Tasks",
+              "doi": "https://doi.org/10.1000/good",
+              "publication_year": 2016,
+              "authorships": [
+                {
+                  "author": {
+                    "display_name": "Jane Doe"
+                  }
+                }
+              ],
+              "abstract_inverted_index": null,
+              "open_access": {
+                "oa_status": "open",
+                "oa_url": "https://example.org/neural-attention.pdf"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-openalex-late-correct",
+      "ref_number": 6,
+      "status": "resolved",
+      "via": "openalex_search",
+      "matched_title": "Neural Attention for Translation Tasks",
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": true,
+      "oa_status": "open",
+      "work_type": null,
+      "fulltext_links": [
+        {
+          "url": "https://doi.org/10.1000/good",
+          "content_type": "doi",
+          "discovered_via": "openalex_search",
+          "identity_context": {
+            "title": "Neural Attention for Translation Tasks",
+            "year": 2016,
+            "identifiers": {
+              "doi": "10.1000/good"
+            },
+            "provider": "openalex_search",
+            "source_confidence": 0.85,
+            "canonical_host": false
+          }
+        },
+        {
+          "url": "https://example.org/neural-attention.pdf",
+          "content_type": "pdf",
+          "discovered_via": "openalex_search",
+          "identity_context": {
+            "title": "Neural Attention for Translation Tasks",
+            "year": 2016,
+            "identifiers": {
+              "doi": "10.1000/good"
+            },
+            "provider": "openalex_search",
+            "source_confidence": 0.85,
+            "canonical_host": false
+          }
+        }
+      ],
+      "title_overlap": 1.0,
+      "title_flag": null,
+      "resolution_basis": "metadata_search",
+      "existence_confidence": "medium",
+      "reason": "OpenAlex title search match",
+      "reference_status_tag": "weakly_verified",
+      "fabrication_risk": "low",
+      "tag_reason": "metadata/catalog match found, but identifier-level evidence is absent",
+      "evidence_profile": {
+        "has_identifier": false,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "europepmc",
+          "crossref_metadata",
+          "openalex_search",
+          "identifier_validation:crossref",
+          "acl_search",
+          "openalex",
+          "pubmed"
+        ],
+        "minimum_checks_completed": false,
+        "best_candidate": {
+          "source": "crossref_metadata",
+          "title": "Neural models for speech recognition",
+          "title_overlap": 0.25,
+          "metadata_match": {
+            "score": 0.2625,
+            "title_overlap": 0.25,
+            "author_match": false,
+            "cited_first_author": "doe",
+            "matched_first_author": "other",
+            "year_match": true,
+            "matched_year": 2016,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "authors": null,
+          "status": "unverified",
+          "reason": "metadata candidate below confidence threshold (overlap 0.25, score 0.2625)"
+        },
+        "resolution_basis": "metadata_search",
+        "existence_confidence": "medium",
+        "title_overlap": 1.0,
+        "metadata_match": {
+          "score": 0.85,
+          "title_overlap": 1.0,
+          "author_match": true,
+          "cited_first_author": "doe",
+          "matched_first_author": "doe",
+          "year_match": true,
+          "matched_year": 2016,
+          "venue_overlap": null,
+          "matched_venue": null
+        },
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "identified",
+          "identity_status": "identified",
+          "check_status": "incomplete",
+          "correction_status": "not_needed",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": null,
+          "band": "not_scored",
+          "reason": "checks_incomplete",
+          "signals": []
+        },
+        "fulltext_availability": {
+          "status": "available",
+          "scope": "provider",
+          "observed_by": "openalex_search",
+          "reason": "OpenAlex exposed a fetchable full-text location"
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "unverified",
+          "via": "europepmc",
+          "reason": "no title match on Europe PMC (indirect verification recommended)",
+          "identity_search": {
+            "resolver": "europepmc",
+            "query_contract": "Europe PMC bounded title search",
+            "completion": "complete",
+            "outcome": "no_compatible_identity"
+          }
+        },
+        {
+          "status": "unverified",
+          "via": "crossref_metadata",
+          "matched_title": "Neural models for speech recognition",
+          "reason": "metadata candidate below confidence threshold (overlap 0.25, score 0.2625)",
+          "resolution_basis": "metadata_search",
+          "existence_confidence": "low",
+          "metadata_match": {
+            "score": 0.2625,
+            "title_overlap": 0.25,
+            "author_match": false,
+            "cited_first_author": "doe",
+            "matched_first_author": "other",
+            "year_match": true,
+            "matched_year": 2016,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "identity_search": {
+            "resolver": "crossref",
+            "query_contract": "Crossref bounded bibliographic title search; issued request URLs: https://api.crossref.org/works?query.bibliographic=Neural+Attention+for+Translation+Tasks+doe&rows=5&filter=from-pub-date%3A2015%2Cuntil-pub-date%3A2017 | https://api.crossref.org/works?query.bibliographic=Neural+Attention+for+Translation+Tasks+doe&rows=5 | https://api.crossref.org/works?query.bibliographic=Doe+J%2C+Smith+A.+Neural+Attention+for+Translation+Tasks.+EMNLP.+2016.&rows=5",
+            "completion": "complete",
+            "outcome": "candidate_incompatible"
+          }
+        },
+        {
+          "status": "resolved",
+          "via": "openalex_search",
+          "matched_title": "Neural Attention for Translation Tasks",
+          "abstract": null,
+          "retracted": false,
+          "reason": "OpenAlex title search match",
+          "resolution_basis": "metadata_search",
+          "existence_confidence": "medium",
+          "fulltext_exists": true,
+          "fulltext_availability": {
+            "status": "available",
+            "scope": "provider",
+            "observed_by": "openalex_search",
+            "reason": "OpenAlex exposed a fetchable full-text location"
+          },
+          "oa_status": "open",
+          "fulltext_links": [
+            {
+              "url": "https://doi.org/10.1000/good",
+              "content_type": "doi"
+            },
+            {
+              "url": "https://example.org/neural-attention.pdf",
+              "content_type": "pdf"
+            }
+          ],
+          "metadata_match": {
+            "score": 0.85,
+            "title_overlap": 1.0,
+            "author_match": true,
+            "cited_first_author": "doe",
+            "matched_first_author": "doe",
+            "year_match": true,
+            "matched_year": 2016,
+            "venue_overlap": null,
+            "matched_venue": null
+          }
+        },
+        {
+          "status": "unresolved",
+          "via": "identifier_validation:crossref",
+          "reason": "network: AssertionError",
+          "identifier_type": "doi",
+          "identifier_value": "10.1000/good"
+        },
+        {
+          "status": "unresolved",
+          "via": "identifier_validation:crossref",
+          "reason": "network: AssertionError",
+          "identifier_type": "doi",
+          "identifier_value": "10.1000/good"
+        },
+        {
+          "status": "unresolved",
+          "via": "identifier_validation:crossref",
+          "reason": "network: AssertionError",
+          "identifier_type": "doi",
+          "identifier_value": "10.1000/good"
+        },
+        {
+          "status": "unresolved",
+          "via": "acl_search",
+          "reason": "network: AssertionError",
+          "error_type": "network",
+          "error_reason": "network: AssertionError",
+          "retryable": true
+        },
+        {
+          "via": "europepmc",
+          "enrichment_only": true,
+          "status": "_empty_strong",
+          "reason": "no match on Europe PMC (strong ID)"
+        },
+        {
+          "via": "openalex",
+          "enrichment_only": true,
+          "status": "resolved",
+          "matched_title": "Completely unrelated astronomy survey",
+          "abstract": null,
+          "fulltext_links": [
+            {
+              "url": "https://doi.org/10.1000/noise",
+              "content_type": "doi"
+            }
+          ],
+          "reason": null
+        },
+        {
+          "via": "pubmed",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "PMID lookup unavailable"
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:57.465629+00:00",
+      "fulltext_availability": {
+        "status": "available",
+        "scope": "provider",
+        "observed_by": "openalex_search",
+        "reason": "OpenAlex exposed a fetchable full-text location"
+      },
+      "auxiliary_fulltext_links": [
+        {
+          "url": "https://doi.org/10.1000/noise",
+          "content_type": "doi",
+          "discovered_via": "openalex",
+          "identity_context": {
+            "title": "Completely unrelated astronomy survey",
+            "identifiers": {
+              "doi": "10.1000/noise"
+            },
+            "provider": "openalex",
+            "canonical_host": false
+          }
+        }
+      ],
+      "identity": {
+        "scheme": "doi",
+        "value": "10.1000/good",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "weakly_corroborated",
+      "evidence_payload": {
+        "fulltext_links": [
+          {
+            "url": "https://doi.org/10.1000/good",
+            "content_type": "doi",
+            "discovered_via": "openalex_search",
+            "identity_context": {
+              "title": "Neural Attention for Translation Tasks",
+              "year": 2016,
+              "identifiers": {
+                "doi": "10.1000/good"
+              },
+              "provider": "openalex_search",
+              "source_confidence": 0.85,
+              "canonical_host": false
+            }
+          },
+          {
+            "url": "https://example.org/neural-attention.pdf",
+            "content_type": "pdf",
+            "discovered_via": "openalex_search",
+            "identity_context": {
+              "title": "Neural Attention for Translation Tasks",
+              "year": 2016,
+              "identifiers": {
+                "doi": "10.1000/good"
+              },
+              "provider": "openalex_search",
+              "source_confidence": 0.85,
+              "canonical_host": false
+            }
+          }
+        ],
+        "auxiliary_fulltext_links": [
+          {
+            "url": "https://doi.org/10.1000/noise",
+            "content_type": "doi",
+            "discovered_via": "openalex",
+            "identity_context": {
+              "title": "Completely unrelated astronomy survey",
+              "identifiers": {
+                "doi": "10.1000/noise"
+              },
+              "provider": "openalex",
+              "canonical_host": false
+            }
+          }
+        ],
+        "oa_status": "open",
+        "fulltext_exists": true,
+        "abstract": null,
+        "matched_title": "Neural Attention for Translation Tasks",
+        "work_type": null,
+        "via": "openalex_search",
+        "fulltext_availability": {
+          "status": "available",
+          "scope": "provider",
+          "observed_by": "openalex_search",
+          "reason": "OpenAlex exposed a fetchable full-text location"
+        }
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "openalex_search",
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "absent",
+          "detail": {
+            "scheme": "none",
+            "value": "",
+            "is_strong": false,
+            "class_": "none"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "weak_aggregation",
+          "outcome": "weakly_corroborated",
+          "detail": {
+            "status": "resolved",
+            "reference_status_tag": "weakly_verified",
+            "fabrication_risk": "low"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "weakly_corroborated",
+          "detail": {
+            "status": "resolved",
+            "via": "openalex_search",
+            "attempt_count": 10
+          },
+          "at": "stage_04"
+        }
+      ]
+    }
+  },
+  {
+    "name": "arxiv_title_search_without_doi",
+    "ref": {
+      "id": "golden-arxiv-title-search",
+      "ref_number": 7,
+      "doi": null,
+      "pmid": null,
+      "title": "Sequence to Sequence Learning with Neural Networks",
+      "url": null,
+      "year": 2014,
+      "source_type": "article",
+      "raw_entry": "Sutskever I, Vinyals O, Le QV. Sequence to Sequence Learning with Neural Networks. 2014."
+    },
+    "responses": [
+      {
+        "match": "europepmc",
+        "json": {
+          "resultList": {
+            "result": []
+          }
+        }
+      },
+      {
+        "match": "api.crossref.org/works?",
+        "json": {
+          "message": {
+            "items": []
+          }
+        }
+      },
+      {
+        "match": "api.openalex.org/works?",
+        "json": {
+          "results": []
+        }
+      },
+      {
+        "match": "export.arxiv.org/api/query?",
+        "text": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><feed xmlns=\"http://www.w3.org/2005/Atom\"><entry><id>http://arxiv.org/abs/1409.3215v1</id><title>Sequence to Sequence Learning with Neural Networks</title><summary>Sequence models.</summary></entry></feed>"
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-arxiv-title-search",
+      "ref_number": 7,
+      "status": "resolved",
+      "via": "arxiv_search",
+      "matched_title": "Sequence to Sequence Learning with Neural Networks",
+      "abstract": "Sequence models.",
+      "retracted": false,
+      "fulltext_exists": true,
+      "oa_status": "open",
+      "work_type": null,
+      "fulltext_links": [
+        {
+          "url": "https://arxiv.org/pdf/1409.3215.pdf",
+          "content_type": "pdf",
+          "content_version": "preprint",
+          "identity_context": {
+            "provider": "arxiv_search",
+            "title": "Sequence to Sequence Learning with Neural Networks",
+            "authors": [],
+            "year": null,
+            "identifiers": {
+              "arxiv_id": "1409.3215"
+            },
+            "canonical_host": true,
+            "source_confidence": 1.0
+          },
+          "discovered_via": "arxiv_search"
+        },
+        {
+          "url": "https://arxiv.org/html/1409.3215",
+          "content_type": "html",
+          "content_version": "preprint",
+          "identity_context": {
+            "provider": "arxiv_search",
+            "title": "Sequence to Sequence Learning with Neural Networks",
+            "authors": [],
+            "year": null,
+            "identifiers": {
+              "arxiv_id": "1409.3215"
+            },
+            "canonical_host": true,
+            "source_confidence": 1.0
+          },
+          "discovered_via": "arxiv_search"
+        }
+      ],
+      "title_overlap": 1.0,
+      "title_flag": null,
+      "resolution_basis": "metadata_search",
+      "existence_confidence": "medium",
+      "reason": "arXiv title search match (overlap 1.000)",
+      "reference_status_tag": "weakly_verified",
+      "fabrication_risk": "low",
+      "tag_reason": "metadata/catalog match found, but identifier-level evidence is absent",
+      "evidence_profile": {
+        "has_identifier": false,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "europepmc",
+          "crossref_metadata",
+          "arxiv_search"
+        ],
+        "minimum_checks_completed": false,
+        "best_candidate": {
+          "source": "arxiv_search",
+          "title": "Sequence to Sequence Learning with Neural Networks",
+          "title_overlap": 1.0,
+          "metadata_match": {
+            "title_overlap": 1.0,
+            "matched_year": null
+          },
+          "authors": null,
+          "status": "resolved",
+          "reason": "arXiv title search match (overlap 1.000)"
+        },
+        "resolution_basis": "metadata_search",
+        "existence_confidence": "medium",
+        "title_overlap": 1.0,
+        "metadata_match": {
+          "title_overlap": 1.0,
+          "matched_year": null
+        },
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "identified",
+          "identity_status": "identified",
+          "check_status": "incomplete",
+          "correction_status": "not_needed",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": null,
+          "band": "not_scored",
+          "reason": "checks_incomplete",
+          "signals": []
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "unverified",
+          "via": "europepmc",
+          "reason": "no title match on Europe PMC (indirect verification recommended)",
+          "identity_search": {
+            "resolver": "europepmc",
+            "query_contract": "Europe PMC bounded title search",
+            "completion": "complete",
+            "outcome": "no_compatible_identity"
+          }
+        },
+        {
+          "status": "unverified",
+          "via": "crossref_metadata",
+          "reason": "no metadata candidate on Crossref",
+          "identity_search": {
+            "resolver": "crossref",
+            "query_contract": "Crossref bounded bibliographic title search; issued request URLs: https://api.crossref.org/works?query.bibliographic=Sequence+to+Sequence+Learning+with+Neural+Networks+sutskever&rows=5&filter=from-pub-date%3A2013%2Cuntil-pub-date%3A2015 | https://api.crossref.org/works?query.bibliographic=Sequence+to+Sequence+Learning+with+Neural+Networks+sutskever&rows=5 | https://api.crossref.org/works?query.bibliographic=Sequence+to+Sequence+Learning+with+Neural+Networks&rows=5 | https://api.crossref.org/works?query.bibliographic=Sutskever+I%2C+Vinyals+O%2C+Le+QV.+Sequence+to+Sequence+Learning+with+Neural+Networks.+2014.&rows=5",
+            "completion": "complete",
+            "outcome": "no_compatible_identity"
+          }
+        },
+        {
+          "status": "resolved",
+          "via": "arxiv_search",
+          "matched_title": "Sequence to Sequence Learning with Neural Networks",
+          "abstract": "Sequence models.",
+          "retracted": false,
+          "reason": "arXiv title search match (overlap 1.000)",
+          "resolution_basis": "metadata_search",
+          "existence_confidence": "medium",
+          "fulltext_exists": true,
+          "oa_status": "open",
+          "fulltext_links": [
+            {
+              "url": "https://arxiv.org/pdf/1409.3215.pdf",
+              "content_type": "pdf",
+              "content_version": "preprint",
+              "identity_context": {
+                "provider": "arxiv_search",
+                "title": "Sequence to Sequence Learning with Neural Networks",
+                "authors": [],
+                "year": null,
+                "identifiers": {
+                  "arxiv_id": "1409.3215"
+                },
+                "canonical_host": true,
+                "source_confidence": 1.0
+              }
+            },
+            {
+              "url": "https://arxiv.org/html/1409.3215",
+              "content_type": "html",
+              "content_version": "preprint",
+              "identity_context": {
+                "provider": "arxiv_search",
+                "title": "Sequence to Sequence Learning with Neural Networks",
+                "authors": [],
+                "year": null,
+                "identifiers": {
+                  "arxiv_id": "1409.3215"
+                },
+                "canonical_host": true,
+                "source_confidence": 1.0
+              }
+            }
+          ],
+          "metadata_match": {
+            "title_overlap": 1.0,
+            "matched_year": null
+          }
+        },
+        {
+          "via": "europepmc",
+          "enrichment_only": true,
+          "status": "unverified",
+          "reason": "no title match on Europe PMC (indirect verification recommended)",
+          "identity_search": {
+            "resolver": "europepmc",
+            "query_contract": "Europe PMC bounded title search",
+            "completion": "complete",
+            "outcome": "no_compatible_identity"
+          }
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:58.133204+00:00",
+      "identity": {
+        "scheme": "arxiv_id",
+        "value": "1409.3215",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "resolved_strong_discovered",
+      "evidence_payload": {
+        "fulltext_links": [
+          {
+            "url": "https://arxiv.org/pdf/1409.3215.pdf",
+            "content_type": "pdf",
+            "content_version": "preprint",
+            "identity_context": {
+              "provider": "arxiv_search",
+              "title": "Sequence to Sequence Learning with Neural Networks",
+              "authors": [],
+              "year": null,
+              "identifiers": {
+                "arxiv_id": "1409.3215"
+              },
+              "canonical_host": true,
+              "source_confidence": 1.0
+            },
+            "discovered_via": "arxiv_search"
+          },
+          {
+            "url": "https://arxiv.org/html/1409.3215",
+            "content_type": "html",
+            "content_version": "preprint",
+            "identity_context": {
+              "provider": "arxiv_search",
+              "title": "Sequence to Sequence Learning with Neural Networks",
+              "authors": [],
+              "year": null,
+              "identifiers": {
+                "arxiv_id": "1409.3215"
+              },
+              "canonical_host": true,
+              "source_confidence": 1.0
+            },
+            "discovered_via": "arxiv_search"
+          }
+        ],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "open",
+        "fulltext_exists": true,
+        "abstract": "Sequence models.",
+        "matched_title": "Sequence to Sequence Learning with Neural Networks",
+        "work_type": null,
+        "via": "arxiv_search"
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "arxiv_search",
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "absent",
+          "detail": {
+            "scheme": "none",
+            "value": "",
+            "is_strong": false,
+            "class_": "none"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "strong_discovery",
+          "outcome": "found",
+          "detail": {
+            "scheme": "arxiv_id",
+            "value": "1409.3215",
+            "is_strong": true,
+            "class_": "global"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "discovered_validation",
+          "outcome": "matched",
+          "detail": {
+            "status": "resolved",
+            "via": "arxiv_search"
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "strong_confirmed",
+          "outcome": "confirmed",
+          "detail": {
+            "identity_state": "resolved_strong_discovered",
+            "resolution_basis": "metadata_search"
+          },
+          "at": "stage_04"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_05"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "resolved_strong_discovered",
+          "detail": {
+            "status": "resolved",
+            "via": "arxiv_search",
+            "attempt_count": 4
+          },
+          "at": "stage_06"
+        }
+      ]
+    }
+  },
+  {
+    "name": "acl_direct_url",
+    "ref": {
+      "id": "golden-acl-url",
+      "ref_number": 8,
+      "doi": null,
+      "pmid": null,
+      "title": null,
+      "url": "https://aclanthology.org/J93-2004/",
+      "year": 1993,
+      "source_type": "article",
+      "raw_entry": "Marcus MP, Santorini B, Marcinkiewicz MA. Building a Large Annotated Corpus of English: The Penn Treebank. Computational Linguistics. 1993."
+    },
+    "responses": [
+      {
+        "match": "api.github.com/repos/acl-org/acl-anthology/git/trees/master",
+        "json": {
+          "tree": [
+            {
+              "path": "data/xml/J93.xml"
+            }
+          ]
+        }
+      },
+      {
+        "match": "raw.githubusercontent.com/acl-org/acl-anthology/master/data/xml/J93.xml",
+        "text": "<?xml version='1.0' encoding='UTF-8'?><collection id='J93'><volume id='2' type='journal'><meta><booktitle>Computational Linguistics, Volume 19, Number 2, June 1993</booktitle><year>1993</year><journal-volume>19</journal-volume><journal-issue>2</journal-issue></meta><paper id='4'><title>Building a Large Annotated Corpus of English: The Penn Treebank</title><author><first>Mitchell P.</first><last>Marcus</last></author><author><first>Beatrice</first><last>Santorini</last></author><author><first>Mary Ann</first><last>Marcinkiewicz</last></author><pages>313-330</pages><url>J93-2004</url></paper></volume></collection>"
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-acl-url",
+      "ref_number": 8,
+      "status": "resolved",
+      "via": "acl_search",
+      "matched_title": "Building a Large Annotated Corpus of English: The Penn Treebank",
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": true,
+      "oa_status": "open",
+      "work_type": "journal article",
+      "fulltext_links": [
+        {
+          "url": "https://aclanthology.org/J93-2004/",
+          "content_type": "html",
+          "discovered_via": "acl_search",
+          "identity_context": {
+            "title": "Building a Large Annotated Corpus of English: The Penn Treebank",
+            "authors": [
+              "Mitchell P. Marcus",
+              "Beatrice Santorini",
+              "Mary Ann Marcinkiewicz"
+            ],
+            "identifiers": {
+              "acl_id": "J93-2004"
+            },
+            "provider": "acl_search",
+            "provider_record_id": "J93-2004",
+            "source_confidence": 0.98,
+            "canonical_host": true
+          }
+        },
+        {
+          "url": "https://aclanthology.org/J93-2004.pdf",
+          "content_type": "application/pdf",
+          "discovered_via": "acl_search",
+          "identity_context": {
+            "title": "Building a Large Annotated Corpus of English: The Penn Treebank",
+            "authors": [
+              "Mitchell P. Marcus",
+              "Beatrice Santorini",
+              "Mary Ann Marcinkiewicz"
+            ],
+            "identifiers": {
+              "acl_id": "J93-2004"
+            },
+            "provider": "acl_search",
+            "provider_record_id": "J93-2004",
+            "source_confidence": 0.98,
+            "canonical_host": true
+          }
+        }
+      ],
+      "title_overlap": 1.0,
+      "title_flag": null,
+      "resolution_basis": "acl_id",
+      "existence_confidence": "high",
+      "reason": "ACL Anthology URL resolved to a paper record",
+      "reference_status_tag": "verified",
+      "fabrication_risk": "low",
+      "tag_reason": "strong identifier or authoritative resolver confirmed the source",
+      "evidence_profile": {
+        "has_identifier": true,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "acl_search",
+          "europepmc"
+        ],
+        "minimum_checks_completed": false,
+        "best_candidate": {
+          "source": "acl_search",
+          "title": "Building a Large Annotated Corpus of English: The Penn Treebank",
+          "title_overlap": 1.0,
+          "metadata_match": null,
+          "authors": [
+            "Mitchell P. Marcus",
+            "Beatrice Santorini",
+            "Mary Ann Marcinkiewicz"
+          ],
+          "status": "resolved",
+          "reason": "ACL Anthology URL resolved to a paper record"
+        },
+        "resolution_basis": "acl_id",
+        "existence_confidence": "high",
+        "title_overlap": 1.0,
+        "metadata_match": null,
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "identified",
+          "identity_status": "identified",
+          "check_status": "incomplete",
+          "correction_status": "not_needed",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": null,
+          "band": "not_scored",
+          "reason": "checks_incomplete",
+          "signals": []
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "resolved",
+          "via": "acl_search",
+          "matched_title": "Building a Large Annotated Corpus of English: The Penn Treebank",
+          "matched_authors": [
+            "Mitchell P. Marcus",
+            "Beatrice Santorini",
+            "Mary Ann Marcinkiewicz"
+          ],
+          "abstract": null,
+          "retracted": false,
+          "reason": "ACL Anthology URL resolved to a paper record",
+          "resolution_basis": "acl_id",
+          "existence_confidence": "high",
+          "paper_id": "J93-2004",
+          "doi": null,
+          "fulltext_exists": true,
+          "oa_status": "open",
+          "work_type": "journal article",
+          "fulltext_links": [
+            {
+              "url": "https://aclanthology.org/J93-2004/",
+              "content_type": "html"
+            },
+            {
+              "url": "https://aclanthology.org/J93-2004.pdf",
+              "content_type": "application/pdf"
+            }
+          ],
+          "resolved_identifier": {
+            "type": "acl_id",
+            "value": "J93-2004",
+            "validated_via": "acl_search"
+          }
+        },
+        {
+          "via": "europepmc",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "network: AssertionError"
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:58.790490+00:00",
+      "resolved_identifier": {
+        "type": "acl_id",
+        "value": "J93-2004",
+        "validated_via": "acl_search"
+      },
+      "matched_authors": [
+        "Mitchell P. Marcus",
+        "Beatrice Santorini",
+        "Mary Ann Marcinkiewicz"
+      ],
+      "identity": {
+        "scheme": "acl_id",
+        "value": "J93-2004",
+        "is_strong": true,
+        "class_": "authority_local"
+      },
+      "identity_state": "resolved_strong_discovered",
+      "evidence_payload": {
+        "fulltext_links": [
+          {
+            "url": "https://aclanthology.org/J93-2004/",
+            "content_type": "html",
+            "discovered_via": "acl_search",
+            "identity_context": {
+              "title": "Building a Large Annotated Corpus of English: The Penn Treebank",
+              "authors": [
+                "Mitchell P. Marcus",
+                "Beatrice Santorini",
+                "Mary Ann Marcinkiewicz"
+              ],
+              "identifiers": {
+                "acl_id": "J93-2004"
+              },
+              "provider": "acl_search",
+              "provider_record_id": "J93-2004",
+              "source_confidence": 0.98,
+              "canonical_host": true
+            }
+          },
+          {
+            "url": "https://aclanthology.org/J93-2004.pdf",
+            "content_type": "application/pdf",
+            "discovered_via": "acl_search",
+            "identity_context": {
+              "title": "Building a Large Annotated Corpus of English: The Penn Treebank",
+              "authors": [
+                "Mitchell P. Marcus",
+                "Beatrice Santorini",
+                "Mary Ann Marcinkiewicz"
+              ],
+              "identifiers": {
+                "acl_id": "J93-2004"
+              },
+              "provider": "acl_search",
+              "provider_record_id": "J93-2004",
+              "source_confidence": 0.98,
+              "canonical_host": true
+            }
+          }
+        ],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "open",
+        "fulltext_exists": true,
+        "abstract": null,
+        "matched_title": "Building a Large Annotated Corpus of English: The Penn Treebank",
+        "work_type": "journal article",
+        "via": "acl_search"
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "acl_search",
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "present",
+          "detail": {
+            "scheme": "url",
+            "value": "https://aclanthology.org/J93-2004/",
+            "is_strong": false,
+            "class_": "authority_local"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "strong_discovery",
+          "outcome": "found",
+          "detail": {
+            "scheme": "acl_id",
+            "value": "J93-2004",
+            "is_strong": true,
+            "class_": "authority_local"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "discovered_validation",
+          "outcome": "matched",
+          "detail": {
+            "status": "resolved",
+            "via": "acl_search"
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "strong_confirmed",
+          "outcome": "confirmed",
+          "detail": {
+            "identity_state": "resolved_strong_discovered",
+            "resolution_basis": "acl_id"
+          },
+          "at": "stage_04"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_05"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "resolved_strong_discovered",
+          "detail": {
+            "status": "resolved",
+            "via": "acl_search",
+            "attempt_count": 2
+          },
+          "at": "stage_06"
+        }
+      ]
+    }
+  },
+  {
+    "name": "isbn_resolved_openlibrary",
+    "ref": {
+      "id": "golden-book-isbn",
+      "ref_number": 9,
+      "doi": null,
+      "pmid": null,
+      "isbn": "9780226458083",
+      "title": "The Structure of Scientific Revolutions",
+      "url": null,
+      "year": 1962,
+      "source_type": "book",
+      "raw_entry": "Kuhn TS. The Structure of Scientific Revolutions. 1962."
+    },
+    "responses": [
+      {
+        "match": "openlibrary.org/api/books",
+        "json": {
+          "ISBN:9780226458083": {
+            "title": "The Structure of Scientific Revolutions",
+            "authors": [
+              {
+                "name": "Thomas S. Kuhn"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-book-isbn",
+      "ref_number": 9,
+      "status": "resolved",
+      "via": "openlibrary",
+      "matched_title": "The Structure of Scientific Revolutions",
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": "unknown",
+      "oa_status": "unknown",
+      "work_type": "book",
+      "fulltext_links": [],
+      "title_overlap": null,
+      "title_flag": null,
+      "resolution_basis": "isbn",
+      "existence_confidence": "high",
+      "reason": null,
+      "reference_status_tag": "verified",
+      "fabrication_risk": "low",
+      "tag_reason": "strong identifier or authoritative resolver confirmed the source",
+      "evidence_profile": {
+        "has_identifier": true,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "book",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "openlibrary",
+          "googlebooks"
+        ],
+        "minimum_checks_completed": true,
+        "best_candidate": {
+          "source": "openlibrary",
+          "title": "The Structure of Scientific Revolutions",
+          "title_overlap": null,
+          "metadata_match": null,
+          "authors": [
+            "Thomas S. Kuhn"
+          ],
+          "status": "resolved",
+          "reason": null
+        },
+        "resolution_basis": "isbn",
+        "existence_confidence": "high",
+        "title_overlap": null,
+        "metadata_match": null,
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "identified",
+          "identity_status": "identified",
+          "check_status": "complete",
+          "correction_status": "not_needed",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": 0,
+          "band": "none",
+          "reason": "strong_identifier_corroborated",
+          "signals": [
+            "strong_identifier_corroborated"
+          ]
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "resolved",
+          "via": "openlibrary",
+          "matched_title": "The Structure of Scientific Revolutions",
+          "matched_authors": [
+            "Thomas S. Kuhn"
+          ],
+          "abstract": null,
+          "retracted": false,
+          "fulltext_exists": "unknown",
+          "oa_status": "unknown",
+          "work_type": "book",
+          "book_availability": "unknown",
+          "availability_note": null,
+          "reason": null,
+          "existence_corroboration": "corroborated"
+        },
+        {
+          "via": "googlebooks",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "network: AssertionError"
+        }
+      ],
+      "checked_at": "2026-09-13T08:25:59.480754+00:00",
+      "matched_authors": [
+        "Thomas S. Kuhn"
+      ],
+      "existence_corroboration": "corroborated",
+      "book_availability": "unknown",
+      "identity": {
+        "scheme": "isbn",
+        "value": "9780226458083",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "resolved_strong_declared",
+      "evidence_payload": {
+        "fulltext_links": [],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "unknown",
+        "fulltext_exists": "unknown",
+        "abstract": null,
+        "matched_title": "The Structure of Scientific Revolutions",
+        "work_type": "book",
+        "via": "openlibrary"
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "openlibrary",
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "present",
+          "detail": {
+            "scheme": "isbn",
+            "value": "9780226458083",
+            "is_strong": true,
+            "class_": "global"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "declared_cache_lookup",
+          "outcome": "not_checked",
+          "detail": {
+            "reason": "resolver has no declared-identity cache gate"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "declared_validation",
+          "outcome": "matched",
+          "detail": {
+            "status": "resolved",
+            "via": "openlibrary"
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "strong_confirmed",
+          "outcome": "confirmed",
+          "detail": {
+            "identity_state": "resolved_strong_declared",
+            "resolution_basis": "isbn"
+          },
+          "at": "stage_04"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_05"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "resolved_strong_declared",
+          "detail": {
+            "status": "resolved",
+            "via": "openlibrary",
+            "attempt_count": 2
+          },
+          "at": "stage_06"
+        }
+      ]
+    }
+  },
+  {
+    "name": "book_title_only_absent",
+    "ref": {
+      "id": "golden-book-title-absent",
+      "ref_number": 10,
+      "doi": null,
+      "pmid": null,
+      "isbn": null,
+      "title": "Some Obscure Book Nobody Knows About",
+      "url": null,
+      "year": 2011,
+      "source_type": "book",
+      "raw_entry": "Doe J. Some Obscure Book Nobody Knows About. 2011."
+    },
+    "responses": [
+      {
+        "match": "openlibrary.org/search.json",
+        "json": {
+          "docs": []
+        }
+      },
+      {
+        "match": "googleapis.com/books/v1/volumes",
+        "json": {}
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-book-title-absent",
+      "ref_number": 10,
+      "status": "unverified",
+      "via": "openlibrary+googlebooks",
+      "matched_title": null,
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": "unknown",
+      "oa_status": "unknown",
+      "work_type": null,
+      "fulltext_links": [],
+      "title_overlap": null,
+      "title_flag": null,
+      "resolution_basis": "book_title_search",
+      "existence_confidence": "low",
+      "reason": "book not found on OpenLibrary or Google Books; web search recommended (opt-in) to corroborate existence",
+      "reference_status_tag": "unverified_low_indexability",
+      "fabrication_risk": "low",
+      "tag_reason": "source type has weak catalog/index coverage",
+      "evidence_profile": {
+        "has_identifier": false,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "book",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "openlibrary+googlebooks"
+        ],
+        "minimum_checks_completed": false,
+        "best_candidate": null,
+        "resolution_basis": "book_title_search",
+        "existence_confidence": "low",
+        "title_overlap": null,
+        "metadata_match": null,
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "checks_incomplete",
+          "identity_status": "not_identified",
+          "check_status": "incomplete",
+          "correction_status": "not_attempted",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": null,
+          "band": "not_scored",
+          "reason": "checks_incomplete",
+          "signals": []
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "unverified",
+          "via": "openlibrary+googlebooks",
+          "reason": "book not found on OpenLibrary or Google Books; web search recommended (opt-in) to corroborate existence",
+          "existence_corroboration": "searched_not_found"
+        }
+      ],
+      "checked_at": "2026-09-13T08:26:00.168078+00:00",
+      "existence_corroboration": "searched_not_found",
+      "identity": {
+        "scheme": "none",
+        "value": "",
+        "is_strong": false,
+        "class_": "none"
+      },
+      "identity_state": "unverified",
+      "evidence_payload": {
+        "fulltext_links": [],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "unknown",
+        "fulltext_exists": "unknown",
+        "abstract": null,
+        "matched_title": null,
+        "work_type": null,
+        "via": "openlibrary+googlebooks"
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": "openlibrary+googlebooks",
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "absent",
+          "detail": {
+            "scheme": "none",
+            "value": "",
+            "is_strong": false,
+            "class_": "none"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "weak_aggregation",
+          "outcome": "unverified",
+          "detail": {
+            "status": "unverified",
+            "reference_status_tag": "unverified_low_indexability",
+            "fabrication_risk": "low"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "unverified",
+          "detail": {
+            "status": "unverified",
+            "via": "openlibrary+googlebooks",
+            "attempt_count": 1
+          },
+          "at": "stage_04"
+        }
+      ]
+    }
+  },
+  {
+    "name": "retracted_doi",
+    "ref": {
+      "id": "golden-retracted-doi",
+      "ref_number": 11,
+      "doi": "10.1000/retracted",
+      "pmid": null,
+      "title": null,
+      "url": null,
+      "year": 2019,
+      "source_type": "article",
+      "raw_entry": "Smith AB. Treatment effects. J Clin Med. 2019."
+    },
+    "responses": [
+      {
+        "match": "api.crossref.org/works/10.1000/retracted",
+        "json": {
+          "message": {
+            "title": [
+              "Treatment effects"
+            ],
+            "type": "journal-article",
+            "relation": {
+              "is-retracted-by": [
+                {
+                  "id": "10.1000/retraction-notice"
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "expected": {
+      "ref_id": "golden-retracted-doi",
+      "ref_number": 11,
+      "status": "resolved",
+      "via": "crossref",
+      "matched_title": "Treatment effects",
+      "abstract": null,
+      "retracted": true,
+      "fulltext_exists": "unknown",
+      "oa_status": "unknown",
+      "work_type": "journal-article",
+      "fulltext_links": [],
+      "title_overlap": null,
+      "title_flag": null,
+      "resolution_basis": "doi",
+      "existence_confidence": "high",
+      "reason": null,
+      "reference_status_tag": "verified",
+      "fabrication_risk": "low",
+      "tag_reason": "strong identifier or authoritative resolver confirmed the source",
+      "evidence_profile": {
+        "has_identifier": true,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "article",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [
+          "crossref",
+          "europepmc",
+          "openalex",
+          "pubmed"
+        ],
+        "minimum_checks_completed": true,
+        "best_candidate": {
+          "source": "crossref",
+          "title": "Treatment effects",
+          "title_overlap": null,
+          "metadata_match": {
+            "score": 0.0,
+            "title_overlap": null,
+            "author_match": false,
+            "cited_first_author": "smith",
+            "matched_first_author": null,
+            "year_match": false,
+            "matched_year": null,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "authors": null,
+          "status": "resolved",
+          "reason": null
+        },
+        "resolution_basis": "doi",
+        "existence_confidence": "high",
+        "title_overlap": null,
+        "metadata_match": {
+          "score": 0.0,
+          "title_overlap": null,
+          "author_match": false,
+          "cited_first_author": "smith",
+          "matched_first_author": null,
+          "year_match": false,
+          "matched_year": null,
+          "venue_overlap": null,
+          "matched_venue": null
+        },
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "identified",
+          "identity_status": "identified",
+          "check_status": "complete",
+          "correction_status": "not_needed",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": 0,
+          "band": "none",
+          "reason": "strong_identifier_corroborated",
+          "signals": [
+            "strong_identifier_corroborated"
+          ]
+        }
+      },
+      "identifier_check": null,
+      "attempts": [
+        {
+          "status": "resolved",
+          "via": "crossref",
+          "matched_title": "Treatment effects",
+          "abstract": null,
+          "retracted": true,
+          "reason": null,
+          "metadata_match": {
+            "score": 0.0,
+            "title_overlap": null,
+            "author_match": false,
+            "cited_first_author": "smith",
+            "matched_first_author": null,
+            "year_match": false,
+            "matched_year": null,
+            "venue_overlap": null,
+            "matched_venue": null
+          },
+          "fulltext_exists": "unknown",
+          "oa_status": "unknown",
+          "work_type": "journal-article",
+          "fulltext_links": []
+        },
+        {
+          "via": "europepmc",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "network: AssertionError"
+        },
+        {
+          "via": "openalex",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "network: AssertionError"
+        },
+        {
+          "via": "pubmed",
+          "enrichment_only": true,
+          "status": "unresolved",
+          "reason": "PMID lookup unavailable"
+        }
+      ],
+      "checked_at": "2026-09-13T08:26:00.814891+00:00",
+      "identity": {
+        "scheme": "doi",
+        "value": "10.1000/retracted",
+        "is_strong": true,
+        "class_": "global"
+      },
+      "identity_state": "resolved_strong_declared",
+      "evidence_payload": {
+        "fulltext_links": [],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "unknown",
+        "fulltext_exists": "unknown",
+        "abstract": null,
+        "matched_title": "Treatment effects",
+        "work_type": "journal-article",
+        "via": "crossref"
+      },
+      "retraction": {
+        "status": "retracted",
+        "checked_via": "authority_metadata",
+        "evidence": {
+          "retracted": true,
+          "resolver_via": "crossref",
+          "attempt_via": "crossref"
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "present",
+          "detail": {
+            "scheme": "doi",
+            "value": "10.1000/retracted",
+            "is_strong": true,
+            "class_": "global"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "declared_cache_lookup",
+          "outcome": "not_checked",
+          "detail": {
+            "reason": "resolver has no declared-identity cache gate"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "declared_validation",
+          "outcome": "matched",
+          "detail": {
+            "status": "resolved",
+            "via": "crossref"
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "strong_confirmed",
+          "outcome": "confirmed",
+          "detail": {
+            "identity_state": "resolved_strong_declared",
+            "resolution_basis": "doi"
+          },
+          "at": "stage_04"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "retracted",
+          "detail": {
+            "checked_via": "authority_metadata",
+            "retracted": true
+          },
+          "at": "stage_05"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "resolved_strong_declared",
+          "detail": {
+            "status": "resolved",
+            "via": "crossref",
+            "attempt_count": 4
+          },
+          "at": "stage_06"
+        }
+      ]
+    }
+  },
+  {
+    "name": "no_identifier_unverified",
+    "ref": {
+      "id": "golden-no-identifier",
+      "ref_number": 12,
+      "doi": null,
+      "pmid": null,
+      "title": null,
+      "url": null,
+      "year": 2010,
+      "source_type": "unknown",
+      "raw_entry": "Smith M. Medical handbook. Publisher, 2010."
+    },
+    "responses": [],
+    "expected": {
+      "ref_id": "golden-no-identifier",
+      "ref_number": 12,
+      "status": "unverified",
+      "via": null,
+      "matched_title": null,
+      "abstract": null,
+      "retracted": false,
+      "fulltext_exists": "unknown",
+      "oa_status": "unknown",
+      "work_type": null,
+      "fulltext_links": [],
+      "title_overlap": null,
+      "title_flag": null,
+      "resolution_basis": "none",
+      "existence_confidence": "unknown",
+      "reason": "no identifier (DOI/PMID/ISBN/URL): search online to verify",
+      "reference_status_tag": "unverified",
+      "fabrication_risk": "unknown",
+      "tag_reason": "not enough completed evidence to assign a stronger tag",
+      "evidence_profile": {
+        "has_identifier": false,
+        "has_searchable_title": true,
+        "has_author": true,
+        "has_year": true,
+        "has_venue": false,
+        "source_kind": "unknown",
+        "source_type_confidence": "unknown",
+        "source_type_evidence": [],
+        "indexability": "low",
+        "checks_completed": [],
+        "minimum_checks_completed": false,
+        "best_candidate": null,
+        "resolution_basis": "none",
+        "existence_confidence": "unknown",
+        "title_overlap": null,
+        "metadata_match": null,
+        "identifier_fallback": null,
+        "bibliographic_adjudication": {
+          "rule_version": "bibliographic-adjudication/v4",
+          "outcome": "checks_incomplete",
+          "identity_status": "not_identified",
+          "check_status": "incomplete",
+          "correction_status": "not_attempted",
+          "refutations": []
+        },
+        "synthetic_reference_risk": {
+          "score": null,
+          "band": "not_scored",
+          "reason": "checks_incomplete",
+          "signals": []
+        }
+      },
+      "identifier_check": null,
+      "attempts": [],
+      "checked_at": "2026-09-13T08:26:01.450010+00:00",
+      "identity": {
+        "scheme": "none",
+        "value": "",
+        "is_strong": false,
+        "class_": "none"
+      },
+      "identity_state": "unverified",
+      "evidence_payload": {
+        "fulltext_links": [],
+        "auxiliary_fulltext_links": [],
+        "oa_status": "unknown",
+        "fulltext_exists": "unknown",
+        "abstract": null,
+        "matched_title": null,
+        "work_type": null,
+        "via": null
+      },
+      "retraction": {
+        "status": "unknown",
+        "checked_via": "none",
+        "evidence": {
+          "retracted": false,
+          "resolver_via": null,
+          "attempt_via": null
+        }
+      },
+      "trace": [
+        {
+          "stage": "declared_present",
+          "outcome": "absent",
+          "detail": {
+            "scheme": "none",
+            "value": "",
+            "is_strong": false,
+            "class_": "none"
+          },
+          "at": "stage_01"
+        },
+        {
+          "stage": "weak_aggregation",
+          "outcome": "unverified",
+          "detail": {
+            "status": "unverified",
+            "reference_status_tag": "unverified",
+            "fabrication_risk": "unknown"
+          },
+          "at": "stage_02"
+        },
+        {
+          "stage": "retraction_check",
+          "outcome": "unknown",
+          "detail": {
+            "checked_via": "none",
+            "retracted": false
+          },
+          "at": "stage_03"
+        },
+        {
+          "stage": "final_resolution",
+          "outcome": "unverified",
+          "detail": {
+            "status": "unverified",
+            "via": null,
+            "attempt_count": 0
+          },
+          "at": "stage_04"
+        }
+      ]
+    }
+  }
+]

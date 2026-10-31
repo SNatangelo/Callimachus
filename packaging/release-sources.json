@@ -2,11 +2,11 @@
   {
     "name": "Qt 6",
     "constraint": "PySide6",
-    "package_version": "6.11.2",
-    "version": "6.11.2",
-    "filename": "qt-everywhere-src-6.11.2.tar.xz",
-    "url": "https://download.qt.io/official_releases/qt/6.11/6.11.2/single/qt-everywhere-src-6.11.2.tar.xz",
-    "sha256": "6dcfbca271d76a6502741a2c0dc6fc98ef7dd0b7b4cfd0abcebb285a86a26f33"
+    "package_version": "6.12.0",
+    "version": "6.12.0",
+    "filename": "qt-everywhere-src-6.12.0.tar.xz",
+    "url": "https://download.qt.io/official_releases/qt/6.12/6.12.0/single/qt-everywhere-src-6.12.0.tar.xz",
+    "sha256": "98ff4f44bac6ec3e1e62ee2a4316ae0e3d15badb015d753cc0268a20db52f165"
   },
   {
     "name": "Qt 5 (OpenCV)",
@@ -20,11 +20,11 @@
   {
     "name": "PySide6 bindings",
     "constraint": "PySide6",
-    "package_version": "6.11.2",
-    "version": "6.11.2",
-    "filename": "pyside-setup-everywhere-src-6.11.2.tar.xz",
-    "url": "https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.2-src/pyside-setup-everywhere-src-6.11.2.tar.xz",
-    "sha256": "cba47efbaad1bedd529725cbc14e21f156c7a19366f07b3edfbb076ffd7afdf8"
+    "package_version": "6.12.0",
+    "version": "6.12.0",
+    "filename": "pyside-setup-everywhere-src-6.12.0.tar.xz",
+    "url": "https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.12.0-src/pyside-setup-everywhere-src-6.12.0.tar.xz",
+    "sha256": "099c1a597cf33c1b000e11cf68a0b82d216fb802bf81726efc720394f10c7751"
   },
   {
     "name": "PyMuPDF",

@@ -10,10 +10,11 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import sys
+import threading
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -30,6 +31,23 @@ from core.invocation import run_command
 from core.shared.filesystem_paths import io_path, logical_path
 
 
+_GUIDED_FETCH_STAGE_SCHEMA = "callimachus.guided-fetch-stage.v1"
+_GUIDED_FETCH_STAGE_ROOT = "sources/guided_fetch_stages"
+_GUIDED_FETCH_STAGE_LOCK = threading.RLock()
+_GUIDED_FETCH_STAGE_FIELDS = {
+    "schema", "action", "sequence", "event_id", "task_id", "task_kind",
+    "task_generation", "ref_id", "source_tier", "identity_attested",
+    "source_ref", "original_filename", "original_path", "controlled_path",
+    "sha256", "byte_count", "supersedes_ocr_scan_ids",
+}
+_GUIDED_FETCH_IDENTITY_SKIP_FIELDS = {
+    "schema", "action", "sequence", "event_id", "task_id", "task_kind",
+    "task_generation", "ref_id", "source_tier", "source_stage_event_id",
+    "source_sha256", "actor_type",
+}
+_GUIDED_FETCH_STAGE_FILENAME = re.compile(r"^(?P<sequence>[0-9]{8})-(?P<event_id>[0-9a-f]{32})\.json$")
+
+
 def _repo(run_dir: str) -> RunRepository:
     """Open task views without granting the submitting peer write access."""
     return RunRepository.open_readonly(run_dir)
@@ -42,6 +60,10 @@ def _answer_gate(args):
             args.agent_identity,
             debug_override=args.debug_override_artifact_integrity,
             override_reason=args.debug_override_reason,
+            # The authority performs the integrity check atomically inside
+            # admit_task_answer.  Do not grant the submitting agent a worker
+            # capability merely to duplicate that preflight here.
+            activation_only=True,
             activate_worker=False,
             mirror_audit_records=False,
             allow_local_downgrade=True,
@@ -320,6 +342,981 @@ def store_guided_ocr_artifact(
             except Exception:
                 pass
         raise
+
+
+def store_guided_fetch_stage_artifact(
+    run_dir: str,
+    *,
+    task_id: str,
+    task_kind: str,
+    task_generation: int,
+    ref_id: str,
+    payload: dict[str, Any],
+    original_path: str,
+    original_filename: str,
+    supersedes_ocr_scan_ids: list[str] | None = None,
+    debug_override_artifact_integrity: bool = False,
+    debug_override_reason: str | None = None,
+) -> dict[str, Any]:
+    """Durably stage one confirmed Guided Fetch source without answering its task.
+
+    Each event and its controlled copies are immutable. On protected runs the
+    files become resumable only after the external-input checkpoint commits.
+    """
+    return _write_guided_fetch_stage_event(
+        run_dir,
+        action="stage",
+        task_id=task_id,
+        task_kind=task_kind,
+        task_generation=task_generation,
+        ref_id=ref_id,
+        payload=payload,
+        original_path=original_path,
+        original_filename=original_filename,
+        supersedes_ocr_scan_ids=supersedes_ocr_scan_ids,
+        debug_override_artifact_integrity=debug_override_artifact_integrity,
+        debug_override_reason=debug_override_reason,
+    )
+
+
+def discard_guided_fetch_stage_artifact(
+    run_dir: str,
+    *,
+    task_id: str,
+    task_kind: str,
+    task_generation: int,
+    ref_id: str,
+    supersedes_ocr_scan_ids: list[str] | None = None,
+    debug_override_artifact_integrity: bool = False,
+    debug_override_reason: str | None = None,
+) -> dict[str, Any]:
+    """Append a durable tombstone for a confirmed or damaged staged source."""
+    return _write_guided_fetch_stage_event(
+        run_dir,
+        action="discard",
+        task_id=task_id,
+        task_kind=task_kind,
+        task_generation=task_generation,
+        ref_id=ref_id,
+        payload=None,
+        original_path=None,
+        original_filename=None,
+        supersedes_ocr_scan_ids=supersedes_ocr_scan_ids,
+        debug_override_artifact_integrity=debug_override_artifact_integrity,
+        debug_override_reason=debug_override_reason,
+    )
+
+
+def record_guided_fetch_identity_skip_intent(
+    run_dir: str,
+    *,
+    task_id: str,
+    task_kind: str,
+    task_generation: int,
+    ref_id: str,
+    source_tier: str,
+    source_sha256: str,
+    source_stage_event_id: str,
+    agent_identity: str | None,
+    debug_override_artifact_integrity: bool = False,
+    debug_override_reason: str | None = None,
+) -> dict[str, Any]:
+    """Journal an operator's explicit choice to leave this staged source unverified."""
+    if agent_identity is not None:
+        raise ValueError("guided identity review skip requires the human operator")
+    if (
+        source_tier not in {"fulltext", "abstract"}
+        or not isinstance(source_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", source_sha256)
+        or not isinstance(source_stage_event_id, str)
+        or not re.fullmatch(r"[0-9a-f]{32}", source_stage_event_id)
+    ):
+        raise ValueError("guided identity review skip source binding is invalid")
+
+    with _GUIDED_FETCH_STAGE_LOCK:
+        if not _guided_fetch_skip_matches_current_stage(
+            run_dir,
+            task_id=task_id,
+            task_kind=task_kind,
+            task_generation=task_generation,
+            ref_id=ref_id,
+            source_tier=source_tier,
+            source_sha256=source_sha256,
+            source_stage_event_id=source_stage_event_id,
+        ):
+            raise ValueError(
+                "guided identity review skip no longer matches the current staged source"
+            )
+        state = load_guided_fetch_stage_artifacts(run_dir)
+        if any(
+            isinstance(record, dict)
+            and record.get("source_stage_event_id") == source_stage_event_id
+            and record.get("task_id") == task_id
+            and record.get("task_generation") == task_generation
+            for record in state.get("identity_skip_intents", [])
+        ):
+            return {
+                "record": next(
+                    record for record in state["identity_skip_intents"]
+                    if record.get("source_stage_event_id") == source_stage_event_id
+                    and record.get("task_id") == task_id
+                    and record.get("task_generation") == task_generation
+                ),
+                "payload": None,
+            }
+        return _write_guided_fetch_stage_event(
+            run_dir,
+            action="identity_skip",
+            task_id=task_id,
+            task_kind=task_kind,
+            task_generation=task_generation,
+            ref_id=ref_id,
+            payload=None,
+            original_path=None,
+            original_filename=None,
+            supersedes_ocr_scan_ids=None,
+            debug_override_artifact_integrity=debug_override_artifact_integrity,
+            debug_override_reason=debug_override_reason,
+            identity_skip_source_tier=source_tier,
+            identity_skip_source_sha256=source_sha256,
+            identity_skip_source_stage_event_id=source_stage_event_id,
+            agent_identity=agent_identity,
+        )
+
+
+def _guided_fetch_skip_matches_current_stage(
+    run_dir: str,
+    *,
+    task_id: str,
+    task_kind: str,
+    task_generation: int,
+    ref_id: str,
+    source_tier: str,
+    source_sha256: str,
+    source_stage_event_id: str,
+) -> bool:
+    ref_key = hashlib.sha256(ref_id.encode("utf-8")).hexdigest()
+    state = load_guided_fetch_stage_artifacts(run_dir)
+    staged = state.get("latest", {}).get(ref_key)
+    record = staged.get("record") if isinstance(staged, dict) else None
+    if not isinstance(record, dict) or not (
+        record.get("action") == "stage"
+        and record.get("event_id") == source_stage_event_id
+        and record.get("task_id") == task_id
+        and record.get("task_kind") == task_kind
+        and record.get("task_generation") == task_generation
+        and record.get("ref_id") == ref_id
+        and record.get("source_tier") == source_tier
+        and record.get("sha256") == source_sha256
+        and record.get("identity_attested") is True
+    ):
+        return False
+
+    repo = RunRepository.open_readonly(run_dir)
+    try:
+        task = repo.get_task(task_id)
+        if (
+            task is None
+            or task.slot != "fetch"
+            or task.task_kind != task_kind
+            or task.status != "pending"
+            or task.generation != task_generation
+        ):
+            return False
+        if task_kind == "fetch":
+            return task.ref_id == ref_id
+        view = repo.task_view(task_id)
+        references = view.get("references") if isinstance(view, dict) else None
+        return isinstance(references, list) and any(
+            isinstance(item, dict) and item.get("ref_id") == ref_id
+            for item in references
+        )
+    finally:
+        repo.close()
+
+
+def _write_guided_fetch_stage_event(
+    run_dir: str,
+    *,
+    action: str,
+    task_id: str,
+    task_kind: str,
+    task_generation: int,
+    ref_id: str,
+    payload: dict[str, Any] | None,
+    original_path: str | None,
+    original_filename: str | None,
+    supersedes_ocr_scan_ids: list[str] | None,
+    debug_override_artifact_integrity: bool,
+    debug_override_reason: str | None,
+    identity_skip_source_tier: str | None = None,
+    identity_skip_source_sha256: str | None = None,
+    identity_skip_source_stage_event_id: str | None = None,
+    agent_identity: str | None = None,
+) -> dict[str, Any]:
+    if action not in {"stage", "discard", "identity_skip"}:
+        raise ValueError("guided Fetch stage action is invalid")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("guided Fetch stage task_id is invalid")
+    if task_kind not in {"fetch", "browser_challenge"}:
+        raise ValueError("guided Fetch stage task kind is invalid")
+    if type(task_generation) is not int or task_generation < 0:
+        raise ValueError("guided Fetch stage task generation is invalid")
+    if not isinstance(ref_id, str) or not ref_id.strip():
+        raise ValueError("guided Fetch stage ref_id is invalid")
+    ocr_ids = sorted(set(supersedes_ocr_scan_ids or []))
+    if any(not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item) for item in ocr_ids):
+        raise ValueError("guided Fetch stage OCR supersession identities are invalid")
+
+    source: Path | None = None
+    source_io: Path | None = None
+    source_sha256: str | None = None
+    source_byte_count: int | None = None
+    source_tier: str | None = None
+    identity_attested: bool | None = None
+    source_ref: str | None = None
+    if action == "identity_skip":
+        if (
+            agent_identity is not None
+            or payload is not None
+            or original_path is not None
+            or original_filename is not None
+            or identity_skip_source_tier not in {"fulltext", "abstract"}
+            or not isinstance(identity_skip_source_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", identity_skip_source_sha256)
+            or not isinstance(identity_skip_source_stage_event_id, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", identity_skip_source_stage_event_id)
+        ):
+            raise ValueError("guided Fetch identity skip event has an invalid source binding")
+    if action == "stage":
+        if not isinstance(payload, dict) or set(payload) - {
+            "found", "guided_fetch", "identity_attested", "source_tier",
+            "file_path", "url",
+        } or payload.get("found") is not True or payload.get("guided_fetch") is not True:
+            raise ValueError("guided Fetch staged payload has an invalid shape")
+        source_path = payload.get("file_path")
+        if not isinstance(source_path, str) or not source_path.strip():
+            raise ValueError("guided Fetch stage requires a controlled source file")
+        source = Path(source_path)
+        source_io = Path(io_path(source))
+        if source_io.is_symlink() or not source_io.is_file():
+            raise ValueError("guided Fetch source must be an existing regular file")
+        source_tier = payload.get("source_tier", "fulltext")
+        identity_attested = payload.get("identity_attested")
+        source_ref = payload.get("url")
+        if source_tier not in {"fulltext", "abstract"} or type(identity_attested) is not bool:
+            raise ValueError("guided Fetch staged source provenance is invalid")
+        if identity_attested is not True:
+            raise ValueError("guided Fetch source must carry its explicit identity attestation")
+        if source_ref is not None and (
+            not isinstance(source_ref, str) or not source_ref.strip()
+        ):
+            raise ValueError("guided Fetch staged source_ref is invalid")
+        if not isinstance(original_path, str) or not original_path.strip():
+            raise ValueError("guided Fetch original path provenance is missing")
+        if (
+            not isinstance(original_filename, str)
+            or not original_filename.strip()
+            or Path(original_filename).name != original_filename
+        ):
+            raise ValueError("guided Fetch original filename provenance is invalid")
+        if not isinstance(source_ref, (str, type(None))):
+            raise ValueError("guided Fetch source_ref is invalid")
+        source_sha256 = _file_sha256(source)
+        if source_sha256 is None:
+            raise ValueError("guided Fetch source file could not be read")
+        source_byte_count = source_io.stat().st_size
+        if source == Path(original_path):
+            original_path = str(logical_path(source, strict=True))
+        else:
+            original_path = str(original_path)
+
+    with _GUIDED_FETCH_STAGE_LOCK:
+        run_root = logical_path(run_dir)
+        ref_key = hashlib.sha256(ref_id.encode("utf-8")).hexdigest()
+        artifact_dir = run_root / "sources" / "guided_fetch_stages" / ref_key
+        artifact_dir_io = Path(io_path(artifact_dir))
+        stage_root_io = Path(io_path(run_root / "sources" / "guided_fetch_stages"))
+        sources_io = Path(io_path(run_root / "sources"))
+        if sources_io.is_symlink() or stage_root_io.is_symlink() or artifact_dir_io.is_symlink():
+            raise ValueError("guided Fetch stage directory cannot be a symlink")
+        if artifact_dir_io.exists() and not artifact_dir_io.is_dir():
+            raise ValueError("guided Fetch stage directory is not a directory")
+        max_sequence = 0
+        if artifact_dir_io.exists():
+            for item in artifact_dir_io.iterdir():
+                match = _GUIDED_FETCH_STAGE_FILENAME.fullmatch(item.name)
+                if match is not None:
+                    max_sequence = max(max_sequence, int(match.group("sequence")))
+        sequence = max_sequence + 1
+        if sequence > 99_999_999:
+            raise ValueError("guided Fetch stage event limit was reached")
+        event_id = uuid.uuid4().hex
+        stem = f"{sequence:08d}-{event_id}"
+        extension = source.suffix.lower() if source is not None else ""
+        if extension and not re.fullmatch(r"\.[a-z0-9]{1,16}", extension):
+            extension = ""
+        controlled_path = (
+            artifact_dir / f"{stem}-source{extension}"
+            if action == "stage" else None
+        )
+        metadata_path = artifact_dir / f"{stem}.json"
+        temporary_source = artifact_dir / f".{stem}-source.tmp"
+        temporary_metadata = artifact_dir / f".{stem}.json.tmp"
+        created_paths: list[Path] = []
+        gate = None
+        lease_id = None
+        commit_attempted = False
+        try:
+            try:
+                resolution = _answer_gate(SimpleNamespace(
+                    run=run_dir,
+                    agent_identity=agent_identity,
+                    debug_override_artifact_integrity=debug_override_artifact_integrity,
+                    debug_override_reason=debug_override_reason,
+                ))
+            except SystemExit as exc:
+                raise ValueError(str(exc)) from exc
+            gate = getattr(resolution, "gate", resolution)
+            if gate is not None:
+                lease_id = gate.begin_transition(run_dir, checkpoint_kind="external_input")
+
+            sources_io.mkdir(parents=True, exist_ok=True)
+            stage_root_io.mkdir(parents=True, exist_ok=True)
+            artifact_dir_io.mkdir(parents=True, exist_ok=True)
+            if sources_io.is_symlink() or stage_root_io.is_symlink() or artifact_dir_io.is_symlink():
+                raise ValueError("guided Fetch stage directory cannot be a symlink")
+
+            if action == "stage":
+                assert source is not None and source_io is not None
+                assert controlled_path is not None and source_sha256 is not None
+                _copy_guided_fetch_stage_file(
+                    source_io, temporary_source, controlled_path,
+                    expected_sha256=source_sha256,
+                    expected_byte_count=source_byte_count,
+                )
+                created_paths.append(controlled_path)
+
+            common_record = {
+                "schema": _GUIDED_FETCH_STAGE_SCHEMA,
+                "action": action,
+                "sequence": sequence,
+                "event_id": event_id,
+                "task_id": task_id,
+                "task_kind": task_kind,
+                "task_generation": task_generation,
+                "ref_id": ref_id,
+            }
+            if action == "identity_skip":
+                record = {
+                    **common_record,
+                    "source_tier": identity_skip_source_tier,
+                    "source_sha256": identity_skip_source_sha256,
+                    "source_stage_event_id": identity_skip_source_stage_event_id,
+                    "actor_type": "user",
+                }
+            else:
+                record = {
+                    **common_record,
+                    "source_tier": source_tier,
+                    "identity_attested": identity_attested,
+                    "source_ref": source_ref,
+                    "original_filename": original_filename,
+                    "original_path": original_path,
+                    "controlled_path": (
+                        None if controlled_path is None
+                        else controlled_path.relative_to(run_root).as_posix()
+                    ),
+                    "sha256": source_sha256,
+                    "byte_count": source_byte_count,
+                    "supersedes_ocr_scan_ids": ocr_ids,
+                }
+            _validate_guided_fetch_stage_record(record, ref_key=ref_key)
+            with Path(io_path(temporary_metadata)).open(
+                "x", encoding="utf-8", newline="\n"
+            ) as handle:
+                json.dump(record, handle, ensure_ascii=False, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(Path(io_path(temporary_metadata)), Path(io_path(metadata_path)))
+            created_paths.append(metadata_path)
+            if gate is not None and lease_id is not None:
+                commit_attempted = True
+                gate.commit_transition(run_dir, lease_id)
+                lease_id = None
+            restored_payload = None
+            if action == "stage":
+                restored_payload = _guided_fetch_stage_payload(run_root, record)
+            return {"record": record, "payload": restored_payload}
+        except Exception:
+            if not commit_attempted:
+                for path in [
+                    *created_paths,
+                    temporary_source,
+                    temporary_metadata,
+                ]:
+                    try:
+                        Path(io_path(path)).unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        pass
+                if gate is not None and lease_id is not None:
+                    try:
+                        gate.abort_transition(
+                            run_dir, lease_id,
+                            reason="guided Fetch stage artifact write failed",
+                        )
+                    except Exception:
+                        pass
+            raise
+
+
+def load_guided_fetch_stage_artifacts(run_dir: str) -> dict[str, Any]:
+    """Load latest confirmed Guided Fetch events, distinguishing signed commits.
+
+    Protected runs consult the latest signed checkpoint file inventory. Files
+    left by an interrupted, uncommitted stage therefore cannot shadow the last
+    committed event. A damaged latest committed event is returned as an issue,
+    never replaced with an older stage.
+    """
+    root = logical_path(run_dir)
+    stage_root = root / "sources" / "guided_fetch_stages"
+    stage_root_io = Path(io_path(stage_root))
+    sources_io = Path(io_path(root / "sources"))
+    if sources_io.is_symlink() or stage_root_io.is_symlink():
+        raise ValueError("guided Fetch stage directory cannot be a symlink")
+    if not stage_root_io.exists():
+        return {"latest": {}, "issues": {}, "identity_skip_intents": []}
+    if not stage_root_io.is_dir():
+        raise ValueError("guided Fetch stage directory is not a directory")
+
+    repo = RunRepository.open_readonly(run_dir)
+    try:
+        assurance = repo.get_execution_assurance()
+        protected = assurance.protection == "agent_attested"
+        checkpoints = repo.list_artifact_checkpoints()
+    finally:
+        repo.close()
+    checkpoint_files: dict[str, tuple[str, int]] | None = None
+    if protected:
+        if not checkpoints:
+            raise ValueError("protected Guided Fetch run has no signed artifact checkpoint")
+        latest_files = checkpoints[-1].get("files")
+        if not isinstance(latest_files, list):
+            raise ValueError("Guided Fetch signed checkpoint file inventory is unavailable")
+        checkpoint_files = {}
+        for entry in latest_files:
+            if not isinstance(entry, dict):
+                raise ValueError("Guided Fetch signed checkpoint entry is malformed")
+            path = entry.get("logical_path")
+            digest = entry.get("sha256")
+            byte_count = entry.get("byte_count")
+            if (
+                isinstance(path, str) and isinstance(digest, str)
+                and type(byte_count) is int
+            ):
+                checkpoint_files[path] = (digest, byte_count)
+
+    event_paths: dict[str, list[tuple[int, Path, str]]] = {}
+    if checkpoint_files is not None:
+        prefix = f"{_GUIDED_FETCH_STAGE_ROOT}/"
+        for relative, expected in checkpoint_files.items():
+            if not relative.startswith(prefix) or not relative.endswith(".json"):
+                continue
+            parts = PurePosixPath(relative).parts
+            if len(parts) != 4:
+                continue
+            ref_key, filename = parts[2], parts[3]
+            match = _GUIDED_FETCH_STAGE_FILENAME.fullmatch(filename)
+            if not re.fullmatch(r"[0-9a-f]{64}", ref_key) or match is None:
+                continue
+            event_paths.setdefault(ref_key, []).append(
+                (int(match.group("sequence")), root.joinpath(*parts), relative)
+            )
+    else:
+        for ref_dir in stage_root_io.iterdir():
+            if ref_dir.is_symlink() or not ref_dir.is_dir():
+                continue
+            ref_key = ref_dir.name
+            if not re.fullmatch(r"[0-9a-f]{64}", ref_key):
+                continue
+            for metadata_io in ref_dir.iterdir():
+                if metadata_io.suffix.lower() != ".json":
+                    continue
+                match = _GUIDED_FETCH_STAGE_FILENAME.fullmatch(metadata_io.name)
+                if match is None:
+                    continue
+                relative = (stage_root / ref_key / metadata_io.name).as_posix()
+                event_paths.setdefault(ref_key, []).append(
+                    (int(match.group("sequence")), stage_root / ref_key / metadata_io.name, relative)
+                )
+
+    latest: dict[str, dict[str, Any]] = {}
+    issues: dict[str, str] = {}
+    identity_skip_intents: list[dict[str, Any]] = []
+    for ref_key, rows in event_paths.items():
+        max_sequence = max(row[0] for row in rows)
+        events: list[tuple[int, dict[str, Any]]] = []
+        invalid_events: list[tuple[int, str]] = []
+        damaged_latest = False
+        for sequence, metadata_path, relative in sorted(rows):
+            try:
+                metadata_io = Path(io_path(metadata_path))
+                if metadata_io.is_symlink() or not metadata_io.is_file():
+                    raise ValueError("committed stage event is missing")
+                if checkpoint_files is not None:
+                    expected = checkpoint_files.get(relative)
+                    if (
+                        expected is None
+                        or _file_sha256(metadata_path) != expected[0]
+                        or metadata_io.stat().st_size != expected[1]
+                    ):
+                        raise ValueError("stage event failed its signed checkpoint hash")
+                record = json.loads(metadata_io.read_text(encoding="utf-8"))
+                _validate_guided_fetch_stage_record(record, ref_key=ref_key)
+                if record["sequence"] != sequence:
+                    raise ValueError("stage event sequence does not match its immutable filename")
+                events.append((sequence, record))
+            except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+                invalid_events.append((sequence, type(exc).__name__))
+                if sequence == max_sequence:
+                    damaged_latest = True
+                    issues[ref_key] = (
+                        f"Confirmed Guided Fetch draft is damaged ({type(exc).__name__}). "
+                        "Discard it or confirm the source again."
+                    )
+        if damaged_latest:
+            continue
+
+        stage_events = [
+            (sequence, record) for sequence, record in events
+            if record["action"] in {"stage", "discard"}
+        ]
+        if not stage_events:
+            if invalid_events:
+                _, error_type = max(invalid_events, key=lambda row: row[0])
+                issues[ref_key] = (
+                    f"Confirmed Guided Fetch draft is damaged ({error_type}). "
+                    "Discard it or confirm the source again."
+                )
+            continue
+        stage_sequence, stage_record = max(stage_events, key=lambda row: row[0])
+        invalid_after_stage = [
+            (sequence, error_type)
+            for sequence, error_type in invalid_events
+            if sequence >= stage_sequence
+        ]
+        if invalid_after_stage:
+            _, error_type = max(invalid_after_stage, key=lambda row: row[0])
+            issues[ref_key] = (
+                f"Confirmed Guided Fetch draft is damaged ({error_type}). "
+                "Discard it or confirm the source again."
+            )
+            continue
+        try:
+            if stage_record["action"] == "stage":
+                if checkpoint_files is not None:
+                    _validate_committed_guided_fetch_stage_files(
+                        root, stage_record, checkpoint_files,
+                    )
+                else:
+                    _validate_guided_fetch_stage_files(root, stage_record)
+            latest[ref_key] = {
+                "record": stage_record,
+                "payload": (
+                    None if stage_record["action"] == "discard"
+                    else _guided_fetch_stage_payload(root, stage_record)
+                ),
+            }
+        except (OSError, ValueError, KeyError) as exc:
+            issues[ref_key] = (
+                f"Confirmed Guided Fetch draft is damaged ({type(exc).__name__}). "
+                "Discard it or confirm the source again."
+            )
+            continue
+
+        if stage_record["action"] != "stage":
+            continue
+        matching_decisions = [
+            (sequence, record) for sequence, record in events
+            if sequence > stage_sequence
+            and record["action"] == "identity_skip"
+            and record["source_stage_event_id"] == stage_record["event_id"]
+            and record["task_id"] == stage_record["task_id"]
+            and record["task_kind"] == stage_record["task_kind"]
+            and record["task_generation"] == stage_record["task_generation"]
+            and record["ref_id"] == stage_record["ref_id"]
+            and record["source_tier"] == stage_record["source_tier"]
+            and record["source_sha256"] == stage_record["sha256"]
+        ]
+        if matching_decisions:
+            _, decision = max(matching_decisions, key=lambda row: row[0])
+            identity_skip_intents.append({
+                **decision,
+                "source_controlled_path": stage_record["controlled_path"],
+            })
+    return {
+        "latest": latest,
+        "issues": issues,
+        "identity_skip_intents": identity_skip_intents,
+    }
+
+
+def guided_fetch_identity_skip_intents(
+    repository: RunRepository, run_dir: str,
+) -> set[tuple[str, str, str, str]]:
+    """Return exact staged-source choices backed by current operator Fetch answers."""
+    state = load_guided_fetch_stage_artifacts(run_dir)
+    tasks = {
+        task.task_id: task for task in repository.list_tasks(slot="fetch")
+        if task.task_kind in {"fetch", "browser_challenge"}
+    }
+    source_records_by_ref: dict[str, list[Any]] = {}
+    intents: set[tuple[str, str, str, str]] = set()
+    for decision in state.get("identity_skip_intents", []):
+        task = tasks.get(decision.get("task_id")) if isinstance(decision, dict) else None
+        if (
+            task is None
+            or task.status != "applied"
+            or task.generation != decision.get("task_generation")
+            or task.task_kind != decision.get("task_kind")
+        ):
+            continue
+        answer = repository.get_latest_task_answer(task.task_id)
+        if (
+            answer is None
+            or answer.accepted_for_processing is not True
+            or answer.generation != task.generation
+            or answer.actor_type != "user"
+        ):
+            continue
+        provenance = repository.get_task_answer_provenance(answer.answer_id)
+        if (
+            not isinstance(provenance, dict)
+            or provenance.get("producer_class") != "operator"
+        ):
+            continue
+        ref_id = decision["ref_id"]
+        answer_source = _guided_fetch_answer_source(
+            answer.raw_payload,
+            task_kind=task.task_kind,
+            ref_id=ref_id,
+        )
+        if (
+            answer_source is None
+            or answer_source[0] != decision["source_tier"]
+            or not _guided_fetch_answer_matches_stage_path(
+                run_dir,
+                answer_source[1],
+                decision.get("source_controlled_path"),
+                answer_id=answer.answer_id,
+                expected_sha256=decision["source_sha256"],
+            )
+        ):
+            continue
+        if ref_id not in source_records_by_ref:
+            source_records_by_ref[ref_id] = repository.list_source_texts(ref_id)
+        answer_provenance = f"controlled_task_answer:{answer.answer_id}"
+        matching_sources = [source for source in source_records_by_ref[ref_id] if (
+            source.ref_id == ref_id
+            and source.tier == decision["source_tier"]
+            and source.mapping == "operator_attested"
+            and source.supplied_by == "user"
+            and source.supplied_via == answer_provenance
+        )]
+        if len(matching_sources) != 1:
+            continue
+        source_sha256 = matching_sources[0].sha256
+        if not isinstance(source_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", source_sha256,
+        ):
+            continue
+        intents.add((answer.answer_id, ref_id, decision["source_tier"], source_sha256))
+    return intents
+
+
+def _guided_fetch_answer_source(
+    payload: Any, *, task_kind: str, ref_id: str,
+) -> tuple[str, str] | None:
+    if not isinstance(payload, dict):
+        return None
+    if task_kind == "fetch":
+        item = payload
+    elif task_kind == "browser_challenge":
+        items = payload.get("items")
+        if not isinstance(items, list):
+            return None
+        matching = [
+            candidate for candidate in items
+            if isinstance(candidate, dict) and candidate.get("ref_id") == ref_id
+        ]
+        if len(matching) != 1:
+            return None
+        item = matching[0]
+    else:
+        return None
+    tier = item.get("source_tier", "fulltext")
+    file_path = item.get("file_path")
+    if (
+        item.get("found") is not True
+        or item.get("guided_fetch") is not True
+        or item.get("identity_attested") is not True
+        or tier not in {"fulltext", "abstract"}
+        or not isinstance(file_path, str)
+        or not file_path.strip()
+    ):
+        return None
+    return tier, file_path
+
+
+def _guided_fetch_answer_matches_stage_path(
+    run_dir: str,
+    answer_path: str,
+    controlled_path: Any,
+    *,
+    answer_id: str,
+    expected_sha256: str,
+) -> bool:
+    if (
+        not isinstance(controlled_path, str) or not controlled_path
+        or not isinstance(answer_id, str)
+        or not re.fullmatch(r"answer-[0-9a-f]{20}", answer_id)
+        or not isinstance(expected_sha256, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+    ):
+        return False
+    parts = PurePosixPath(controlled_path).parts
+    if (
+        PurePosixPath(controlled_path).is_absolute()
+        or not parts
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
+        return False
+    root = logical_path(run_dir)
+    expected = root.joinpath(*parts)
+    answer = Path(answer_path)
+    expected_io = Path(io_path(expected))
+    answer_io = Path(io_path(answer))
+    root_io = Path(io_path(root))
+    root_abs = Path(os.path.abspath(root_io))
+    answer_abs = Path(os.path.abspath(answer_io))
+    try:
+        relative_answer = answer_abs.relative_to(root_abs)
+    except ValueError:
+        return False
+    inbox_parts = relative_answer.parts
+    admitted_copy_path = (
+        len(inbox_parts) == 4
+        and inbox_parts[0] == ".integrity-inbox"
+        and inbox_parts[1] == "task-answers"
+        and inbox_parts[2] == answer_id
+        and re.fullmatch(r"file-[0-9]{3}\.[a-z0-9]{1,16}", inbox_parts[3])
+    )
+    if not admitted_copy_path:
+        return False
+    if answer_io.is_symlink() or not answer_io.is_file():
+        return False
+    if _file_sha256(answer_io) != expected_sha256:
+        return False
+    return _file_sha256(expected_io) == expected_sha256
+
+
+def guided_fetch_identity_skip_answer_id(
+    source_record: Any,
+    ref_id: str,
+    tier: str,
+    intents: set[tuple[str, str, str, str]],
+) -> str | None:
+    """Match a source ledger row to its exact human-admitted skip decision."""
+    if (
+        source_record is None
+        or source_record.ref_id != ref_id
+        or source_record.tier != tier
+        or source_record.mapping != "operator_attested"
+        or source_record.supplied_by != "user"
+        or not isinstance(source_record.supplied_via, str)
+        or not source_record.supplied_via.startswith("controlled_task_answer:")
+    ):
+        return None
+    answer_id = source_record.supplied_via.removeprefix("controlled_task_answer:")
+    return (
+        answer_id
+        if (answer_id, ref_id, tier, source_record.sha256) in intents
+        else None
+    )
+
+
+def _copy_guided_fetch_stage_file(
+    source: Path,
+    temporary: Path,
+    target: Path,
+    *,
+    expected_sha256: str | None,
+    expected_byte_count: int | None,
+) -> None:
+    source_io = Path(io_path(source))
+    temporary_io = Path(io_path(temporary))
+    target_io = Path(io_path(target))
+    if source_io.is_symlink() or not source_io.is_file():
+        raise ValueError("guided Fetch source changed before its controlled copy")
+    with source_io.open("rb") as reader, temporary_io.open("xb") as writer:
+        shutil.copyfileobj(reader, writer, length=1024 * 1024)
+        writer.flush()
+        os.fsync(writer.fileno())
+    if (
+        _file_sha256(temporary) != expected_sha256
+        or temporary_io.stat().st_size != expected_byte_count
+    ):
+        raise ValueError("guided Fetch source changed while it was being copied")
+    os.replace(temporary_io, target_io)
+
+
+def _validate_guided_fetch_stage_record(record: Any, *, ref_key: str) -> None:
+    if isinstance(record, dict) and record.get("action") == "identity_skip":
+        _validate_guided_fetch_identity_skip_record(record, ref_key=ref_key)
+        return
+    if not isinstance(record, dict) or set(record) != _GUIDED_FETCH_STAGE_FIELDS:
+        raise ValueError("guided Fetch stage record has unsupported fields")
+    if (
+        record.get("schema") != _GUIDED_FETCH_STAGE_SCHEMA
+        or record.get("action") not in {"stage", "discard"}
+        or type(record.get("sequence")) is not int
+        or record["sequence"] < 1
+        or not isinstance(record.get("event_id"), str)
+        or not re.fullmatch(r"[0-9a-f]{32}", record["event_id"])
+        or not isinstance(record.get("task_id"), str)
+        or not record["task_id"].strip()
+        or record.get("task_kind") not in {"fetch", "browser_challenge"}
+        or type(record.get("task_generation")) is not int
+        or record["task_generation"] < 0
+        or not isinstance(record.get("ref_id"), str)
+        or hashlib.sha256(record["ref_id"].encode("utf-8")).hexdigest() != ref_key
+    ):
+        raise ValueError("guided Fetch stage identity is invalid")
+    ocr_ids = record.get("supersedes_ocr_scan_ids")
+    if (
+        not isinstance(ocr_ids, list)
+        or ocr_ids != sorted(set(ocr_ids))
+        or any(not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item) for item in ocr_ids)
+    ):
+        raise ValueError("guided Fetch OCR supersession list is invalid")
+    if record["action"] == "discard":
+        if any(record.get(key) is not None for key in (
+            "source_tier", "identity_attested", "source_ref", "original_filename",
+            "original_path", "controlled_path", "sha256", "byte_count",
+        )):
+            raise ValueError("guided Fetch discard event must not contain a source")
+        return
+    if (
+        record.get("source_tier") not in {"fulltext", "abstract"}
+        or record.get("identity_attested") is not True
+        or not isinstance(record.get("original_filename"), str)
+        or not record["original_filename"]
+        or Path(record["original_filename"]).name != record["original_filename"]
+        or not isinstance(record.get("original_path"), str)
+        or not record["original_path"].strip()
+        or not isinstance(record.get("source_ref"), (str, type(None)))
+        or not isinstance(record.get("controlled_path"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256") or ""))
+        or type(record.get("byte_count")) is not int
+        or record["byte_count"] < 0
+    ):
+        raise ValueError("guided Fetch source artifact metadata is invalid")
+
+
+def _validate_guided_fetch_identity_skip_record(
+    record: dict[str, Any], *, ref_key: str,
+) -> None:
+    if not isinstance(record, dict) or set(record) != _GUIDED_FETCH_IDENTITY_SKIP_FIELDS:
+        raise ValueError("guided Fetch identity skip event has unsupported fields")
+    if (
+        record.get("schema") != _GUIDED_FETCH_STAGE_SCHEMA
+        or record.get("action") != "identity_skip"
+        or type(record.get("sequence")) is not int
+        or record["sequence"] < 1
+        or not isinstance(record.get("event_id"), str)
+        or not re.fullmatch(r"[0-9a-f]{32}", record["event_id"])
+        or not isinstance(record.get("task_id"), str)
+        or not record["task_id"].strip()
+        or record.get("task_kind") not in {"fetch", "browser_challenge"}
+        or type(record.get("task_generation")) is not int
+        or record["task_generation"] < 0
+        or not isinstance(record.get("ref_id"), str)
+        or hashlib.sha256(record["ref_id"].encode("utf-8")).hexdigest() != ref_key
+        or record.get("source_tier") not in {"fulltext", "abstract"}
+        or not isinstance(record.get("source_stage_event_id"), str)
+        or not re.fullmatch(r"[0-9a-f]{32}", record["source_stage_event_id"])
+        or not isinstance(record.get("source_sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", record["source_sha256"])
+        or record.get("actor_type") != "user"
+    ):
+        raise ValueError("guided Fetch identity skip event binding is invalid")
+
+
+def _guided_fetch_stage_payload(root: Path, record: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "found": True,
+        "guided_fetch": True,
+        "identity_attested": record["identity_attested"],
+        "source_tier": record["source_tier"],
+        "file_path": str(root.joinpath(*PurePosixPath(record["controlled_path"]).parts)),
+    }
+    if record["source_ref"] is not None:
+        payload["url"] = record["source_ref"]
+    return payload
+
+
+def _validate_guided_fetch_stage_files(root: Path, record: dict[str, Any]) -> None:
+    _validate_guided_fetch_stage_file(
+        root, record["controlled_path"], ref_id=record["ref_id"],
+        sequence=record["sequence"], event_id=record["event_id"], suffix="source",
+        sha256=record["sha256"], byte_count=record["byte_count"],
+    )
+
+
+def _validate_committed_guided_fetch_stage_files(
+    root: Path, record: dict[str, Any], checkpoint_files: dict[str, tuple[str, int]],
+) -> None:
+    _validate_guided_fetch_stage_files(root, record)
+    expected = checkpoint_files.get(record["controlled_path"])
+    if expected != (record["sha256"], record["byte_count"]):
+        raise ValueError("guided Fetch controlled copy is absent from the signed checkpoint")
+
+
+def _validate_guided_fetch_stage_file(
+    root: Path,
+    relative: str,
+    *,
+    ref_id: str,
+    sequence: int,
+    event_id: str,
+    suffix: str,
+    sha256: str,
+    byte_count: int,
+) -> None:
+    if (
+        not isinstance(relative, str) or "\\" in relative
+        or PurePosixPath(relative).is_absolute()
+        or re.match(r"^[A-Za-z]:", relative)
+    ):
+        raise ValueError("guided Fetch controlled path is invalid")
+    parts = PurePosixPath(relative).parts
+    ref_key = hashlib.sha256(ref_id.encode("utf-8")).hexdigest()
+    if (
+        len(parts) != 4 or parts[:3] != ("sources", "guided_fetch_stages", ref_key)
+        or not parts[3].startswith(f"{sequence:08d}-{event_id}-{suffix}")
+    ):
+        raise ValueError("guided Fetch controlled path is outside its event directory")
+    path = root.joinpath(*parts)
+    path_io = Path(io_path(path))
+    if path_io.is_symlink() or not path_io.is_file():
+        raise ValueError("guided Fetch controlled source copy is missing")
+    resolved = logical_path(path, strict=True)
+    resolved.relative_to(root)
+    if _file_sha256(resolved) != sha256 or path_io.stat().st_size != byte_count:
+        raise ValueError("guided Fetch controlled source copy failed its hash")
 
 
 def _ensure_guided_ocr_fetch_task(run_dir: str, ref_id: str) -> None:

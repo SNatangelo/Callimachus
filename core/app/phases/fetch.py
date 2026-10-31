@@ -2310,7 +2310,14 @@ def _emit_fetch_identity_tasks(st: dict, parse: dict) -> int:
     if repository is None:
         raise SystemExit(f"no sqlite run database found in {run}")
     created = 0
+    automatic_skips: list[tuple[str, str, str]] = []
     try:
+        from core.app.commands.tasks import (
+            guided_fetch_identity_skip_answer_id,
+            guided_fetch_identity_skip_intents,
+        )
+
+        skip_intents = guided_fetch_identity_skip_intents(repository, run)
         for owner_ref_id in sorted(owner_ids):
             reference = refs.get(owner_ref_id)
             entry = _sources.best_for(manifest, owner_ref_id)
@@ -2366,6 +2373,10 @@ def _emit_fetch_identity_tasks(st: dict, parse: dict) -> int:
                     ),
                 )
                 continue
+            source_record = repository.get_source_text(source_text_id)
+            skip_answer_id = guided_fetch_identity_skip_answer_id(
+                source_record, owner_ref_id, "fulltext", skip_intents,
+            )
             identity_task = {
                 "reference": target["reference"],
                 "source_identity_evidence": {
@@ -2428,8 +2439,26 @@ def _emit_fetch_identity_tasks(st: dict, parse: dict) -> int:
                 ),
             )
             created += 1
+            if skip_answer_id is not None:
+                automatic_skips.append((
+                    task_id, target["target_sha256"], skip_answer_id,
+                ))
     finally:
         repository.close()
+    if automatic_skips:
+        from core.app.commands.tasks import admit_source_identity_review
+
+        for task_id, target_sha256, answer_id in automatic_skips:
+            admit_source_identity_review(
+                run,
+                task_id,
+                action="keep_unverified",
+                target_sha256=target_sha256,
+                reason=(
+                    "The human operator confirmed Guided Fetch Proceed / skip remaining "
+                    f"in Fetch answer {answer_id}; this exact source remains unverified."
+                ),
+            )
     return created
 
 
@@ -2445,6 +2474,159 @@ def _pending_fetch_identity_attestations(run: str) -> int:
         )
     finally:
         repository.close()
+
+
+def _institutional_configuration():
+    from core.fetch.institutional_access import config
+    try:
+        settings = config()
+    except ValueError:
+        _progress("institutional access configuration is invalid; ordinary fetch continues")
+        return None
+    return settings if settings["enabled"] else None
+
+
+def _retire_institutional_retrieval_tasks(run, present):
+    resolved = []
+    for handle, task in _pending_tasks(run, "fetch"):
+        if task.get("answer") is not None:
+            continue
+        if task.get("kind") == "fetch":
+            covered = {task.get("ref_id")}
+        elif task.get("kind") == "browser_challenge":
+            covered = {row.get("ref_id") for row in task.get("references") or []}
+        else:
+            continue
+        if covered and None not in covered and covered <= present:
+            # Acquisition has been admitted by the normal validator. Retire
+            # retrieval only, without inventing an operator attestation.
+            _update_task(run, "fetch", handle, task, status="applied")
+            resolved.append(handle)
+    return resolved
+
+
+def _recover_institutional_sources(st, need, refs, resolve_map, fetch_results=None):
+    """Try the prepared session once per explicit renewal, without a login wait.
+
+    This runs inside the normal Fetch integrity lease.  Neither the GUI nor a
+    login worker writes acquired content into a running pipeline's database.
+    Existing tasks and source-identity decisions retain their admission rules.
+    """
+    settings = _institutional_configuration()
+    if settings is None:
+        return
+    from core.fetch.fallbacks.fetch_modes import institutional_browser
+    run = st["run_dir"]
+    token = os.environ.get("CALLIMACHUS_INSTITUTIONAL_RETRY_TOKEN", "initial")
+    if token != "initial" and not re.fullmatch(r"[a-f0-9]{32}", token):
+        _progress("invalid institutional retry token; ordinary fetch continues")
+        return
+    repository = _repo_open(run)
+    if repository is None:
+        raise RuntimeError("institutional access audit repository is unavailable")
+    try:
+        previous = repository.list_run_settings().get("institutional_access") or {}
+        if previous.get("token") == token and previous.get("profile") == settings["profile"]:
+            # A prior process may have committed the source before retiring
+            # its task. Reconcile without repeating a browser/network attempt.
+            present = _fulltext_ref_ids(run)
+            _retire_institutional_retrieval_tasks(run, present)
+            if previous.get("status") == "checking":
+                missing = [item for item in need if (
+                    item.get("ref_id") if isinstance(item, dict) else item
+                ) not in present]
+                reconciled = dict(previous)
+                reconciled["status"] = "complete" if not missing else "unavailable"
+                repository.set_run_setting("institutional_access", reconciled)
+            return
+        present = _fulltext_ref_ids(run)
+        missing = [item for item in need if (
+            item.get("ref_id") if isinstance(item, dict) else item
+        ) not in present]
+        if not missing:
+            return
+        if fetch_results is None:
+            # Resume uses the recorded routes, including publisher URLs from a
+            # DOI-only citation; it does not synthesize new download addresses.
+            fetch_results = []
+            for item in missing:
+                ref_id = item.get("ref_id") if isinstance(item, dict) else item
+                attempts = repository.list_fetch_attempts(ref_id)
+                fetch_results.append({"ref_id": ref_id, "failures": [
+                    {key: row.get(key) for key in ("url", "final_url", "outcome", "reason")}
+                    for row in attempts
+                ]})
+        # Consume the attempt before navigation: a crash must not start an
+        # unbounded automatic retry loop with the same authenticated session.
+        observation = {
+            "profile": settings["profile"], "token": token,
+            "status": "checking", "states": [], "checked_at": _now(),
+        }
+        repository.set_run_setting("institutional_access", observation)
+    finally:
+        repository.close()
+    grouped, grouped_ids = institutional_browser.groups(
+        missing, refs, fetch_results or [], resolve_map=resolve_map,
+    )
+    try:
+        recovered = institutional_browser.recover(grouped, run) if grouped else {
+            "available": True, "items": [], "access_states": [],
+        }
+    except Exception as exc:
+        # Browser failure is an acquisition failure, not an identity or verdict
+        # decision.  Do not leak arbitrary browser URLs/tokens in the UI audit.
+        recovered = {"available": False, "items": [], "access_states": []}
+        _progress(f"institutional browser unavailable ({type(exc).__name__}); ordinary fetch continues")
+    responses_by_ref = {}
+    for item in recovered.get("items") or []:
+        ref_id = item.get("ref_id")
+        if ref_id in grouped_ids and ref_id in refs and item.get("found") is not False and item.get("body"):
+            responses_by_ref.setdefault(ref_id, []).append(item)
+    for ref_id, responses in responses_by_ref.items():
+        try:
+            result = _fetch.process_browser_responses(
+                refs[ref_id], run, resolve_map.get(ref_id) or {}, responses,
+            )
+        except Exception as exc:
+            _progress(f"institutional response for {ref_id} rejected ({type(exc).__name__}); continuing")
+            continue
+        _record_fetch_attempts(run, ref_id, result, resolve_map.get(ref_id) or {})
+    present = _fulltext_ref_ids(run)
+    states_by_ref = {}
+    priority = {name: index for index, name in enumerate((
+        "unsupported", "access_unavailable", "validation_required", "challenge", "login_required", "validated",
+    ))}
+    states = {"login_required", "challenge", "access_unavailable", "captured", "unsupported"}
+    for row in recovered.get("access_states") or []:
+        if not isinstance(row, dict) or row.get("ref_id") not in grouped_ids or row.get("state") not in states:
+            continue
+        domain = str(row.get("domain") or "")
+        if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", domain):
+            domain = ""
+        state = row["state"]
+        if row["ref_id"] in present:
+            state = "validated"
+        elif state == "captured":
+            state = "validation_required"
+        previous_state = states_by_ref.get(row["ref_id"])
+        if previous_state is None or priority[state] > priority[previous_state["state"]]:
+            states_by_ref[row["ref_id"]] = {"ref_id": row["ref_id"], "state": state, "domain": domain}
+    safe_states = list(states_by_ref.values())
+    _retire_institutional_retrieval_tasks(run, present)
+    observation.update(
+        status="complete" if recovered.get("available") else "unavailable",
+        states=safe_states,
+    )
+    repository = _repo_open(run)
+    if repository is None:
+        raise RuntimeError("institutional access audit repository is unavailable")
+    try:
+        repository.set_run_setting("institutional_access", observation)
+    finally:
+        repository.close()
+    waiting = sum(row["state"] == "login_required" for row in safe_states)
+    if waiting:
+        _progress(f"institutional login required for {waiting} source(s); fetch continues")
 
 
 def phase_fetch(st):
@@ -2513,6 +2695,7 @@ def phase_fetch(st):
             st, need, refs, resolve_fetch_context=resolve_fetch_context,
         )
         _resume_one_frozen_fetch_candidate(st, refs, resolve_map)
+        _recover_institutional_sources(st, need, refs, resolve_map)
         _print_automatic_fetch_summary(run, refs, _resolve_map(run))
         unanswered = _fetch_resume_pending_tasks(run)
         if unanswered:
@@ -2596,8 +2779,17 @@ def phase_fetch(st):
     resolve_map = _resolve_map(run)
     need = _fetchable_need_items(need, resolve_map)
     need = _blocking_fetch_need_items(need, st["accuracy"], refs=refs)
+    institutional = _institutional_configuration()
+    if institutional:
+        _recover_institutional_sources(st, need, refs, resolve_map, fetch_results)
+        fulltext_ids = _fulltext_ref_ids(run)
+        need = [item for item in need if (
+            item.get("ref_id") if isinstance(item, dict) else item
+        ) not in fulltext_ids]
     challenge_groups, challenge_ref_ids = ([], set())
-    selected_mode = _fetch_modes.selected_module(
+    # Institutional recovery never enters the older interactive modes, which
+    # deliberately wait for an operator at each blocked publisher page.
+    selected_mode = None if institutional else _fetch_modes.selected_module(
         {ENV_CHALLENGE_MODE: st.get("challenge_mode") or DEFAULT_CHALLENGE_MODE}
     )
     selected_mode_name = getattr(selected_mode, "MODE_NAME", None)
@@ -3184,13 +3376,74 @@ def _ingest_fetch_answers(st):
     """Called at the start of resume after a fetch pause: register provided texts."""
     run = st["run_dir"]
 
+    answered_tasks = list(_answered_tasks(run, "fetch"))
+    total = sum(
+        task.get("kind") != "source_identity_attestation"
+        for _handle, task in answered_tasks
+    )
+
+    def task_subject(handle, task, answer):
+        labels = []
+
+        def add_reference(reference):
+            if not isinstance(reference, dict):
+                return
+            number = reference.get("ref_number")
+            ref_id = reference.get("ref_id") or reference.get("id")
+            if isinstance(number, int) and not isinstance(number, bool):
+                label = f"[{number}]"
+            elif isinstance(ref_id, str) and ref_id:
+                label = ref_id
+            else:
+                return
+            if label not in labels:
+                labels.append(label)
+
+        if task.get("kind") == "browser_challenge":
+            references = task.get("references")
+            if isinstance(references, list):
+                for reference in references:
+                    add_reference(reference)
+        else:
+            add_reference(task)
+            if not labels:
+                add_reference(answer)
+
+        subject = ", ".join(labels[:3])
+        if len(labels) > 3:
+            subject += f", +{len(labels) - 3} more"
+        if not subject:
+            subject = f"task {handle}"
+
+        source_paths = []
+        if isinstance(answer.get("file_path"), str):
+            source_paths.append(answer["file_path"])
+        items = answer.get("items")
+        if isinstance(items, list):
+            source_paths.extend(
+                item["file_path"]
+                for item in items
+                if isinstance(item, dict) and isinstance(item.get("file_path"), str)
+            )
+        if isinstance(task.get("kept_as"), str):
+            source_paths.append(task["kept_as"])
+        if source_paths:
+            filename = Path(source_paths[0]).name.replace("\r", "").replace("\n", "")
+            if filename:
+                subject += f" ({filename})"
+        return f"for {subject}"
+
+    if total:
+        _progress(f"applying {total} answered Fetch task(s)")
+
     def run_newly_parked_ocr() -> None:
         parse = _load_parse_payload(run)
         refs = {ref["id"]: ref for ref in parse.get("references", [])}
         _auto_run_source_ocr(st, refs, accuracy=st.get("accuracy") or "standard")
 
     has_newly_parked_scan = False
-    for handle, t in _answered_tasks(run, "fetch"):
+    position = 0
+    for handle, t in answered_tasks:
         a = t.get("answer") or {}
         if t.get("kind") == "source_identity_attestation":
             # Identity reviews now share the Fetch checkpoint with retrieval
@@ -3198,17 +3451,25 @@ def _ingest_fetch_answers(st):
             # ``_apply_answered_source_identity_attestations`` in phase_fetch.
             # Do not reinterpret that metadata answer as fetched source text.
             continue
+        position += 1
+        subject = task_subject(handle, t, a)
+        progress_task = f"Fetch task {position}/{total} {subject}"
+        _progress(f"applying answered {progress_task}")
         if t.get("kind") == "ocr":
             try:
                 _controlled_answer_source_provenance(run, handle)
                 _run_source_ocr(st, t, a)
             except Exception as exc:
                 _reopen_task_with_error(run, "fetch", handle, t, stage="fetch_ocr_ingest", exc=exc)
+                _progress(
+                    f"{progress_task} failed ({type(exc).__name__}); task returned to pending"
+                )
                 raise
             t["status"] = "done"
             t.pop("last_error", None)
             _update_task(run, "fetch", handle, t, status="applied")
             _checkpoint_applied_fetch_answer(st, handle)
+            _progress(f"applied {progress_task}: OCR response recorded")
             continue
         if t.get("kind") == "browser_challenge":
             task_parked_scan = False
@@ -3263,6 +3524,9 @@ def _ingest_fetch_answers(st):
                     stage="browser_challenge_ingest",
                     exc=exc,
                 )
+                _progress(
+                    f"{progress_task} failed ({type(exc).__name__}); task returned to pending"
+                )
                 raise
             if rejection is not None:
                 has_newly_parked_scan = has_newly_parked_scan or task_parked_scan
@@ -3274,12 +3538,17 @@ def _ingest_fetch_answers(st):
                     stage="browser_challenge_ingest",
                     exc=rejection,
                 )
+                _progress(
+                    f"{progress_task} rejected; task returned to pending"
+                )
                 continue
             t["status"] = "done"
             t.pop("last_error", None)
             _update_task(run, "fetch", handle, t, status="applied")
             _checkpoint_applied_fetch_answer(st, handle)
             has_newly_parked_scan = has_newly_parked_scan or task_parked_scan
+            outcome = "; PDF queued for OCR" if task_parked_scan else ""
+            _progress(f"applied {progress_task}{outcome}")
             continue
         if a.get("found") is False:
             source_supplied_by, source_supplied_via = (
@@ -3290,6 +3559,7 @@ def _ingest_fetch_answers(st):
             t.pop("last_error", None)
             _update_task(run, "fetch", handle, t, status="applied")
             _checkpoint_applied_fetch_answer(st, handle)
+            _progress(f"applied {progress_task}: source recorded as not found")
             continue
         ref_id = t["ref_id"]
         try:
@@ -3330,15 +3600,23 @@ def _ingest_fetch_answers(st):
                     stage="fetch_answer_ingest",
                     exc=_guided_fetch_rejection_error(result, a),
                 )
+                _progress(
+                    f"{progress_task} rejected; task returned to pending"
+                )
                 continue
             task_parked_scan = result.get("status") == "ocr_pending"
         except Exception as exc:
             _reopen_task_with_error(run, "fetch", handle, t, stage="fetch_answer_ingest", exc=exc)
+            _progress(
+                f"{progress_task} failed ({type(exc).__name__}); task returned to pending"
+            )
             raise
         t["status"] = "done"
         t.pop("last_error", None)
         _update_task(run, "fetch", handle, t, status="applied")
         _checkpoint_applied_fetch_answer(st, handle)
         has_newly_parked_scan = has_newly_parked_scan or task_parked_scan
+        outcome = "; PDF queued for OCR" if task_parked_scan else ""
+        _progress(f"applied {progress_task}{outcome}")
     if has_newly_parked_scan:
         run_newly_parked_ocr()

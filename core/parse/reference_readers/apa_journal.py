@@ -1,3 +1,6 @@
+# core/parse/reference_readers/apa_journal.py
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
 """APA-style author-date journal references with a closed volume/page tail."""
 
 from __future__ import annotations

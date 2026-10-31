@@ -24,7 +24,7 @@ CREDENTIAL_SPECS = ({
 RESOLVE_NAME = "core_search"
 MANIFEST = {}
 ENV_CORE_API_KEY = "CORE_API_KEY"
-CORE_SEARCH_WORKS_URL = "https://api.core.ac.uk/v3/search/works"
+CORE_SEARCH_WORKS_URL = "https://api.core.ac.uk/v3/search/works/"
 PUBLIC_FULLTEXT_PLACEHOLDER = "Not available for public API users."
 
 
@@ -320,7 +320,7 @@ def discover(ref: dict) -> dict | None:
 
     clean_title = re.sub(r'[{}"\']', "", title[:200])
     params = {"q": clean_title, "limit": "5"}
-    url = "https://api.core.ac.uk/v3/search/works?" + urllib.parse.urlencode(params)
+    url = CORE_SEARCH_WORKS_URL + "?" + urllib.parse.urlencode(params)
     headers = {"Authorization": f"Bearer {resolve_mod._CORE_API_KEY}"}
     try:
         _status, body = resolve_mod._get(url, headers_extra=headers)
