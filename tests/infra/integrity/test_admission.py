@@ -322,7 +322,21 @@ def test_admitted_source_does_not_depend_on_post_copy_metadata(tmp_path, monkeyp
             raise AssertionError("post-copy metadata must not decide content stability")
         return real_fstat(descriptor)
 
-    monkeypatch.setattr(admission.os, "fstat", initial_metadata_only)
+    class AdmissionOsProxy:
+        """Scope the fstat probe to admission, not other process threads."""
+
+        fstat = staticmethod(initial_metadata_only)
+
+        def __getattr__(self, name):
+            return getattr(os, name)
+
+    monkeypatch.setattr(admission, "os", AdmissionOsProxy())
+    unrelated_descriptor = os.open(source, os.O_RDONLY)
+    try:
+        os.fstat(unrelated_descriptor)
+    finally:
+        os.close(unrelated_descriptor)
+    assert calls == 0
 
     copied = admission._copy_one_file(
         str(source),
