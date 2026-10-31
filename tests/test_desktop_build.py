@@ -94,7 +94,7 @@ def test_linux_release_runner_installs_qt_platform_libraries():
         assert package in workflow
 
 
-def test_release_runner_requires_binary_dependency_wheels():
+def test_release_runner_requires_binary_dependency_wheels(tmp_path):
     workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(
         encoding="utf-8"
     )
@@ -158,19 +158,80 @@ def test_release_runner_requires_binary_dependency_wheels():
     assert "if: github.event_name == 'workflow_dispatch'" in workflow
     assert "python packaging/assemble_sources.py build/source-audit" in workflow
 
-    # Keep the separate build tool pinned per runner architecture while the
-    # shipped interpreter and packaged outputs retain the macOS 14.4 gate.
-    assert (
-        'python-version: "${{ runner.arch == \'ARM64\' && \'3.10.11\' || \'3.10.22\' }}"'
-        in workflow
-    )
-    assert 'arm64) readonly BUILD_PYTHON_VERSION="3.10.11" ;;' in bindings
-    assert 'x86_64) readonly BUILD_PYTHON_VERSION="3.10.22" ;;' in bindings
+    # Keep the stable-ABI build tool at a version whose sysconfig target lets
+    # PySide honor the requested 14.4 deployment target on both architectures.
+    assert 'python-version: "3.10.11"' in workflow
+    assert 'arm64|x86_64) readonly BUILD_PYTHON_VERSION="3.10.11" ;;' in bindings
     assert '[[ "$build_info" == "${BUILD_PYTHON_VERSION}|$TARGET_ARCH" ]]' in bindings
+    deployment_target_gate = bindings.index("build_deployment_target=")
+    target_version_check = bindings.index('target_key = audit["_macos_version_key"](target)')
+    assert 'sysconfig.get_config_var("MACOSX_DEPLOYMENT_TARGET")' in bindings
+    assert "target_key > maximum_key" in bindings
+    assert "build Python targets macOS" in bindings
+    assert deployment_target_gate < target_version_check < bindings.index("download_pinned() {")
     assert 'check_architecture "$BUILD_PYTHON"' in bindings
     assert 'check_macho "$RUNTIME_PYTHON" no' in bindings
     assert 'readonly MIN_MACOS="14.4"' in bindings
     assert '[[ "$runtime_info" == "3.13.15|$TARGET_ARCH" ]]' in bindings
+    assert 'document.load(str(pdf_path)) != QtPdf.QPdfDocument.Error.None_' in bindings
+    assert "int(document.load" not in bindings
+    assert "document.close()" in bindings
+
+    # Execute the release script's actual Qt 6.12 PDF probe before its macOS
+    # dyld-only audit, using a closed-on-disk fixture in this Windows-safe child.
+    pdf_probe_marker = (
+        'QT_QPA_PLATFORM=offscreen "$RUNTIME_PYTHON" - "$RUNTIME_SITE_PACKAGES" '
+        "<<'PY'\n"
+    )
+    pdf_probe_start = bindings.index(pdf_probe_marker) + len(pdf_probe_marker)
+    pdf_probe_end = bindings.index("\ndyld = ctypes.CDLL", pdf_probe_start)
+    pdf_probe_source = bindings[pdf_probe_start:pdf_probe_end]
+    pdf_probe_source = pdf_probe_source.replace(
+        "from PySide6 import QtCore, QtDBus, QtGui, QtNetwork, QtPdf, QtPdfWidgets, QtSvg, QtTest, QtWidgets",
+        "from PySide6 import QtCore, QtPdf, QtPdfWidgets, QtWidgets",
+    )
+    # Keep the fixture outside the child process. Windows may keep a PDF file
+    # mapped until process exit, while the production macOS runner permits the
+    # inline probe's TemporaryDirectory to clean up before that exit.
+    fixture_context = "with tempfile.TemporaryDirectory() as temporary:\n"
+    fixture_start = pdf_probe_source.index(fixture_context) + len(fixture_context)
+    probe_tail = pdf_probe_source[fixture_start:]
+    fixture_lines = (
+        '    pdf_path = Path(temporary) / "single-page.pdf"\n'
+        "    pdf_path.write_bytes(one_page_pdf())\n"
+    )
+    assert probe_tail.startswith(fixture_lines)
+    probe_body = probe_tail[len(fixture_lines):]
+    body_lines = probe_body.splitlines()
+    assert all(not line.strip() or line.startswith("    ") for line in body_lines)
+    pdf_probe_source = (
+        pdf_probe_source[:fixture_start - len(fixture_context)]
+        + "pdf_path = Path(sys.argv[2])\n"
+        + "pdf_path.write_bytes(one_page_pdf())\n"
+        + "\n".join(line[4:] if line else "" for line in body_lines)
+        + "\n"
+    )
+    pyside_site = Path(__import__("PySide6").__file__).resolve().parent.parent
+    safe_environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name.casefold() in {
+            "path", "systemroot", "windir", "comspec", "pathext",
+            "ld_library_path", "home", "userprofile", "temp", "tmp", "tmpdir",
+        }
+    }
+    safe_environment.update({"QT_QPA_PLATFORM": "offscreen", "PYTHONDONTWRITEBYTECODE": "1"})
+    pdf_fixture = tmp_path / "single-page.pdf"
+    pdf_probe = subprocess.run(
+        [sys.executable, "-c", pdf_probe_source, str(pyside_site), str(pdf_fixture)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+        env=safe_environment,
+    )
+    assert pdf_probe.returncode == 0, pdf_probe.stdout + "\n" + pdf_probe.stderr
+    assert "QPdfView loaded one page." in pdf_probe.stdout
 
     # The app runtime comes from the verified universal2 package before pip
     # runs; setup-python's build-only tool is never restored as the runtime.

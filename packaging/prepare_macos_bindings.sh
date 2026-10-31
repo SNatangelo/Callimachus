@@ -71,14 +71,30 @@ python_info() {
 build_info="$(python_info "$BUILD_PYTHON")"
 runtime_info="$(python_info "$RUNTIME_PYTHON")"
 case "$TARGET_ARCH" in
-    arm64) readonly BUILD_PYTHON_VERSION="3.10.11" ;;
-    x86_64) readonly BUILD_PYTHON_VERSION="3.10.22" ;;
+    arm64|x86_64) readonly BUILD_PYTHON_VERSION="3.10.11" ;;
     *) die "unsupported native macOS architecture: $TARGET_ARCH" ;;
 esac
 [[ "$build_info" == "${BUILD_PYTHON_VERSION}|$TARGET_ARCH" ]] || die "expected native Python ${BUILD_PYTHON_VERSION} for $TARGET_ARCH, found $build_info"
 [[ "$runtime_info" == "3.13.15|$TARGET_ARCH" ]] || die "expected native Python 3.13.15, found $runtime_info"
 build_include="$($BUILD_PYTHON -c 'import sysconfig; print(sysconfig.get_paths()["include"])')"
 [[ -f "$build_include/Python.h" ]] || die "native build Python headers are missing: $build_include/Python.h"
+build_deployment_target="$($BUILD_PYTHON -c 'import sysconfig; print(sysconfig.get_config_var("MACOSX_DEPLOYMENT_TARGET") or "")')" || die "could not inspect build Python deployment target"
+[[ -n "$build_deployment_target" ]] || die "build Python does not declare MACOSX_DEPLOYMENT_TARGET"
+"$BUILD_PYTHON" - "$ROOT" "$build_deployment_target" "$MIN_MACOS" <<'PY'
+from pathlib import Path
+import runpy
+import sys
+
+root, target, maximum = sys.argv[1:]
+audit = runpy.run_path(str(Path(root) / "packaging" / "smoke_desktop.py"))
+target_key = audit["_macos_version_key"](target)
+maximum_key = audit["_macos_version_key"](maximum)
+if target_key is None or maximum_key is None or target_key > maximum_key:
+    raise SystemExit(
+        f"build Python targets macOS {target!r}; PySide cannot target {maximum}"
+    )
+print(f"Build Python deployment target {target} permits macOS {maximum}.", flush=True)
+PY
 
 check_macho() {
     local file="$1" require_only="${2:-yes}" arches
@@ -124,7 +140,9 @@ check_architecture() {
 }
 
 # The build-only interpreter is never packaged; require its native architecture
-# but do not apply the shipped runtime's macOS 14.4 minimum to this tool.
+# and a sysconfig deployment target no newer than the requested 14.4 build.
+# This is required because PySide refuses a deployment target below its build
+# interpreter's own MACOSX_DEPLOYMENT_TARGET.
 check_architecture "$BUILD_PYTHON"
 # The application interpreter is shipped, so keep the strict 14.4 Mach-O gate.
 check_macho "$RUNTIME_PYTHON" no
@@ -457,33 +475,37 @@ def one_page_pdf():
     return bytes(data)
 
 app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-with tempfile.NamedTemporaryFile(suffix=".pdf") as pdf:
-    pdf.write(one_page_pdf())
-    pdf.flush()
+with tempfile.TemporaryDirectory() as temporary:
+    pdf_path = Path(temporary) / "single-page.pdf"
+    pdf_path.write_bytes(one_page_pdf())
     document = QtPdf.QPdfDocument()
-    if int(document.load(pdf.name)) != 0:
-        raise SystemExit("QPdfDocument could not load the synthetic PDF")
-    if document.status() == QtPdf.QPdfDocument.Status.Loading:
-        loop = QtCore.QEventLoop()
-        timer = QtCore.QTimer()
-        timer.setSingleShot(True)
-        timer.timeout.connect(loop.quit)
-        document.statusChanged.connect(
-            lambda status: loop.quit()
-            if status != QtPdf.QPdfDocument.Status.Loading else None
-        )
-        timer.start(15000)
-        loop.exec()
-    if document.status() != QtPdf.QPdfDocument.Status.Ready:
-        raise SystemExit(f"QPdfDocument did not finish loading: {document.status()}")
-    if int(document.pageCount()) != 1:
-        raise SystemExit(f"QPdfDocument did not report one page: {document.pageCount()}")
-    view = QtPdfWidgets.QPdfView()
-    view.setDocument(document)
-    if view.document() is not document:
-        raise SystemExit("QPdfView did not retain the loaded QPdfDocument")
-    view.show()
-    app.processEvents()
+    try:
+        if document.load(str(pdf_path)) != QtPdf.QPdfDocument.Error.None_:
+            raise SystemExit("QPdfDocument could not load the synthetic PDF")
+        if document.status() == QtPdf.QPdfDocument.Status.Loading:
+            loop = QtCore.QEventLoop()
+            timer = QtCore.QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(loop.quit)
+            document.statusChanged.connect(
+                lambda status: loop.quit()
+                if status != QtPdf.QPdfDocument.Status.Loading else None
+            )
+            timer.start(15000)
+            loop.exec()
+        if document.status() != QtPdf.QPdfDocument.Status.Ready:
+            raise SystemExit(f"QPdfDocument did not finish loading: {document.status()}")
+        if int(document.pageCount()) != 1:
+            raise SystemExit(f"QPdfDocument did not report one page: {document.pageCount()}")
+        view = QtPdfWidgets.QPdfView()
+        view.setDocument(document)
+        if view.document() is not document:
+            raise SystemExit("QPdfView did not retain the loaded QPdfDocument")
+        view.show()
+        app.processEvents()
+        print("QPdfView loaded one page.", flush=True)
+    finally:
+        document.close()
 
 dyld = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
 dyld._dyld_image_count.restype = ctypes.c_uint32
