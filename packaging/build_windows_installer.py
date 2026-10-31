@@ -180,7 +180,9 @@ def build() -> Path:
         sidecar = OUTPUT.with_name(OUTPUT.name + ".sha256")
         temporary_sidecar = sidecar.with_name(f".{sidecar.name}.{uuid.uuid4().hex}.tmp")
         try:
-            temporary_sidecar.write_text(f"{digest}  {OUTPUT.name}\n", encoding="ascii")
+            temporary_sidecar.write_bytes(
+                f"{digest}  {OUTPUT.name}\n".encode("utf-8")
+            )
             temporary_sidecar.replace(sidecar)
         finally:
             temporary_sidecar.unlink(missing_ok=True)

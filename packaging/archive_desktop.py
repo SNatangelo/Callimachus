@@ -56,8 +56,8 @@ def archive(platform: str) -> Path:
                 target.add(entry, arcname=entry.name, recursive=True)
     with result.open("rb") as file:
         digest = hashlib.file_digest(file, "sha256").hexdigest()
-    result.with_name(result.name + ".sha256").write_text(
-        f"{digest}  {result.name}\n", encoding="ascii",
+    result.with_name(result.name + ".sha256").write_bytes(
+        f"{digest}  {result.name}\n".encode("utf-8")
     )
     return result
 

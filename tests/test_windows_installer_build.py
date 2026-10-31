@@ -60,9 +60,11 @@ def test_builder_compiles_dist_to_installer_and_sha256(monkeypatch, tmp_path):
     assert result == artifacts / "Callimachus-Setup.exe"
     assert result.read_bytes() == b"NSIS setup"
     digest = hashlib.sha256(result.read_bytes()).hexdigest()
-    assert result.with_name(result.name + ".sha256").read_text(encoding="ascii") == (
-        f"{digest}  {result.name}\n"
-    )
+    checksum = result.with_name(result.name + ".sha256").read_bytes()
+    assert checksum == f"{digest}  {result.name}\n".encode("utf-8")
+    assert len(digest) == 64
+    assert all(byte in b"0123456789abcdef" for byte in digest.encode("ascii"))
+    assert checksum.count(b"\n") == 1 and b"\r" not in checksum
     argv, kwargs = calls[0]
     assert argv[0] == "makensis.exe"
     assert f"/DDIST_DIR={dist}" in argv

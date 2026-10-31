@@ -1092,9 +1092,24 @@ def test_archive_keeps_entire_distribution_and_checksum(monkeypatch, tmp_path):
         names = content.getnames()
     assert "Callimachus/Callimachus" in names
     assert "THIRD-PARTY-NOTICES/README.txt" in names
-    assert archive.with_name(archive.name + ".sha256").read_text(encoding="ascii") == (
-        f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n"
-    )
+    checksum = archive.with_name(archive.name + ".sha256").read_bytes()
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert checksum == f"{digest}  {archive.name}\n".encode("utf-8")
+    assert len(digest) == 64
+    assert all(byte in b"0123456789abcdef" for byte in digest.encode("ascii"))
+    assert checksum.count(b"\n") == 1 and b"\r" not in checksum
+
+    windows_executable = executable.with_name("Callimachus.exe")
+    windows_executable.write_bytes(b"windows executable")
+    windows_archive = archiver.archive("windows-x64")
+    windows_checksum_path = windows_archive.with_name(windows_archive.name + ".sha256")
+    windows_checksum = windows_checksum_path.read_bytes()
+    windows_digest = hashlib.sha256(windows_archive.read_bytes()).hexdigest()
+    windows_expected_checksum = f"{windows_digest}  {windows_archive.name}\n".encode("utf-8")
+    assert windows_checksum == windows_expected_checksum
+    assert len(windows_digest) == 64
+    assert all(byte in b"0123456789abcdef" for byte in windows_digest.encode("ascii"))
+    assert windows_checksum.count(b"\n") == 1 and b"\r" not in windows_checksum
 
 
 def test_archive_rejects_missing_executable(monkeypatch, tmp_path):
