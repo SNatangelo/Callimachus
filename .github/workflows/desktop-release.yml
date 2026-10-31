@@ -88,8 +88,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         id: runtime-python
+        if: runner.os != 'macOS'
         with:
           python-version: "3.13.15"
+      - name: Install verified macOS application Python 3.13.15
+        if: runner.os == 'macOS'
+        id: macos-runtime
+        shell: bash
+        run: bash packaging/prepare_macos_runtime.sh
       - name: Install Linux Qt platform libraries
         if: runner.os == 'Linux'
         run: |
@@ -105,23 +111,76 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt -r requirements-rag.txt -c packaging/release-constraints.txt
           python -m pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt
+      - name: Verify pinned macOS CA bundle for standard-library HTTPS
+        if: runner.os == 'macOS'
+        env:
+          RUNTIME_PYTHON: ${{ steps.macos-runtime.outputs.python-path }}
+          BASE_CERTIFI_VERSION: ${{ steps.macos-runtime.outputs.certifi-version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNTIME_PYTHON" - "$GITHUB_WORKSPACE" "$GITHUB_ENV" <<'PY'
+          from importlib.metadata import version
+          from pathlib import Path
+          import os
+          import re
+          import ssl
+          import sys
+          import urllib.request
+
+          root, github_env = map(Path, sys.argv[1:])
+          constraints = (root / "packaging" / "release-constraints.txt").read_text(encoding="utf-8")
+          pins = re.findall(r"(?im)^\s*certifi==([^\s#]+)\s*(?:#.*)?$", constraints)
+          if (
+              len(pins) != 1
+              or version("certifi") != pins[0]
+              or os.environ.get("BASE_CERTIFI_VERSION") != pins[0]
+          ):
+              raise SystemExit("installed certifi does not match the base runtime and release constraint pin")
+          bundle = Path(__import__("certifi").where()).resolve(strict=True)
+          os.environ["SSL_CERT_FILE"] = str(bundle)
+          default_bundle = ssl.get_default_verify_paths().cafile
+          if default_bundle is None or Path(default_bundle).resolve(strict=True) != bundle:
+              raise SystemExit("stdlib TLS is not using the pinned certifi CA bundle")
+          with urllib.request.urlopen("https://www.python.org/", timeout=30) as response:
+              if response.status != 200 or not response.read(1):
+                  raise SystemExit("stdlib HTTPS probe returned an unexpected response")
+          with github_env.open("a", encoding="utf-8") as output:
+              output.write(f"SSL_CERT_FILE={bundle}\n")
+          print(f"Verified stdlib HTTPS with pinned certifi {pins[0]}.", flush=True)
+          PY
       - name: Set up macOS binding build Python
         if: runner.os == 'macOS'
         id: macos-build-python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: "3.10.22"
+          python-version: "${{ runner.arch == 'ARM64' && '3.10.11' || '3.10.22' }}"
       - name: Build macOS 14.4 PySide bindings from verified source
         if: runner.os == 'macOS'
         env:
           BUILD_PYTHON: ${{ steps.macos-build-python.outputs.python-path }}
-          RUNTIME_PYTHON: ${{ steps.runtime-python.outputs.python-path }}
+          RUNTIME_PYTHON: ${{ steps.macos-runtime.outputs.python-path }}
         run: bash packaging/prepare_macos_bindings.sh
       - name: Restore the application Python runtime
         if: runner.os == 'macOS'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.13.15"
+        env:
+          PYTHON_BIN: ${{ steps.macos-runtime.outputs.python-bin }}
+          PYTHON_LOCATION: ${{ steps.macos-runtime.outputs.python-location }}
+          PYTHON_ROOT: ${{ steps.macos-runtime.outputs.python-root }}
+          PKG_CONFIG_PATH: ${{ steps.macos-runtime.outputs.pkg-config-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$PYTHON_BIN/python"
+          printf '%s\n' "$PYTHON_BIN" >> "$GITHUB_PATH"
+          {
+            printf 'pythonLocation=%s\n' "$PYTHON_LOCATION"
+            printf 'Python_ROOT_DIR=%s\n' "$PYTHON_ROOT"
+            printf 'Python2_ROOT_DIR=\n'
+            printf 'Python3_ROOT_DIR=%s\n' "$PYTHON_ROOT"
+            printf 'PKG_CONFIG_PATH=%s\n' "$PKG_CONFIG_PATH"
+          } >> "$GITHUB_ENV"
+          printf 'Restored verified macOS application Python 3.13.15.\n'
       - name: Test package contracts and desktop paths
         env:
           QT_QPA_PLATFORM: ${{ runner.os == 'Linux' && 'offscreen' || '' }}
@@ -238,6 +297,10 @@ jobs:
           test -s "$manifest"
           cp "$manifest" "build/desktop/artifacts/Callimachus-${PLATFORM}-binding-provenance.json"
           (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-binding-provenance.json" > "Callimachus-${PLATFORM}-binding-provenance.json.sha256")
+          runtime_manifest="build/desktop/macos-python-runtime-provenance-${arch}.json"
+          test -s "$runtime_manifest"
+          cp "$runtime_manifest" "build/desktop/artifacts/Callimachus-${PLATFORM}-runtime-python-provenance.json"
+          (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-runtime-python-provenance.json" > "Callimachus-${PLATFORM}-runtime-python-provenance.json.sha256")
       - name: Remove temporary macOS signing keychain
         if: always() && runner.os == 'macOS' && github.event_name != 'pull_request'
         run: |

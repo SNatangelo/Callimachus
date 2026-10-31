@@ -190,10 +190,22 @@ write a private identity or password to logs, source manifests or app resources.
 
 ### macOS 14.4 binding preparation
 
-For a fresh native CI build, use `packaging/prepare_macos_bindings.sh` after
-installing the application dependencies. Set `BUILD_PYTHON` to a native
-CPython 3.10.22 executable and `RUNTIME_PYTHON` to the application's CPython
-3.13.15 executable, then run:
+The release workflow prepares the macOS application runtime on its ephemeral
+GitHub-hosted runner with `packaging/prepare_macos_runtime.sh`. The helper is
+CI-only: it downloads the fixed-hash Python.org universal2 CPython 3.13.15
+installer, checks the package signature, installs it on that temporary runner,
+and audits the native interpreter and framework slices against the 14.4 minimum
+before creating a virtual environment under `RUNNER_TEMP`. Local Mac machines
+are never modified by this workflow helper. The runtime and framework remain
+subject to the 14.4 minimum checks in the binding builder and frozen-package
+smoke test. Each native package artifact includes the installer URL and hash,
+Python version, runner architecture, and inspected interpreter/framework minima.
+
+For a fresh native CI binding build, use
+`packaging/prepare_macos_bindings.sh` after installing the application
+dependencies. Set `BUILD_PYTHON` to the native CPython 3.10.11 executable on
+Apple Silicon or CPython 3.10.22 on Intel, and set `RUNTIME_PYTHON` to the
+verified application CPython 3.13.15 executable, then run:
 
 ```sh
 BUILD_PYTHON="/path/to/python3.10" RUNTIME_PYTHON="/path/to/python3.13" \
@@ -219,9 +231,15 @@ If rebuilding it, compile the affected bindings from the unmodified official
 ```
 
 The qualified Intel binding build uses an isolated CPython 3.10.22 environment
-for the stable ABI; the application itself still uses CPython 3.13.15. Stage a
-Qt 6.12.0 macOS SDK, static libclang with its headers/CMake configuration, CMake
-3.22 or later and Ninja. Verify the SDK frameworks also meet 14.4. Set
+for the stable ABI. The native arm64 CI runner uses CPython 3.10.11 because
+3.10.22 has no published arm64 runner archive; both build interpreters target
+the stable ABI, and the application itself still uses CPython 3.13.15. The
+helper rejects a build interpreter whose exact version or native architecture
+does not match its runner. This Python is a build tool and is not shipped, so
+only its architecture is checked; the application runtime, overlay, and Qt
+frameworks retain the strict 14.4 minimum. Stage a Qt 6.12.0 macOS SDK, static
+libclang with its headers/CMake configuration, CMake 3.22 or later and Ninja.
+Verify the SDK frameworks also meet 14.4. Set
 `LLVM_INSTALL_DIR`, `MACOS_SDK`, `QTPATHS_BIN`, and `CMAKE_BIN` to these staged
 tools, then build from the extracted source directory:
 

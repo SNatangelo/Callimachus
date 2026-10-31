@@ -98,11 +98,165 @@ def test_release_runner_requires_binary_dependency_wheels():
     workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(
         encoding="utf-8"
     )
+    bindings = (ROOT / "packaging" / "prepare_macos_bindings.sh").read_text(
+        encoding="utf-8"
+    )
+    runtime_setup = (ROOT / "packaging" / "prepare_macos_runtime.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "Install Certificates.command" in runtime_setup
+    assert 'PIP_CONSTRAINT="$ROOT/packaging/release-constraints.txt"' in runtime_setup
+    assert 'startswith("certifi==")' in runtime_setup
+    assert '"stdlib_ca_certifi_version": certifi_version' in runtime_setup
+    assert 'printf \'SSL_CERT_FILE=%s\\n\' "$BASE_CA_FILE"' in runtime_setup
+    assert "urllib.request.urlopen(\"https://www.python.org/\", timeout=30)" in runtime_setup
+    assert "_create_unverified_context" not in runtime_setup
+
+    for name, binary, failure in (
+        ("INTERPRETER_MINIMUMS", "$BASE_PYTHON", "interpreter"),
+        ("FRAMEWORK_MINIMUMS", "$FRAMEWORK_BINARY", "framework"),
+        ("VENV_MINIMUMS", "$RUNTIME_PYTHON", "virtual environment"),
+    ):
+        assignment = (
+            f'{name}="$(minimum_versions "{binary}")" '
+            f'|| die "could not validate {failure} macOS minimum"'
+        )
+        assert assignment in runtime_setup
+        assert f"readonly {name}" in runtime_setup
+        assert f"readonly {name}=\"$(minimum_versions" not in runtime_setup
+
+    failed_assignment = next(
+        line for line in runtime_setup.splitlines()
+        if line.startswith('INTERPRETER_MINIMUMS="$(minimum_versions ')
+    )
+    # The Windows system32 bash.exe is a WSL launcher, so the POSIX failure
+    # behavior is executed by Ubuntu CI while Windows still checks the exact
+    # fail-closed assignment and readonly follow-up above.
+    if os.name != "nt":
+        failure_probe = subprocess.run(
+            [
+                "bash", "-c", "\n".join((
+                    "set -u",
+                    "BASE_PYTHON=failing-fixture",
+                    "minimum_versions() { return 17; }",
+                    "die() { printf 'checked failure path\\n'; exit 42; }",
+                    failed_assignment,
+                    "printf 'unreachable\\n'",
+                )),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert failure_probe.returncode == 42
+        assert "checked failure path" in failure_probe.stdout
+        assert "unreachable" not in failure_probe.stdout
+
     assert "pip install --only-binary=:all: -r requirements.txt" in workflow
     assert "pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt" in workflow
     assert 'python-version: "3.13.15"' in workflow
     assert "if: github.event_name == 'workflow_dispatch'" in workflow
     assert "python packaging/assemble_sources.py build/source-audit" in workflow
+
+    # Keep the separate build tool pinned per runner architecture while the
+    # shipped interpreter and packaged outputs retain the macOS 14.4 gate.
+    assert (
+        'python-version: "${{ runner.arch == \'ARM64\' && \'3.10.11\' || \'3.10.22\' }}"'
+        in workflow
+    )
+    assert 'arm64) readonly BUILD_PYTHON_VERSION="3.10.11" ;;' in bindings
+    assert 'x86_64) readonly BUILD_PYTHON_VERSION="3.10.22" ;;' in bindings
+    assert '[[ "$build_info" == "${BUILD_PYTHON_VERSION}|$TARGET_ARCH" ]]' in bindings
+    assert 'check_architecture "$BUILD_PYTHON"' in bindings
+    assert 'check_macho "$RUNTIME_PYTHON" no' in bindings
+    assert 'readonly MIN_MACOS="14.4"' in bindings
+    assert '[[ "$runtime_info" == "3.13.15|$TARGET_ARCH" ]]' in bindings
+
+    # The app runtime comes from the verified universal2 package before pip
+    # runs; setup-python's build-only tool is never restored as the runtime.
+    macos_runtime = workflow.index(
+        "- name: Install verified macOS application Python 3.13.15"
+    )
+    dependency_install = workflow.index(
+        "- name: Install runtime and build dependencies on the runner"
+    )
+    pinned_ca = workflow.index(
+        "- name: Verify pinned macOS CA bundle for standard-library HTTPS"
+    )
+    binding_setup = workflow.index("- name: Set up macOS binding build Python")
+    binding_build = workflow.index(
+        "- name: Build macOS 14.4 PySide bindings from verified source"
+    )
+    runtime_restore = workflow.index("- name: Restore the application Python runtime")
+    package_tests = workflow.index("- name: Test package contracts and desktop paths")
+    assert (
+        macos_runtime
+        < dependency_install
+        < pinned_ca
+        < binding_setup
+        < binding_build
+        < runtime_restore
+        < package_tests
+    )
+    assert "if: runner.os != 'macOS'" in workflow
+    assert "RUNTIME_PYTHON: ${{ steps.macos-runtime.outputs.python-path }}" in workflow
+    ca_step = workflow[pinned_ca:binding_setup]
+    assert "if: runner.os == 'macOS'" in ca_step
+    assert "BASE_CERTIFI_VERSION: ${{ steps.macos-runtime.outputs.certifi-version }}" in ca_step
+    assert 'certifi==([^\\s#]+)' in ca_step
+    assert 'os.environ.get("BASE_CERTIFI_VERSION")' in ca_step
+    assert '"SSL_CERT_FILE"' in ca_step
+    assert 'github_env.open("a"' in ca_step
+    assert "urllib.request.urlopen(\"https://www.python.org/\", timeout=30)" in ca_step
+    assert "_create_unverified_context" not in ca_step
+    restore_block = workflow[runtime_restore:package_tests]
+    assert "uses: actions/setup-python@" not in restore_block
+    for variable in (
+        "pythonLocation=", "Python_ROOT_DIR=", "Python2_ROOT_DIR=",
+        "Python3_ROOT_DIR=", "PKG_CONFIG_PATH=",
+    ):
+        assert variable in restore_block
+
+    assert "GITHUB_ACTIONS" in runtime_setup and "RUNNER_OS" in runtime_setup
+    assert "RUNNER_TEMP" in runtime_setup and "uname -s" in runtime_setup
+    assert 'readonly PYTHON_VERSION="3.13.15"' in runtime_setup
+    assert 'readonly MIN_MACOS="14.4"' in runtime_setup
+    assert (
+        "https://www.python.org/ftp/python/3.13.15/python-3.13.15-macos11.pkg"
+        in runtime_setup
+    )
+    installer_digest_match = re.search(
+        r'^readonly INSTALLER_SHA256="([0-9a-f]+)"$',
+        runtime_setup,
+        re.MULTILINE,
+    )
+    assert installer_digest_match is not None
+    installer_digest = installer_digest_match.group(1)
+    assert len(installer_digest) == 64
+    assert re.fullmatch(r"[0-9a-f]{64}", installer_digest)
+    assert installer_digest == (
+        "3b7eaf7f29825f796e8267024435540ddf1f17fc9a97ad58095daa7a75bfdcd3"
+    )
+    checksum_validation = runtime_setup.index(
+        "/usr/bin/shasum -a 256 --check -"
+    )
+    package_install = runtime_setup.index("sudo /usr/sbin/installer")
+    assert checksum_validation < package_install
+    assert "pkgutil --check-signature" in runtime_setup
+    assert "Python Software Foundation" in runtime_setup
+    assert "BMM5U3QVKW" in runtime_setup
+    assert "_macos_minimum_versions" in runtime_setup
+    assert "_macos_version_key" in runtime_setup
+    assert "otool" in runtime_setup and "14.4" in runtime_setup
+    assert "macos-python-runtime-provenance-" in runtime_setup
+    assert '>> "$GITHUB_PATH"' in runtime_setup
+    assert 'python-path=%s\\n' in runtime_setup
+    assert "sudo /usr/sbin/installer" in runtime_setup
+    provenance = workflow.split("- name: Add macOS binding build provenance", 1)[1].split(
+        "- name:", 1
+    )[0]
+    assert "macos-python-runtime-provenance-${arch}.json" in provenance
+    assert "runtime-python-provenance.json" in provenance
 
 
 def test_release_runner_builds_and_smokes_windows_installer():

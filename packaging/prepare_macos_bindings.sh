@@ -29,8 +29,8 @@ case "$TARGET_ARCH" in
     *) die "unsupported native macOS architecture: $TARGET_ARCH" ;;
 esac
 
-: "${BUILD_PYTHON:?Set BUILD_PYTHON to setup-python's Python 3.10.22 executable}"
-: "${RUNTIME_PYTHON:?Set RUNTIME_PYTHON to setup-python's Python 3.13.15 executable}"
+: "${BUILD_PYTHON:?Set BUILD_PYTHON to the native Python 3.10 build executable}"
+: "${RUNTIME_PYTHON:?Set RUNTIME_PYTHON to the application Python 3.13.15 executable}"
 [[ -x "$BUILD_PYTHON" ]] || die "BUILD_PYTHON is not executable: $BUILD_PYTHON"
 [[ -x "$RUNTIME_PYTHON" ]] || die "RUNTIME_PYTHON is not executable: $RUNTIME_PYTHON"
 
@@ -70,7 +70,12 @@ python_info() {
 
 build_info="$(python_info "$BUILD_PYTHON")"
 runtime_info="$(python_info "$RUNTIME_PYTHON")"
-[[ "$build_info" == "3.10.22|$TARGET_ARCH" ]] || die "expected native Python 3.10.22, found $build_info"
+case "$TARGET_ARCH" in
+    arm64) readonly BUILD_PYTHON_VERSION="3.10.11" ;;
+    x86_64) readonly BUILD_PYTHON_VERSION="3.10.22" ;;
+    *) die "unsupported native macOS architecture: $TARGET_ARCH" ;;
+esac
+[[ "$build_info" == "${BUILD_PYTHON_VERSION}|$TARGET_ARCH" ]] || die "expected native Python ${BUILD_PYTHON_VERSION} for $TARGET_ARCH, found $build_info"
 [[ "$runtime_info" == "3.13.15|$TARGET_ARCH" ]] || die "expected native Python 3.13.15, found $runtime_info"
 build_include="$($BUILD_PYTHON -c 'import sysconfig; print(sysconfig.get_paths()["include"])')"
 [[ -f "$build_include/Python.h" ]] || die "native build Python headers are missing: $build_include/Python.h"
@@ -118,8 +123,10 @@ check_architecture() {
     esac
 }
 
-# Check the target interpreter and helper compilers before using them.
-check_macho "$BUILD_PYTHON" no
+# The build-only interpreter is never packaged; require its native architecture
+# but do not apply the shipped runtime's macOS 14.4 minimum to this tool.
+check_architecture "$BUILD_PYTHON"
+# The application interpreter is shipped, so keep the strict 14.4 Mach-O gate.
 check_macho "$RUNTIME_PYTHON" no
 
 download_pinned() {
