@@ -1706,6 +1706,91 @@ def test_static_openssl_license_is_added_with_valid_cryptography_wheel_record(tm
         assert record in archive.namelist()
 
 
+def test_macos_openssl_build_and_install_are_separate_serial_make_calls(tmp_path, monkeypatch):
+    helper = _load("macos_openssl_serial_build", "prepare_macos_cryptography.py")
+    source = tmp_path / "openssl-3.5.9"
+    env = {"PATH": "/usr/bin:/bin"}
+    failure_log_dir = tmp_path / "macos-cryptography-failure-logs"
+    calls = []
+
+    def succeed(args, **kwargs):
+        calls.append((list(args), kwargs))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(helper.subprocess, "run", succeed)
+    helper.build_and_install_openssl(
+        source, env=env, failure_log_dir=failure_log_dir,
+    )
+
+    assert [command for command, _kwargs in calls] == [
+        ["/usr/bin/make", "-j1"],
+        ["/usr/bin/make", "-j1", "install_sw"],
+    ]
+    for _command, kwargs in calls:
+        assert kwargs["cwd"] == source
+        assert kwargs["env"] is env
+        assert kwargs["check"] is True
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+
+
+def test_macos_openssl_build_failure_prevents_install_and_preserves_logs(tmp_path, monkeypatch):
+    helper = _load("macos_openssl_build_failure", "prepare_macos_cryptography.py")
+    source = tmp_path / "openssl-3.5.9"
+    env = {"PATH": "/usr/bin:/bin"}
+    failure_log_dir = tmp_path / "macos-cryptography-failure-logs"
+    stdout = "OpenSSL build failed before install\n"
+    stderr = "build-stage compiler failure\n"
+    calls = []
+
+    def fail_build(args, **_kwargs):
+        calls.append(list(args))
+        raise subprocess.CalledProcessError(2, args, output=stdout, stderr=stderr)
+
+    monkeypatch.setattr(helper.subprocess, "run", fail_build)
+    with pytest.raises(RuntimeError, match="command failed") as error:
+        helper.build_and_install_openssl(
+            source, env=env, failure_log_dir=failure_log_dir,
+        )
+
+    assert calls == [["/usr/bin/make", "-j1"]]
+    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+    assert error.value.__cause__.returncode == 2
+    assert (failure_log_dir / "openssl-make.stdout.log").read_text(encoding="utf-8") == stdout
+    assert (failure_log_dir / "openssl-make.stderr.log").read_text(encoding="utf-8") == stderr
+
+
+def test_macos_openssl_install_failure_propagates_after_successful_build(tmp_path, monkeypatch):
+    helper = _load("macos_openssl_install_failure", "prepare_macos_cryptography.py")
+    source = tmp_path / "openssl-3.5.9"
+    env = {"PATH": "/usr/bin:/bin"}
+    failure_log_dir = tmp_path / "macos-cryptography-failure-logs"
+    stdout = "OpenSSL install output\n"
+    stderr = "OpenSSL install failed\n"
+    calls = []
+
+    def succeed_build_then_fail_install(args, **_kwargs):
+        calls.append(list(args))
+        if args == ["/usr/bin/make", "-j1"]:
+            return subprocess.CompletedProcess(args, 0, stdout="build complete\n", stderr="")
+        raise subprocess.CalledProcessError(3, args, output=stdout, stderr=stderr)
+
+    monkeypatch.setattr(helper.subprocess, "run", succeed_build_then_fail_install)
+    with pytest.raises(RuntimeError, match="command failed") as error:
+        helper.build_and_install_openssl(
+            source, env=env, failure_log_dir=failure_log_dir,
+        )
+
+    assert calls == [
+        ["/usr/bin/make", "-j1"],
+        ["/usr/bin/make", "-j1", "install_sw"],
+    ]
+    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+    assert error.value.__cause__.returncode == 3
+    assert (failure_log_dir / "openssl-make.stdout.log").read_text(encoding="utf-8") == stdout
+    assert (failure_log_dir / "openssl-make.stderr.log").read_text(encoding="utf-8") == stderr
+
+
 def test_macos_cryptography_failure_logs_preserve_both_streams(tmp_path, monkeypatch):
     helper = _load("macos_cryptography_failure_diagnostics", "prepare_macos_cryptography.py")
     stdout = (
@@ -1719,7 +1804,7 @@ def test_macos_cryptography_failure_logs_preserve_both_streams(tmp_path, monkeyp
         "ranlib: file: libcrypto.a(member.o) has no symbols\n" * 4_000
         + "OpenSSL stderr tail sentinel\n"
     )
-    command = ["/usr/bin/make", "-j2", "install_sw"]
+    command = ["/usr/bin/make", "-j1", "install_sw"]
 
     def fail_make(args, **_kwargs):
         raise subprocess.CalledProcessError(2, args, output=stdout, stderr=stderr)

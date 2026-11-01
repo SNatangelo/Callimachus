@@ -131,6 +131,19 @@ def run(
     return result.stdout.strip()
 
 
+def build_and_install_openssl(
+    openssl_source: Path,
+    *,
+    env: dict[str, str],
+    failure_log_dir: Path,
+) -> None:
+    """Build and install OpenSSL in separate serial make invocations."""
+    run(["/usr/bin/make", "-j1"], env=env, cwd=openssl_source,
+        failure_log_dir=failure_log_dir)
+    run(["/usr/bin/make", "-j1", "install_sw"], env=env, cwd=openssl_source,
+        failure_log_dir=failure_log_dir)
+
+
 def download(url: str, destination: Path, expected: str) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
@@ -478,8 +491,11 @@ def main() -> int:
             "PERL": "/usr/bin/perl",
         })
         run(["./Configure", "darwin64-x86_64-cc", "no-shared", "no-tests", f"--prefix={openssl_prefix}", f"--openssldir={openssl_prefix / 'ssl'}"], env=build_env, cwd=openssl_source)
-        run(["/usr/bin/make", "-j2", "install_sw"], env=build_env, cwd=openssl_source,
-            failure_log_dir=root / "build" / "desktop" / "macos-cryptography-failure-logs")
+        build_and_install_openssl(
+            openssl_source,
+            env=build_env,
+            failure_log_dir=root / "build" / "desktop" / "macos-cryptography-failure-logs",
+        )
         openssl_version = run([str(openssl_prefix / "bin" / "openssl"), "version"], env=build_env)
         if not openssl_version.startswith("OpenSSL 3.5.9 "):
             raise RuntimeError(f"built static OpenSSL is not the pinned 3.5.9 release: {openssl_version}")
