@@ -818,12 +818,40 @@ def build_environment(build_python: Path, nasm_dir: Path, work: Path, build_dir:
     return env
 
 
+def _print_build_failure_tail(script: Path, log: Path):
+    max_bytes = 16 * 1024
+    max_lines = 100
+    try:
+        with log.open("rb") as source:
+            source.seek(0, os.SEEK_END)
+            size = source.tell()
+            start = max(0, size - max_bytes)
+            source.seek(start)
+            tail = source.read(max_bytes)
+    except OSError:
+        return
+
+    text = tail.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    if len(lines) > max_lines:
+        text = "\n".join(lines[-max_lines:])
+    print(f"{script.name} failed; output tail from {log.name}:", file=sys.stderr)
+    if start:
+        print("[earlier log bytes omitted]", file=sys.stderr)
+    if text:
+        print(text, file=sys.stderr)
+
+
 def run_build_script(script: Path, env, log: Path):
     command = 'call "' + str(script) + '"'
-    with log.open("xb") as output:
-        subprocess.run(["cmd.exe", "/d", "/s", "/c", command], cwd=script.parent,
-                       env=env, stdout=output, stderr=subprocess.STDOUT,
-                       check=True, timeout=2400)
+    try:
+        with log.open("xb") as output:
+            subprocess.run(["cmd.exe", "/d", "/s", "/c", command], cwd=script.parent,
+                           env=env, stdout=output, stderr=subprocess.STDOUT,
+                           check=True, timeout=2400)
+    except subprocess.CalledProcessError:
+        _print_build_failure_tail(script, log)
+        raise
 
 
 def build_wheel(source: Path, raw_dir: Path, cache_dir: Path, build_dir: Path,

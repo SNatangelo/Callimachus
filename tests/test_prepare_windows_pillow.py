@@ -84,6 +84,61 @@ def test_verify_host_tools_rejects_other_perl_versions(monkeypatch, perl_banner)
     assert calls == ["ninja", "perl"]
 
 
+def test_run_build_script_reports_bounded_failure_tail_and_reraises(tmp_path, monkeypatch, capsys):
+    helper = _load()
+    script = tmp_path / "build_dep_all.cmd"
+    log = tmp_path / "dependency-build.log"
+    script.write_text("@echo off\n", encoding="utf-8")
+    log_bytes = b"EARLY-OMITTED-MARKER\n" + (b"x" * (20 * 1024)) + b"\nCOMPILER-TAIL-MARKER\n"
+    failure = subprocess.CalledProcessError(1, ["cmd.exe", str(script)])
+
+    def fail_after_logging(_args, *, stdout, **_kwargs):
+        stdout.write(log_bytes)
+        raise failure
+
+    monkeypatch.setattr(helper.subprocess, "run", fail_after_logging)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        helper.run_build_script(script, {}, log)
+
+    captured = capsys.readouterr()
+    assert caught.value is failure
+    assert caught.value.returncode == 1
+    assert "build_dep_all.cmd failed" in captured.err
+    assert "dependency-build.log" in captured.err
+    assert "COMPILER-TAIL-MARKER" in captured.err
+    assert "EARLY-OMITTED-MARKER" not in captured.err
+    assert len(captured.err.encode("utf-8")) < 17 * 1024
+    assert log.read_bytes() == log_bytes
+
+
+def test_run_build_script_log_read_error_does_not_mask_subprocess_error(
+        tmp_path, monkeypatch, capsys):
+    helper = _load()
+    script = tmp_path / "build_dep_all.cmd"
+    log = tmp_path / "dependency-build.log"
+    script.write_text("@echo off\n", encoding="utf-8")
+    failure = subprocess.CalledProcessError(1, ["cmd.exe", str(script)])
+    original_open = Path.open
+
+    def fail_and_leave_empty(_args, **_kwargs):
+        raise failure
+
+    def fail_log_read(path, mode="r", *args, **kwargs):
+        if path == log and mode == "rb":
+            raise OSError("synthetic log read failure")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(helper.subprocess, "run", fail_and_leave_empty)
+    monkeypatch.setattr(Path, "open", fail_log_read)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        helper.run_build_script(script, {}, log)
+
+    assert caught.value is failure
+    assert caught.value.returncode == 1
+    assert capsys.readouterr().err == ""
+    with original_open(log, "rb") as source:
+        assert source.read() == b""
+
 def test_manifest_pins_google_brotli_and_all_source_inputs():
     helper = _load()
     inputs = helper.load_inputs()
