@@ -3748,6 +3748,8 @@ def create_desktop_window(
                         icon_ink = "#7ab4ff" if self._dark else "#175fe6"
                     elif widget.objectName() == "clearCacheButton":
                         icon_ink = "#ffffff"
+                    elif widget.objectName() in {"windowControl", "windowClose"}:
+                        icon_ink = "#e6edf6" if self._dark else "#455374"
                     elif widget.objectName() in {"clearBrowserCache", "libraryDeleteSelected"}:
                         icon_ink = "#ef8997" if self._dark else "#be3046"
                     elif widget.objectName() == "openRunReport" or (

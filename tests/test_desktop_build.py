@@ -350,6 +350,7 @@ def test_smoke_reports_qt_failure_before_aggregate_check(monkeypatch, tmp_path):
     monkeypatch.setenv("CITATION_VERIFIER_SIGNING_KEY", "synthetic-inherited-signing-key")
     monkeypatch.setenv("CITATION_VERIFIER_SIGNING_KEY_FILE", str(tmp_path / "unread-signing-key"))
     monkeypatch.setattr(smoke, "executable_path", lambda: executable)
+    monkeypatch.setattr(smoke, "verify_windows_gui_binary", lambda _path: None)
     monkeypatch.setattr(smoke, "check_linux_graphics_bundle", lambda: None)
     monkeypatch.setattr(smoke, "check_macos_minimum_version", lambda: None)
     monkeypatch.setattr(smoke, "create_image_only_pdf", lambda path: path.parent.mkdir(parents=True, exist_ok=True))
@@ -427,6 +428,7 @@ def test_smoke_rejects_package_self_test_without_required_marker(
     monkeypatch.setattr(smoke, "ROOT", tmp_path)
     (tmp_path / ".env.example").write_text("SMOKE_PROBE_API_KEY=\n", encoding="utf-8")
     monkeypatch.setattr(smoke, "executable_path", lambda: executable)
+    monkeypatch.setattr(smoke, "verify_windows_gui_binary", lambda _path: None)
     monkeypatch.setattr(smoke, "check_linux_graphics_bundle", lambda: None)
     monkeypatch.setattr(smoke, "check_macos_minimum_version", lambda: None)
     monkeypatch.setattr(
@@ -740,7 +742,7 @@ def test_manual_source_audit_uploads_verified_archives_without_publishing():
 
     release = workflow.split("\n  release:\n", 1)[1]
     assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
-    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.1.md' in release
+    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.2.md' in release
 
 
 def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):
@@ -787,6 +789,8 @@ def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):
 
     monkeypatch.setattr(build.sys, "platform", "win32")
     windows_args = build.build_arguments()
+    assert "--windowed" in windows_args
+    assert "--hide-console" not in windows_args
     assert windows_args[windows_args.index("keyring.backends.Windows") - 1] == "--hidden-import"
     assert windows_args[windows_args.index("--icon") + 1] == str(
         ROOT / "packaging" / "assets" / "Callimachus.ico"
@@ -1199,6 +1203,7 @@ def test_windows_installer_smoke_probes_installed_app(monkeypatch, tmp_path):
     monkeypatch.setattr(smoke, "BUILD_ROOT", tmp_path)
     monkeypatch.setattr(smoke, "INSTALL_ROOT", install_root)
     monkeypatch.setattr(smoke.sys, "platform", "win32")
+    monkeypatch.setattr(smoke, "verify_windows_gui_binary", lambda _path: None)
     calls = []
 
     def run(arguments, **kwargs):
@@ -1598,6 +1603,72 @@ def test_macos_pyside_installer_uses_the_overlay_for_its_second_install():
     assert "build_requirements_overlay_sha256" in script
 
 
+def test_macos_aqt_commands_run_from_work_root(tmp_path):
+    script = (ROOT / "packaging" / "prepare_macos_bindings.sh").read_text(encoding="utf-8")
+    aqt_blocks = re.findall(
+        r'(?ms)^\(\n    cd -- "\$WORK_ROOT"\n'
+        r'    "\$AQT_VENV/bin/aqt" .*?^\)',
+        script,
+    )
+    assert len(aqt_blocks) == 2
+    assert "list-qt" in aqt_blocks[0]
+    assert "install-qt" in aqt_blocks[1]
+
+    if os.name == "nt":
+        pytest.skip("Bash working-directory fixture runs on POSIX release runners")
+
+    repo = tmp_path / "checkout"
+    work_root = tmp_path / "runner-temp"
+    fake_bin = tmp_path / "aqt-venv" / "bin"
+    repo.mkdir()
+    work_root.mkdir()
+    fake_bin.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+
+    aqt = fake_bin / "aqt"
+    aqt.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\t%s\\n' "$PWD" "$*" >> "$AQT_TRACE"
+printf 'fixture log\\n' >> aqtinstall.log
+if [[ "$1" == list-qt ]]; then printf 'qtbase qtsvg\\n'; fi
+""",
+        encoding="utf-8",
+    )
+    aqt.chmod(0o755)
+    trace = tmp_path / "aqt-invocations.txt"
+    env = os.environ.copy()
+    env.update({
+        "AQT_VENV": str(aqt.parent.parent),
+        "AQT_TRACE": str(trace),
+        "WORK_ROOT": str(work_root),
+        "QT_ROOT": str(tmp_path / "qt-root"),
+        "TARGET_VERSION": "6.12.0",
+    })
+    subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", "\n".join(aqt_blocks)],
+        cwd=repo,
+        env=env,
+        check=True,
+    )
+
+    calls = trace.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 2
+    assert all(line.startswith(str(work_root) + "\t") for line in calls)
+    assert calls[0].split("\t", 1)[1].startswith("list-qt ")
+    assert calls[1].split("\t", 1)[1].startswith("install-qt ")
+    assert (work_root / "aqtinstall.log").is_file()
+    assert (work_root / "qt-archives.txt").read_text(encoding="utf-8") == "qtbase qtsvg\n"
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert status == ""
+    assert not (repo / "aqtinstall.log").exists()
+
+
 def test_static_openssl_license_is_added_with_valid_cryptography_wheel_record(tmp_path):
     import base64
     import csv
@@ -1633,6 +1704,56 @@ def test_static_openssl_license_is_added_with_valid_cryptography_wheel_record(tm
         license_name = f"{dist_info}/licenses/OpenSSL-LICENSE.txt"
         assert archive.read(license_name) == license_body
         assert record in archive.namelist()
+
+
+def test_macos_cryptography_failure_logs_preserve_both_streams(tmp_path, monkeypatch):
+    helper = _load("macos_cryptography_failure_diagnostics", "prepare_macos_cryptography.py")
+    stdout = (
+        "OpenSSL compile output begins\n"
+        + "stdout-noise\n" * 2_000
+        + "FATAL OPENSSL DIAGNOSTIC SENTINEL\n"
+        + "stdout-noise\n" * 2_000
+        + "OpenSSL stdout tail\n"
+    )
+    stderr = (
+        "ranlib: file: libcrypto.a(member.o) has no symbols\n" * 4_000
+        + "OpenSSL stderr tail sentinel\n"
+    )
+    command = ["/usr/bin/make", "-j2", "install_sw"]
+
+    def fail_make(args, **_kwargs):
+        raise subprocess.CalledProcessError(2, args, output=stdout, stderr=stderr)
+
+    monkeypatch.setattr(helper.subprocess, "run", fail_make)
+    log_dir = tmp_path / "macos-cryptography-failure-logs"
+
+    with pytest.raises(RuntimeError, match="command failed") as error:
+        helper.run(command, failure_log_dir=log_dir)
+
+    message = str(error.value)
+    assert "FATAL OPENSSL DIAGNOSTIC SENTINEL" in message
+    assert "OpenSSL stderr tail sentinel" in message
+    assert "stdout (bounded excerpt):" in message
+    assert "stderr (bounded excerpt):" in message
+    assert len(message) < 20_000
+    assert (log_dir / "openssl-make.stdout.log").read_text(encoding="utf-8") == stdout
+    assert (log_dir / "openssl-make.stderr.log").read_text(encoding="utf-8") == stderr
+    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+    assert error.value.__cause__.returncode == 2
+
+
+def test_macos_cryptography_failure_logs_are_uploaded_only_for_failed_macos_jobs():
+    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(encoding="utf-8")
+    start = workflow.index("- name: Upload macOS cryptography build failure logs")
+    end = workflow.index("\n      - uses: actions/upload-artifact@", start)
+    step = workflow[start:end]
+
+    assert "if: failure() && runner.os == 'macOS'" in step
+    assert "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in step
+    assert "name: macos-cryptography-build-failure-$" + "{{ matrix.platform }}" in step
+    assert "path: build/desktop/macos-cryptography-failure-logs/" in step
+    assert "if-no-files-found: ignore" in step
+    assert "env:" not in step
 
 
 def test_macos_cryptography_source_build_pins_and_architecture_gate_are_explicit():

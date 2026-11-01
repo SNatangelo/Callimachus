@@ -295,7 +295,7 @@ def build_arguments() -> list[str]:
         icon = ROOT / "packaging" / "assets" / "Callimachus.ico"
         if not icon.is_file():
             raise RuntimeError(f"Windows application icon is missing: {icon}")
-        arguments.extend(("--hide-console", "hide-early", "--icon", str(icon)))
+        arguments.extend(("--windowed", "--icon", str(icon)))
     arguments.append(str(ROOT / "run.py"))
     return arguments
 

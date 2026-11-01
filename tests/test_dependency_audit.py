@@ -673,8 +673,26 @@ def test_source_revision_rejects_tracked_and_untracked_changes(tmp_path, dirty_p
     else:
         (root / "untracked.txt").write_text("new source\n", encoding="utf-8")
 
-    with pytest.raises(audit.DependencyAuditError, match="clean source Git checkout"):
+    with pytest.raises(audit.DependencyAuditError, match="clean source Git checkout") as error:
         audit._revision(root)
+
+    expected_name = "tracked.txt" if dirty_path == "tracked" else "untracked.txt"
+    assert expected_name in str(error.value)
+
+
+def test_source_revision_reports_bounded_dirty_paths(tmp_path):
+    audit = _load_audit()
+    root = _clean_git_checkout(tmp_path / "source")
+    for index in range(80):
+        (root / f"untracked-{index:03}.txt").write_text("new source\n", encoding="utf-8")
+
+    with pytest.raises(audit.DependencyAuditError, match="clean source Git checkout") as error:
+        audit._revision(root)
+
+    message = str(error.value)
+    assert "untracked-000.txt" in message
+    assert "additional dirty path(s) omitted" in message
+    assert len(message) < 4_100
 
 
 def test_source_revision_rejects_nested_archive_inside_another_repository(tmp_path):

@@ -243,6 +243,7 @@ jobs:
         run: >-
           python -m pytest
           tests/test_desktop_build.py
+          tests/test_windows_gui_binary.py
           tests/test_desktop_licenses.py
           tests/test_desktop_matrix.py
           tests/test_windows_installer_build.py
@@ -370,6 +371,14 @@ jobs:
         run: |
           keychain="$RUNNER_TEMP/callimachus-signing.keychain-db"
           if test -f "$keychain"; then security delete-keychain "$keychain"; fi
+      - name: Upload macOS cryptography build failure logs
+        if: failure() && runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-cryptography-build-failure-${{ matrix.platform }}
+          path: build/desktop/macos-cryptography-failure-logs/
+          if-no-files-found: ignore
+          retention-days: 1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: callimachus-${{ matrix.platform }}
@@ -506,7 +515,7 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ github.sha }}
         run: |
           if [[ "$EVENT_NAME" == push || "$RELEASE_TAG_EXISTS" == true ]]; then
-            gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.1.md
+            gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.2.md
           else
-            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_COMMIT_SHA" --notes-file docs/releases/2.0.1.md
+            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_COMMIT_SHA" --notes-file docs/releases/2.0.2.md
           fi

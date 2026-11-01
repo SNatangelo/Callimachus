@@ -9,6 +9,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+import importlib.util
+
+_windows_gui_spec = importlib.util.spec_from_file_location(
+    "_callimachus_windows_gui", Path(__file__).with_name("windows_gui.py")
+)
+if _windows_gui_spec is None or _windows_gui_spec.loader is None:
+    raise RuntimeError("could not load the Windows GUI binary validator")
+_windows_gui = importlib.util.module_from_spec(_windows_gui_spec)
+_windows_gui_spec.loader.exec_module(_windows_gui)
+verify_windows_gui_binary = _windows_gui.verify_windows_gui_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_ROOT = ROOT / "build" / "desktop"
@@ -35,6 +46,10 @@ def main() -> None:
     executable = INSTALL_ROOT / "Callimachus" / "Callimachus.exe"
     if not executable.is_file():
         raise SystemExit(f"installed executable is missing: {executable}")
+    try:
+        verify_windows_gui_binary(executable)
+    except ValueError as exc:
+        raise SystemExit(f"installed executable is not a Windows GUI binary: {exc}") from exc
     if not (INSTALL_ROOT / "THIRD-PARTY-NOTICES" / "index.json").is_file():
         raise SystemExit("installed third-party notice inventory is missing")
     bundled_runtime = sorted(

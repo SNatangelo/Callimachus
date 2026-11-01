@@ -199,7 +199,10 @@ PY
 "$AQT_VENV/bin/python" "$ROOT/packaging/dependency_audit.py" --report "$WORK_ROOT/aqt-dependency-audit.json"
 "$AQT_VENV/bin/python" -m pip freeze --all > "$WORK_ROOT/toolchain-environment.txt"
 
-"$AQT_VENV/bin/aqt" list-qt mac desktop --archives "$TARGET_VERSION" clang_64 > "$WORK_ROOT/qt-archives.txt"
+(
+    cd -- "$WORK_ROOT"
+    "$AQT_VENV/bin/aqt" list-qt mac desktop --archives "$TARGET_VERSION" clang_64 > "$WORK_ROOT/qt-archives.txt"
+)
 "$AQT_VENV/bin/python" - "$WORK_ROOT/qt-archives.txt" <<'PY'
 from pathlib import Path
 import sys
@@ -209,8 +212,11 @@ required = {"qtbase", "qtsvg"}
 if not required <= available:
     raise SystemExit(f"Qt 6.12.0 mac SDK is missing archives: {sorted(required - available)}")
 PY
-"$AQT_VENV/bin/aqt" install-qt mac desktop "$TARGET_VERSION" clang_64 \
-    --outputdir "$QT_ROOT" --archives qtbase qtsvg
+(
+    cd -- "$WORK_ROOT"
+    "$AQT_VENV/bin/aqt" install-qt mac desktop "$TARGET_VERSION" clang_64 \
+        --outputdir "$QT_ROOT" --archives qtbase qtsvg
+)
 
 "$AQT_VENV/bin/python" - "$LIBCLANG_ARCHIVE" "$LLVM_ROOT" <<'PY'
 from pathlib import Path

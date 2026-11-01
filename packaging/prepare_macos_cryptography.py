@@ -63,12 +63,71 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def run(args: list[str], *, env: dict[str, str] | None = None, cwd: Path | None = None) -> str:
+_FAILURE_OUTPUT_RE = re.compile(
+    r"\b(?:error|fatal|failed|failure)\b|undefined reference|"
+    r"no rule to make target|make(?:\[\d+\])?: \*\*\*",
+    re.IGNORECASE,
+)
+
+
+def _bounded_output_excerpt(output: str, *, limit: int = 6_000) -> str:
+    if not output:
+        return "(empty)"
+    if len(output) <= limit:
+        return output.strip() or "(empty)"
+
+    head = output[:1_200]
+    tail = output[-2_400:]
+    omitted = max(0, len(output) - len(head) - len(tail))
+    excerpt = f"{head}\n...[{omitted} characters omitted]...\n{tail}"
+
+    useful_lines = []
+    for line in output.splitlines():
+        match = _FAILURE_OUTPUT_RE.search(line)
+        if not match:
+            continue
+        start = max(0, match.start() - 100)
+        useful_lines.append(line[start:start + 400])
+    useful = "\n".join(useful_lines[-8:])[-1_800:]
+    if useful and useful not in excerpt:
+        excerpt += f"\nActionable lines from full output:\n{useful}"
+    return excerpt
+
+
+def _write_failure_logs(directory: Path, stdout: str, stderr: str) -> str:
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "openssl-make.stdout.log").write_text(
+            stdout, encoding="utf-8", newline="\n",
+        )
+        (directory / "openssl-make.stderr.log").write_text(
+            stderr, encoding="utf-8", newline="\n",
+        )
+    except OSError as exc:
+        return f"\nCould not write full OpenSSL build logs under {directory}: {exc}"
+    return f"\nFull OpenSSL build logs: {directory}"
+
+
+def run(
+    args: list[str], *, env: dict[str, str] | None = None,
+    cwd: Path | None = None, failure_log_dir: Path | None = None,
+) -> str:
     try:
         result = subprocess.run(args, check=True, cwd=cwd, env=env, text=True, capture_output=True)
     except subprocess.CalledProcessError as exc:
-        detail = (exc.stdout or "") + (exc.stderr or "")
-        raise RuntimeError(f"command failed ({exc.returncode}): {args[0]}\n{detail[-6000:]}") from exc
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        log_reference = (
+            _write_failure_logs(failure_log_dir, stdout, stderr)
+            if failure_log_dir is not None else ""
+        )
+        detail = (
+            f"stdout (bounded excerpt):\n{_bounded_output_excerpt(stdout)}\n"
+            f"stderr (bounded excerpt):\n{_bounded_output_excerpt(stderr)}"
+        )
+        raise RuntimeError(
+            f"command failed ({exc.returncode}): {args[0]}{log_reference}\n{detail}"
+        ) from exc
     return result.stdout.strip()
 
 
@@ -419,7 +478,8 @@ def main() -> int:
             "PERL": "/usr/bin/perl",
         })
         run(["./Configure", "darwin64-x86_64-cc", "no-shared", "no-tests", f"--prefix={openssl_prefix}", f"--openssldir={openssl_prefix / 'ssl'}"], env=build_env, cwd=openssl_source)
-        run(["/usr/bin/make", "-j2", "install_sw"], env=build_env, cwd=openssl_source)
+        run(["/usr/bin/make", "-j2", "install_sw"], env=build_env, cwd=openssl_source,
+            failure_log_dir=root / "build" / "desktop" / "macos-cryptography-failure-logs")
         openssl_version = run([str(openssl_prefix / "bin" / "openssl"), "version"], env=build_env)
         if not openssl_version.startswith("OpenSSL 3.5.9 "):
             raise RuntimeError(f"built static OpenSSL is not the pinned 3.5.9 release: {openssl_version}")

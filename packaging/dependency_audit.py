@@ -535,8 +535,32 @@ def _revision(root: Path) -> str:
     top_level = Path(git_output("rev-parse", "--show-toplevel")).resolve()
     if top_level != root:
         raise DependencyAuditError("the source root must be the top-level Git checkout")
-    if git_output("status", "--porcelain", "--untracked-files=normal"):
-        raise DependencyAuditError("a clean source Git checkout is required")
+    status = git_output("status", "--porcelain", "--untracked-files=normal")
+    if status:
+        entries = status.splitlines()
+        rendered = []
+        used_chars = 0
+        max_entries = 40
+        max_line_chars = 512
+        max_detail_chars = 3_600
+        for entry in entries:
+            safe_entry = "".join(
+                char if char.isprintable() else f"\\u{ord(char):04x}"
+                for char in entry
+            )
+            if len(safe_entry) > max_line_chars:
+                safe_entry = safe_entry[:max_line_chars - 3] + "..."
+            if len(rendered) >= max_entries or used_chars + len(safe_entry) + 1 > max_detail_chars:
+                break
+            rendered.append(safe_entry)
+            used_chars += len(safe_entry) + 1
+        omitted = len(entries) - len(rendered)
+        if omitted:
+            rendered.append(f"... {omitted} additional dirty path(s) omitted")
+        raise DependencyAuditError(
+            "a clean source Git checkout is required; git status --porcelain reported:\n"
+            + "\n".join(rendered)
+        )
     revision = git_output("rev-parse", "--verify", "HEAD^{commit}")
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise DependencyAuditError("a complete source revision is required")
