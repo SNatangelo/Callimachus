@@ -67,7 +67,9 @@ def _bootstrap_ssl_context() -> ssl.SSLContext:
 
     if context.verify_mode != ssl.CERT_REQUIRED or not context.check_hostname:
         raise BootstrapPipError("pip bootstrap requires TLS certificate and hostname verification")
-    if context.cert_store_stats().get("x509_ca", 0) < 1:
+    # Default CApath stores can load anchors lazily during the TLS handshake.
+    # The explicit macOS CA file must instead contain eagerly loaded anchors.
+    if sys.platform == "darwin" and context.cert_store_stats().get("x509_ca", 0) < 1:
         raise BootstrapPipError("bootstrap TLS context has no trusted CA certificates")
     return context
 

@@ -9,6 +9,7 @@ import ssl
 from pathlib import Path
 import sys
 
+import certifi
 import pytest
 
 
@@ -82,7 +83,7 @@ def test_macos_bootstrap_uses_os_ca_file_with_verified_tls(monkeypatch, tmp_path
     bootstrap = load_bootstrap()
     payload = b"verified pip wheel fixture"
     response = FakeResponse(payload, bootstrap.PIP_WHEEL_URL)
-    verified_context = ssl.create_default_context()
+    verified_context = ssl.create_default_context(cafile=certifi.where())
     ca_files = []
 
     def create_context(*, cafile=None):
@@ -107,6 +108,46 @@ def test_macos_bootstrap_uses_os_ca_file_with_verified_tls(monkeypatch, tmp_path
     assert verified_context.verify_mode == ssl.CERT_REQUIRED
     assert verified_context.check_hostname is True
 
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_default_context_defers_lazy_ca_validation_to_handshake(
+    monkeypatch, tmp_path, platform
+):
+    bootstrap = load_bootstrap()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.load_verify_locations(capath=str(tmp_path))
+    assert context.cert_store_stats()["x509_ca"] == 0
+    monkeypatch.setattr(bootstrap.sys, "platform", platform)
+    monkeypatch.setattr(bootstrap.ssl, "create_default_context", lambda: context)
+
+    assert bootstrap._bootstrap_ssl_context() is context
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
+def test_bootstrap_tls_failure_never_invokes_install(monkeypatch):
+    bootstrap = load_bootstrap()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    install_calls = []
+    monkeypatch.setattr(bootstrap.sys, "platform", "linux")
+    monkeypatch.setattr(bootstrap.ssl, "create_default_context", lambda: context)
+
+    def verifier():
+        raise bootstrap.BootstrapPipError("pip needs bootstrap")
+
+    def opener(_url, *, timeout, context):
+        assert context.verify_mode == ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+        raise ssl.SSLCertVerificationError("untrusted CA")
+
+    with pytest.raises(ssl.SSLCertVerificationError, match="untrusted CA"):
+        bootstrap.bootstrap(
+            opener=opener,
+            verifier=verifier,
+            command_runner=lambda *args, **kwargs: install_calls.append(args),
+        )
+
+    assert install_calls == []
 
 @pytest.mark.parametrize("failure", ["missing", "invalid", "empty"])
 def test_macos_bootstrap_fails_closed_without_a_loadable_os_ca(
