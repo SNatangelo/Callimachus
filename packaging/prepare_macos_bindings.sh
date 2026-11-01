@@ -267,13 +267,17 @@ print(matches[0].parent)
 PY
 )"
 [[ -f "$SOURCE_DIR/requirements.txt" ]] || die "PySide source requirements are missing"
+readonly SOURCE_REQUIREMENTS_OVERLAY="$WORK_ROOT/pyside-requirements-overlay.txt"
+readonly SOURCE_REQUIREMENTS_MANIFEST="$WORK_ROOT/pyside-requirements-overlay.json"
+"$AQT_VENV/bin/python" "$ROOT/packaging/patch_macos_pyside_requirements.py" \
+    "$SOURCE_DIR/requirements.txt" "$SOURCE_REQUIREMENTS_OVERLAY" "$SOURCE_REQUIREMENTS_MANIFEST"
 
 "$BUILD_PYTHON" -m venv "$BUILD_VENV"
 "$BUILD_VENV/bin/python" "$ROOT/packaging/bootstrap_pip.py"
 "$BUILD_VENV/bin/python" -m pip install --only-binary=:all: \
     -c "$ROOT/packaging/release-constraints.txt" setuptools==84.1.0 wheel==0.46.3
 "$BUILD_VENV/bin/python" -m pip install \
-    -c "$ROOT/packaging/release-constraints.txt" -r "$SOURCE_DIR/requirements.txt"
+    -c "$ROOT/packaging/release-constraints.txt" -r "$SOURCE_REQUIREMENTS_OVERLAY"
 "$BUILD_VENV/bin/python" -m pip check
 "$BUILD_VENV/bin/python" "$ROOT/packaging/dependency_audit.py" --report "$WORK_ROOT/pyside-dependency-audit.json"
 "$BUILD_VENV/bin/python" -m pip freeze --all > "$WORK_ROOT/source-build-environment.txt"
@@ -556,6 +560,8 @@ manifest = {
     "platform": f"macos-{'arm64' if arch == 'arm64' else 'x64'}",
     "deployment_target": "14.4",
     "pyside_source_sha256": "099c1a597cf33c1b000e11cf68a0b82d216fb802bf81726efc720394f10c7751",
+    "upstream_build_requirements_sha256": json.loads((work / "pyside-requirements-overlay.json").read_text(encoding="utf-8"))["source_sha256"],
+    "build_requirements_overlay_sha256": json.loads((work / "pyside-requirements-overlay.json").read_text(encoding="utf-8"))["overlay_sha256"],
     "static_libclang_archive_sha256": "0bca8fe7e2f313e12a17ca3a6d44484c5dd5e2274038869398ed2eec36b8a9e4",
     "aqtinstall_wheel_sha256": "e88dbd87226f276fdd5d05347a44578d390d93a7f176e9476fbda0a7c9635f69",
     "qt_version": "6.12.0",

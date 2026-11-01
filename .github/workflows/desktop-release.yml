@@ -130,10 +130,36 @@ jobs:
           python packaging/prepare_pillow.py
           --wheel build/security-pillow/cache/pillow-13.0.0-1callimachus-cp313-cp313-win_amd64.whl
           --install
+      - name: Install pinned packaging for Intel cryptography wheel validation
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        env:
+          RUNTIME_PYTHON: ${{ steps.macos-runtime.outputs.python-path }}
+          PIP_CONFIG_FILE: /dev/null
+          PIP_INDEX_URL: https://pypi.org/simple
+          PIP_NO_INPUT: "1"
+          PYTHONNOUSERSITE: "1"
+        shell: bash
+        run: >-
+          "$RUNTIME_PYTHON" -m pip install --only-binary=:all:
+          -c packaging/macos-cryptography-build-constraints.txt packaging==26.3
+      - name: Build verified Intel cryptography wheel for macOS 14.4
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        env:
+          RUNTIME_PYTHON: ${{ steps.macos-runtime.outputs.python-path }}
+        shell: bash
+        run: >-
+          "$RUNTIME_PYTHON" packaging/prepare_macos_cryptography.py
       - name: Install runtime and build dependencies on the runner
+        if: runner.os != 'macOS' || runner.arch != 'X64'
         shell: bash
         run: |
           python -m pip install --only-binary=:all: -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt -r requirements-rag.txt -c packaging/release-constraints.txt
+          python -m pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt
+      - name: Install runtime and build dependencies with verified Intel cryptography wheel
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          python -m pip install --only-binary=:all: --find-links build/security-cryptography/wheelhouse -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt -r requirements-rag.txt -c packaging/release-constraints.txt
           python -m pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt
       - name: Qualify Pillow bundled Brotli on Linux and macOS
         if: runner.os != 'Windows'
@@ -330,6 +356,15 @@ jobs:
           test -s "$runtime_manifest"
           cp "$runtime_manifest" "build/desktop/artifacts/Callimachus-${PLATFORM}-runtime-python-provenance.json"
           (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-runtime-python-provenance.json" > "Callimachus-${PLATFORM}-runtime-python-provenance.json.sha256")
+          if [[ "$PLATFORM" == macos-x64 ]]; then
+            crypto_manifest="build/desktop/macos-cryptography-provenance-x86_64.json"
+            openssl_license="build/security-cryptography/OpenSSL-LICENSE.txt"
+            test -s "$crypto_manifest" && test -s "$openssl_license"
+            cp "$crypto_manifest" "build/desktop/artifacts/Callimachus-${PLATFORM}-cryptography-provenance.json"
+            cp "$openssl_license" "build/desktop/artifacts/Callimachus-${PLATFORM}-OpenSSL-3.5.9-LICENSE.txt"
+            (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-cryptography-provenance.json" > "Callimachus-${PLATFORM}-cryptography-provenance.json.sha256")
+            (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-OpenSSL-3.5.9-LICENSE.txt" > "Callimachus-${PLATFORM}-OpenSSL-3.5.9-LICENSE.txt.sha256")
+          fi
       - name: Remove temporary macOS signing keychain
         if: always() && runner.os == 'macOS' && github.event_name != 'pull_request'
         run: |

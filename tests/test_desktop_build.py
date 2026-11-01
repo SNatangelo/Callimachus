@@ -1546,3 +1546,215 @@ def test_archive_dependency_audit_blocks_before_archive_creation(monkeypatch, tm
 
     assert calls == [(archiver.ROOT, dist)]
     assert not artifacts.exists()
+
+
+def test_macos_pyside_overlay_changes_only_the_verified_setuptools_pin(tmp_path):
+    overlay_helper = _load("macos_pyside_requirements_overlay", "patch_macos_pyside_requirements.py")
+    upstream = b"""# Build dependencies
+setuptools==78.1.0
+packaging==24.2
+build==1.2.2.post1
+wheel==0.46.3
+distro==1.9.0; sys_platform == 'linux'
+patchelf==0.17.2; sys_platform == 'linux'
+# 2.2.0 is the last version that supports Python 3.10
+numpy==2.2.0; python_version == '3.10'
+numpy==2.4.6; python_version > '3.10'
+mypy>=1.15.0    # note: 3.13 with disable-gil is not compiled yet
+"""
+    assert overlay_helper.sha256(upstream) == overlay_helper.SOURCE_SHA256
+    overlay = overlay_helper.render_overlay(upstream)
+    assert overlay == upstream.replace(b"setuptools==78.1.0", b"setuptools==84.1.0", 1)
+
+    source_path = tmp_path / "requirements.txt"
+    output_path = tmp_path / "requirements-overlay.txt"
+    manifest_path = tmp_path / "requirements-overlay.json"
+    source_path.write_bytes(upstream)
+    manifest = overlay_helper.create_overlay(source_path, output_path, manifest_path)
+    assert source_path.read_bytes() == upstream
+    assert output_path.read_bytes() == overlay
+    assert manifest["source_sha256"] == overlay_helper.SOURCE_SHA256
+    assert manifest["overlay_sha256"] == overlay_helper.sha256(overlay)
+    assert manifest["other_bytes_unchanged"] is True
+
+
+def test_macos_pyside_overlay_fails_closed_on_changed_or_duplicate_upstream_pins():
+    overlay_helper = _load("macos_pyside_requirements_overlay_guard", "patch_macos_pyside_requirements.py")
+    upstream = b"setuptools==78.1.0\n"
+    with pytest.raises(ValueError, match="SHA-256"):
+        overlay_helper.render_overlay(upstream)
+    duplicate = b"setuptools==78.1.0\nsetuptools==78.1.0\n"
+    with pytest.raises(ValueError, match="exactly one"):
+        overlay_helper.render_overlay(duplicate, overlay_helper.sha256(duplicate))
+
+
+def test_macos_pyside_installer_uses_the_overlay_for_its_second_install():
+    script = (ROOT / "packaging" / "prepare_macos_bindings.sh").read_text(encoding="utf-8")
+    overlay_call = script.index("patch_macos_pyside_requirements.py")
+    install_start = script.index('"$BUILD_VENV/bin/python" -m pip install \\\n    -c "$ROOT/packaging/release-constraints.txt" -r "$SOURCE_REQUIREMENTS_OVERLAY"')
+    raw_requirements = script.index('"$SOURCE_DIR/requirements.txt"', overlay_call)
+    assert overlay_call < raw_requirements < install_start
+    assert "setuptools==84.1.0 wheel==0.46.3" in script
+    assert "build_requirements_overlay_sha256" in script
+
+
+def test_static_openssl_license_is_added_with_valid_cryptography_wheel_record(tmp_path):
+    import base64
+    import csv
+    import io
+    import zipfile
+
+    helper = _load("macos_cryptography_wheel_helper", "prepare_macos_cryptography.py")
+    wheel = tmp_path / "cryptography-50.0.1-cp39-abi3-macosx_14_4_x86_64.whl"
+    dist_info = "cryptography-50.0.1.dist-info"
+    members = {
+        f"{dist_info}/METADATA": b"Name: cryptography\nVersion: 50.0.1\n",
+        f"{dist_info}/WHEEL": b"Wheel-Version: 1.0\n",
+        "cryptography/hazmat/bindings/_rust.abi3.so": b"extension fixture",
+    }
+    rows = []
+    for name, body in members.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(body).digest()).decode("ascii").rstrip("=")
+        rows.append([name, "sha256=" + digest, str(len(body))])
+    record = f"{dist_info}/RECORD"
+    rows.append([record, "", ""])
+    stream = io.StringIO(newline="")
+    csv.writer(stream, lineterminator="\n").writerows(rows)
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, body in members.items():
+            archive.writestr(name, body)
+        archive.writestr(record, stream.getvalue())
+
+    helper.verify_wheel_record(wheel)
+    license_body = b"Apache License\nVersion 2.0\nOpenSSL 3.5.9 notice fixture\n"
+    helper.add_openssl_license(wheel, license_body)
+    helper.verify_wheel_record(wheel)
+    with zipfile.ZipFile(wheel) as archive:
+        license_name = f"{dist_info}/licenses/OpenSSL-LICENSE.txt"
+        assert archive.read(license_name) == license_body
+        assert record in archive.namelist()
+
+
+def test_macos_cryptography_source_build_pins_and_architecture_gate_are_explicit():
+    helper = _load("macos_cryptography_source_build", "prepare_macos_cryptography.py")
+    constraints = (ROOT / "packaging" / "macos-cryptography-build-constraints.txt").read_text(encoding="utf-8")
+    release = (ROOT / "packaging" / "release-constraints.txt").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(encoding="utf-8")
+    pins = {line.split("==", 1)[0]: line.split("==", 1)[1] for line in constraints.splitlines() if "==" in line}
+
+    assert pins == helper.BUILD_REQUIREMENTS
+    assert release.count("cryptography==50.0.1") == 1
+    assert helper.OPENSSL_VERSION == "3.5.9"
+    assert helper.RUST_VERSION == "1.99.1"
+    assert helper.MACOS_MINIMUM == "14.4"
+    assert "runner.os == 'macOS' && runner.arch == 'X64'" in workflow
+    packaging_step = workflow.index("name: Install pinned packaging for Intel cryptography wheel validation")
+    cryptography_step = workflow.index("name: Build verified Intel cryptography wheel for macOS 14.4")
+    packaging_setup = workflow[packaging_step:cryptography_step]
+    assert packaging_step < cryptography_step
+    assert "packaging==26.3" in packaging_setup
+    assert "packaging/macos-cryptography-build-constraints.txt" in packaging_setup
+    assert "--find-links build/security-cryptography/wheelhouse" in workflow
+
+
+def test_rust_manifest_accepts_pinned_dated_urls_and_cargo_component_version(tmp_path, monkeypatch):
+    import hashlib
+
+    helper = _load("macos_rust_manifest_components", "prepare_macos_cryptography.py")
+    target = "x86_64-apple-darwin"
+    rows = ['date = "2026-10-15"', '']
+    for component in ("rustc", "cargo", "rust-std"):
+        rows.extend([
+            f"[pkg.{component}]",
+            f'version = "{helper.RUST_COMPONENT_VERSIONS[component]}"',
+            f"[pkg.{component}.target.{target}]",
+            f'available = true',
+            f'xz_hash = "{helper.RUST_COMPONENTS[component]}"',
+            f'xz_url = "https://static.rust-lang.org/dist/2026-10-15/{component}-1.99.1-{target}.tar.xz"',
+            "",
+        ])
+    manifest = "\n".join(rows).encode("utf-8")
+    path = tmp_path / "channel-rust-1.99.1.toml"
+    path.write_bytes(manifest)
+    monkeypatch.setattr(helper, "RUST_MANIFEST_SHA256", hashlib.sha256(manifest).hexdigest())
+
+    urls = helper.check_rust_manifest(path)
+    assert urls["cargo"] == f"https://static.rust-lang.org/dist/2026-10-15/cargo-1.99.1-{target}.tar.xz"
+    assert helper.RUST_COMPONENT_VERSIONS["cargo"] == "0.100.0 (5f94df478 2026-08-27)"
+
+    rustc_cli = "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    cargo_cli = "cargo 1.99.0 (5f94df478 2026-08-27)"
+    rust_verbose = "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nhost: x86_64-apple-darwin"
+    cargo_verbose = "\n".join([
+        cargo_cli,
+        "release: 1.99.0",
+        "commit-hash: 5f94df478",
+        "commit-date: 2026-08-27",
+        "host: x86_64-apple-darwin",
+    ])
+    proof = helper.verify_rust_cli_versions(rustc_cli, cargo_cli, rust_verbose, cargo_verbose)
+    assert proof["cargo_release"] == "1.99.0"
+    assert proof["cargo_commit_prefix"] == "5f94df478"
+    assert proof["cargo_host"] == "x86_64-apple-darwin"
+    latest_cli = cargo_cli.replace("1.99.0", "1.99.1")
+    latest_verbose = cargo_verbose.replace("1.99.0", "1.99.1")
+    assert helper.verify_rust_cli_versions(rustc_cli, latest_cli, rust_verbose, latest_verbose)["cargo_release"] == "1.99.1"
+    with pytest.raises(RuntimeError, match="Cargo CLI version"):
+        helper.verify_rust_cli_versions(rustc_cli, "cargo 0.100.0 (5f94df478 2026-08-27)", rust_verbose, cargo_verbose)
+    for wrong_release in ("1.98.9", "1.100.0", "2.99.0"):
+        wrong_cli = cargo_cli.replace("1.99.0", wrong_release)
+        wrong_verbose = cargo_verbose.replace("1.99.0", wrong_release)
+        with pytest.raises(RuntimeError, match="Cargo CLI version"):
+            helper.verify_rust_cli_versions(rustc_cli, wrong_cli, rust_verbose, wrong_verbose)
+    with pytest.raises(RuntimeError, match="commit or release"):
+        helper.verify_rust_cli_versions(rustc_cli, cargo_cli, rust_verbose, cargo_verbose.replace("commit-hash: 5f94df478", "commit-hash: deadbeef0"))
+    with pytest.raises(RuntimeError, match="host triples"):
+        helper.verify_rust_cli_versions(rustc_cli, cargo_cli, rust_verbose, cargo_verbose.replace("host: x86_64-apple-darwin", "host: aarch64-apple-darwin"))
+
+    bad_url = manifest.replace(b"/dist/2026-10-15/cargo-", b"/dist/cargo-")
+    path.write_bytes(bad_url)
+    monkeypatch.setattr(helper, "RUST_MANIFEST_SHA256", hashlib.sha256(bad_url).hexdigest())
+    with pytest.raises(RuntimeError, match="unexpected Rust component URL for cargo"):
+        helper.check_rust_manifest(path)
+
+    bad_cargo = manifest.replace(b"0.100.0 (5f94df478 2026-08-27)", b"1.99.1 (58cf8f9c3 2026-10-13)")
+    path.write_bytes(bad_cargo)
+    monkeypatch.setattr(helper, "RUST_MANIFEST_SHA256", hashlib.sha256(bad_cargo).hexdigest())
+    with pytest.raises(RuntimeError, match="unexpected cargo version"):
+        helper.check_rust_manifest(path)
+
+
+def test_selected_xcode_apple_clang_path_is_accepted_and_homebrew_is_rejected(tmp_path):
+    helper = _load("macos_apple_clang_selection", "prepare_macos_cryptography.py")
+    developer = tmp_path / "Xcode_26.1.app" / "Contents" / "Developer"
+    compiler = developer / "Toolchains" / "XcodeDefault.xctoolchain" / "usr" / "bin" / "clang"
+    compiler.parent.mkdir(parents=True)
+    compiler.write_bytes(b"Apple clang fixture")
+    version = "Apple clang version 17.0.0 (clang-1700.0.13.3)"
+
+    assert helper.validate_apple_clang(developer, compiler, version) == compiler.resolve()
+
+    brew = tmp_path / "opt" / "homebrew" / "bin" / "clang"
+    brew.parent.mkdir(parents=True)
+    brew.write_bytes(b"clang fixture")
+    with pytest.raises(RuntimeError, match="outside the selected Apple developer directory"):
+        helper.validate_apple_clang(developer, brew, version)
+    with pytest.raises(RuntimeError, match="not Apple Clang"):
+        helper.validate_apple_clang(developer, compiler, "clang version 17.0.0")
+
+
+def test_macos_14_4_accepts_normalized_14_0_wheel_tag_and_rejects_bad_arch_or_minimum():
+    helper = _load("macos_wheel_platform_compatibility", "prepare_macos_cryptography.py")
+    proof = helper.verify_wheel_tag("cryptography-50.0.1-cp39-abi3-macosx_14_0_x86_64.whl")
+    assert proof["platform_tags"] == ["macosx_14_0_x86_64"]
+    assert proof["python_abi_tags"] == ["cp39-abi3"]
+    assert helper.validate_macos_minimums(["14.0", "14.4"]) == ["14.0", "14.4"]
+
+    with pytest.raises(RuntimeError, match="platform tags"):
+        helper.verify_wheel_tag("cryptography-50.0.1-cp39-abi3-macosx_14_0_arm64.whl")
+    with pytest.raises(RuntimeError, match="platform tags"):
+        helper.verify_wheel_tag("cryptography-50.0.1-cp39-abi3-macosx_15_0_x86_64.whl")
+    with pytest.raises(RuntimeError, match="stable-ABI"):
+        helper.verify_wheel_tag("cryptography-50.0.1-cp313-cp313-macosx_14_0_x86_64.whl")
+    with pytest.raises(RuntimeError, match="above macOS 14.4"):
+        helper.validate_macos_minimums(["14.4", "15.0"])
