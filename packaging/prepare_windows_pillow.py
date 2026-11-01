@@ -336,7 +336,7 @@ def verify_host_tools():
     result = {}
     for name, args, pattern in (
         ("ninja", ["--version"], r"^1\.13\.2$"),
-        ("perl", ["-v"], r"\b5\.32\.1\b"),
+        ("perl", ["-v"], r"(?<![\w.])v?5\.32\.1(?![\w.])"),
         ("git", ["--version"], r"^git version "),
     ):
         path = shutil.which(name)

@@ -29,6 +29,61 @@ def _load():
     return module
 
 
+ACTUAL_RUNNER_PERL_BANNER = (
+    "This is perl 5, version 32, subversion 1 "
+    "(v5.32.1) built for MSWin32-x64-multi-thread"
+)
+
+
+def _mock_host_tools(helper, monkeypatch, perl_banner):
+    outputs = {
+        "ninja": "1.13.2\n",
+        "perl": perl_banner,
+        "git": "git version 2.56.0.windows.1\n",
+    }
+    calls = []
+    monkeypatch.setattr(
+        helper.shutil, "which", lambda name: rf"C:\host-tools\{name}.exe",
+    )
+
+    def fake_output(args, **_kwargs):
+        name = Path(args[0]).stem.lower()
+        calls.append(name)
+        return outputs[name]
+
+    monkeypatch.setattr(helper, "_run_output", fake_output)
+    return calls, outputs
+
+
+def test_verify_host_tools_accepts_captured_runner_perl_banner(monkeypatch):
+    helper = _load()
+    calls, outputs = _mock_host_tools(helper, monkeypatch, ACTUAL_RUNNER_PERL_BANNER)
+
+    result = helper.verify_host_tools()
+
+    assert calls == ["ninja", "perl", "git"]
+    assert result == {name: value.splitlines()[0] for name, value in outputs.items()}
+
+
+@pytest.mark.parametrize(
+    "perl_banner",
+    [
+        "This is perl 5, version 32, subversion 10 (v5.32.10) built for MSWin32-x64-multi-thread",
+        "This is perl 5, version 34, subversion 0 (v5.34.0) built for MSWin32-x64-multi-thread",
+        "This is perl 5, version 32, subversion 1 (v5.32.1.2) built for MSWin32-x64-multi-thread",
+    ],
+    ids=["5.32.10", "5.34.0", "5.32.1.2"],
+)
+def test_verify_host_tools_rejects_other_perl_versions(monkeypatch, perl_banner):
+    helper = _load()
+    calls, _outputs = _mock_host_tools(helper, monkeypatch, perl_banner)
+
+    with pytest.raises(RuntimeError, match="perl differs from its pinned runner version"):
+        helper.verify_host_tools()
+
+    assert calls == ["ninja", "perl"]
+
+
 def test_manifest_pins_google_brotli_and_all_source_inputs():
     helper = _load()
     inputs = helper.load_inputs()
