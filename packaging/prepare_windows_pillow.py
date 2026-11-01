@@ -843,11 +843,14 @@ def _print_build_failure_tail(script: Path, log: Path):
 
 
 def run_build_script(script: Path, env, log: Path):
-    command = 'call "' + str(script) + '"'
+    script_path = os.fspath(script)
+    if any(character in script_path for character in ('"', "\r", "\n", "\0")):
+        raise RuntimeError("batch path contains a character cmd.exe cannot quote safely")
+    command = 'cmd.exe /d /s /c ""' + script_path + '""'
     try:
         with log.open("xb") as output:
-            subprocess.run(["cmd.exe", "/d", "/s", "/c", command], cwd=script.parent,
-                           env=env, stdout=output, stderr=subprocess.STDOUT,
+            subprocess.run(command, cwd=script.parent, env=env,
+                           stdout=output, stderr=subprocess.STDOUT,
                            check=True, timeout=2400)
     except subprocess.CalledProcessError:
         _print_build_failure_tail(script, log)

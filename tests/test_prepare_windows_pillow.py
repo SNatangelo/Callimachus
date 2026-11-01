@@ -92,7 +92,10 @@ def test_run_build_script_reports_bounded_failure_tail_and_reraises(tmp_path, mo
     log_bytes = b"EARLY-OMITTED-MARKER\n" + (b"x" * (20 * 1024)) + b"\nCOMPILER-TAIL-MARKER\n"
     failure = subprocess.CalledProcessError(1, ["cmd.exe", str(script)])
 
-    def fail_after_logging(_args, *, stdout, **_kwargs):
+    expected_command = f'cmd.exe /d /s /c ""{script}""'
+
+    def fail_after_logging(command, *, stdout, **_kwargs):
+        assert command == expected_command
         stdout.write(log_bytes)
         raise failure
 
@@ -120,7 +123,10 @@ def test_run_build_script_log_read_error_does_not_mask_subprocess_error(
     failure = subprocess.CalledProcessError(1, ["cmd.exe", str(script)])
     original_open = Path.open
 
-    def fail_and_leave_empty(_args, **_kwargs):
+    expected_command = f'cmd.exe /d /s /c ""{script}""'
+
+    def fail_and_leave_empty(command, **_kwargs):
+        assert command == expected_command
         raise failure
 
     def fail_log_read(path, mode="r", *args, **kwargs):
@@ -138,6 +144,32 @@ def test_run_build_script_log_read_error_does_not_mask_subprocess_error(
     assert capsys.readouterr().err == ""
     with original_open(log, "rb") as source:
         assert source.read() == b""
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native cmd.exe batch semantics")
+def test_run_build_script_executes_batch_path_with_spaces_and_ampersand(tmp_path, capsys):
+    helper = _load()
+    batch_dir = tmp_path / "build & tools"
+    batch_dir.mkdir()
+    script = batch_dir / "test build.cmd"
+    log = batch_dir / "batch-output.log"
+    script.write_bytes(
+        b"@echo off\r\necho NATIVE-CMD-PATH-MARKER\r\nexit /b 23\r\n"
+    )
+    env = {
+        key: os.environ[key]
+        for key in ("SystemRoot", "WINDIR", "PATH", "PATHEXT", "COMSPEC")
+        if key in os.environ
+    }
+
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        helper.run_build_script(script, env, log)
+
+    expected_command = f'cmd.exe /d /s /c ""{script}""'
+    assert caught.value.cmd == expected_command
+    assert caught.value.returncode == 23
+    assert b"NATIVE-CMD-PATH-MARKER" in log.read_bytes()
+    assert "NATIVE-CMD-PATH-MARKER" in capsys.readouterr().err
+
 
 def test_manifest_pins_google_brotli_and_all_source_inputs():
     helper = _load()
