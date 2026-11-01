@@ -576,7 +576,10 @@ def patch_build_commands(module, build_dir: Path):
     original = module.DEPS["libavif"]["build"]
     if sum("rustup update" in row for row in original) != 1 or sum("pip install meson" in row for row in original) != 1:
         raise RuntimeError("upstream libavif tool-install commands changed")
+    if module.DEPS["libavif"].get("libs") != ["avif.lib"]:
+        raise RuntimeError("upstream libavif static library output changed")
     source = (build_dir / "src" / "libavif-1.4.2" / "ext" / "aom").as_posix()
+    module.DEPS["libavif"]["libs"] = [r"build-security-ci\avif.lib"]
     module.DEPS["libavif"]["build"] = [
         "cmake.exe -DCMAKE_BUILD_TYPE=MinSizeRel -DCMAKE_SYSTEM_VERSION=10.0.26100.0 "
         "-DCMAKE_VERBOSE_MAKEFILE=ON -DCMAKE_RULE_MESSAGES:BOOL=OFF "
@@ -589,7 +592,6 @@ def patch_build_commands(module, build_dir: Path):
         "-DFETCHCONTENT_FULLY_DISCONNECTED=ON -G \"{cmake_generator}\" "
         "-B \"build-security-ci\" -S .",
         "cmake.exe --build \"build-security-ci\" --parallel 1 --target avif_static",
-        "copy /Y /B \"build-security-ci\\avif.lib\" \"{lib_dir}\"",
         "xcopy /Y /E \"include\" \"{inc_dir}\"",
     ]
 

@@ -357,7 +357,10 @@ def _recipe_module():
             }
         }},
         "zlib": {"build": ["cmake --build . --parallel", "msbuild zlib.vcxproj /m"]},
-        "libavif": {"build": ["rustup update stable", "python -m pip install meson"]},
+        "libavif": {
+            "build": ["rustup update stable", "python -m pip install meson"],
+            "libs": ["avif.lib"],
+        },
     })
 
 
@@ -365,7 +368,7 @@ def test_build_command_patches_pin_sdk_and_bound_all_jobs(tmp_path):
     helper = _load()
     module = _recipe_module()
     helper.patch_sdk_targets(module, "10.0.26100.0")
-    build_dir = tmp_path / "pillow-build"
+    build_dir = tmp_path / "pillow & build"
     helper.patch_build_commands(module, build_dir)
 
     assert module.DEPS["freetype"]["patch"]["CMakeLists.txt"]["old-freetype"].endswith(
@@ -378,13 +381,65 @@ def test_build_command_patches_pin_sdk_and_bound_all_jobs(tmp_path):
         "cmake --build . --parallel 2", "msbuild zlib.vcxproj /m:2",
     ]
     avif = module.DEPS["libavif"]["build"]
-    assert len(avif) == 4
+    assert len(avif) == 3
     assert "-DCMAKE_SYSTEM_VERSION=10.0.26100.0" in avif[0]
     assert "-DFETCHCONTENT_SOURCE_DIR_LIBAOM=" in avif[0]
     assert "-DFETCHCONTENT_FULLY_DISCONNECTED=ON" in avif[0]
     assert "-DAVIF_CODEC_DAV1D=LOCAL" in avif[0]
+    assert '-B "build-security-ci" -S .' in avif[0]
     assert "--parallel 1" in avif[1]
+    assert avif[2] == 'xcopy /Y /E "include" "{inc_dir}"'
+    assert "copy /Y /B" not in "\n".join(avif)
     assert all("rustup update" not in row and "pip install meson" not in row for row in avif)
+    assert module.DEPS["libavif"]["libs"] == [r"build-security-ci\avif.lib"]
+
+    # Model Pillow's generated library footer; the mock toolchain output is
+    # placed under the CMake -B directory, so no native compilation is needed.
+    prefs = {
+        "cmake_generator": "Ninja",
+        "lib_dir": str(build_dir / "library output & target"),
+        "inc_dir": str(build_dir / "header output"),
+    }
+    rendered_build = [row.format(**prefs) for row in avif]
+    assert rendered_build[0].endswith('-B "build-security-ci" -S .')
+    assert rendered_build[2] == f'xcopy /Y /E "include" "{prefs["inc_dir"]}"'
+    generated_copy = [
+        f'copy /Y /B "{output}" "{prefs["lib_dir"]}"'
+        for output in module.DEPS["libavif"]["libs"]
+    ]
+    assert generated_copy == [
+        f'copy /Y /B "build-security-ci\\avif.lib" "{prefs["lib_dir"]}"'
+    ]
+
+    if os.name == "nt":
+        source = build_dir / "src" / "libavif-1.4.2"
+        built_library = source / "build-security-ci" / "avif.lib"
+        built_library.parent.mkdir(parents=True)
+        built_bytes = b"synthetic libavif build output"
+        built_library.write_bytes(built_bytes)
+        target_dir = Path(prefs["lib_dir"])
+        target_dir.mkdir(parents=True)
+        script = build_dir / "build_dep_libavif.cmd"
+        script.write_text(
+            "\r\n".join([
+                "@echo off",
+                f'cd /D "{source}"',
+                generated_copy[0],
+                "if errorlevel 1 exit /b 1",
+                "exit /b 0",
+            ]) + "\r\n",
+            encoding="utf-8",
+            newline="",
+        )
+        env = {
+            key: os.environ[key]
+            for key in ("SystemRoot", "WINDIR", "PATH", "PATHEXT", "COMSPEC")
+            if key in os.environ
+        }
+
+        helper.run_build_script(script, env, build_dir / "libavif-copy.log")
+
+        assert (target_dir / "avif.lib").read_bytes() == built_bytes
 
 
 def test_pillow_prepare_adapter_disables_network_and_refuses_existing_outputs(tmp_path):
