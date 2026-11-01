@@ -347,7 +347,7 @@ def test_postcheck_requires_patched_vendored_certifi(tmp_path, monkeypatch):
 
 
 
-def test_macos_aqt_environment_installs_audit_import_dependency_explicitly():
+def test_macos_aqt_environment_pins_patched_build_tools_before_audit():
     script = (ROOT / "packaging" / "prepare_macos_bindings.sh").read_text(encoding="utf-8")
     install_start = script.index('"$AQT_VENV/bin/python" -m pip install --only-binary=:all:')
     pip_check_start = script.index('"$AQT_VENV/bin/python" -m pip check', install_start)
@@ -357,6 +357,8 @@ def test_macos_aqt_environment_installs_audit_import_dependency_explicitly():
 
     assert '"$AQT_WHEEL"' in install_command
     assert "packaging==26.3" in install_command.split()
+    assert 'py7zr==1.1.3' in install_command.split()
+    assert 'setuptools==84.1.0' in install_command.split()
     assert install_start < audit_start
     assert "from packaging.version import InvalidVersion, Version" in audit_source
 
