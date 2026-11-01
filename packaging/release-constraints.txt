@@ -15,7 +15,8 @@ onnxruntime==1.29.0; sys_platform != "darwin" or platform_machine != "x86_64"
 bm25s==0.3.10
 PyMuPDF==1.28.0
 pdfminer.six==20260107
-Brotli==1.2.0
+Brotli==1.2.1
+Pillow==13.0.0
 certifi==2026.10.19
 pip==26.2.2
 setuptools==84.1.0

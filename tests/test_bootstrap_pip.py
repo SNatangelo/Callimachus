@@ -345,6 +345,22 @@ def test_postcheck_requires_patched_vendored_certifi(tmp_path, monkeypatch):
         bootstrap.verify_installed_pip()
 
 
+
+
+def test_macos_aqt_environment_installs_audit_import_dependency_explicitly():
+    script = (ROOT / "packaging" / "prepare_macos_bindings.sh").read_text(encoding="utf-8")
+    install_start = script.index('"$AQT_VENV/bin/python" -m pip install --only-binary=:all:')
+    pip_check_start = script.index('"$AQT_VENV/bin/python" -m pip check', install_start)
+    audit_start = script.index('"$AQT_VENV/bin/python" "$ROOT/packaging/dependency_audit.py"', install_start)
+    install_command = script[install_start:pip_check_start]
+    audit_source = (ROOT / "packaging" / "dependency_audit.py").read_text(encoding="utf-8")
+
+    assert '"$AQT_WHEEL"' in install_command
+    assert "packaging==26.3" in install_command.split()
+    assert install_start < audit_start
+    assert "from packaging.version import InvalidVersion, Version" in audit_source
+
+
 def test_final_requirements_overlay_secure_constraints_without_mutating_baseline():
     recipe = load_module(
         "callimachus_prepare_final_requirements",
@@ -353,6 +369,8 @@ def test_final_requirements_overlay_secure_constraints_without_mutating_baseline
     baseline = {
         "certifi": "2026.6.17",
         "setuptools": "84.0.0",
+        "Brotli": "1.2.0",
+        "Pillow": "12.3.0",
         "PySide6": "6.11.2",
         "other-runtime-package": "1.2.3",
     }
@@ -361,6 +379,8 @@ def test_final_requirements_overlay_secure_constraints_without_mutating_baseline
         "setuptools": "84.1.0",
         "pip": "26.2.2",
         "wheel": "0.46.3",
+        "Brotli": "1.2.1",
+        "Pillow": "13.0.0",
         "PySide6": "6.12.0",
     }
 
@@ -368,11 +388,15 @@ def test_final_requirements_overlay_secure_constraints_without_mutating_baseline
 
     assert "certifi==2026.10.19" in lines
     assert "setuptools==84.1.0" in lines
+    assert "Brotli==1.2.1" in lines
+    assert "Pillow==13.0.0" in lines
     assert "PySide6==6.11.2" in lines
     assert "other-runtime-package==1.2.3" in lines
     assert not any(line.startswith(("pip==", "wheel==")) for line in lines)
     assert baseline["certifi"] == "2026.6.17"
     assert baseline["setuptools"] == "84.0.0"
+    assert baseline["Brotli"] == "1.2.0"
+    assert baseline["Pillow"] == "12.3.0"
 
 
 def test_staged_recipe_reads_active_constraints_from_project_root():
@@ -393,6 +417,8 @@ def test_staged_recipe_reads_active_constraints_from_project_root():
         "pip": "26.2.2",
         "setuptools": "84.1.0",
         "wheel": "0.46.3",
+        "brotli": "1.2.1",
+        "pillow": "13.0.0",
     }
 
 
@@ -403,7 +429,7 @@ def test_final_requirements_refuse_historical_security_pins(tmp_path):
     )
     stale = tmp_path / "release-constraints.txt"
     stale.write_text(
-        "certifi==2026.6.17\npip==26.2.1\nsetuptools==84.0.0\nwheel==0.45.1\n",
+        "certifi==2026.6.17\npip==26.2.1\nsetuptools==84.0.0\nwheel==0.45.1\nBrotli==1.2.0\nPillow==12.3.0\n",
         encoding="utf-8",
     )
 

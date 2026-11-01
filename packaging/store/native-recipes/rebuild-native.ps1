@@ -288,6 +288,7 @@ function Run-Stage {
             Invoke-Python -Label 'secure-bootstrap-pip' -Python $bootstrapPythonExe -Arguments @($pipBootstrap) -WorkingDirectory $projectRoot
             Invoke-Python -Label 'install-hash-verified-cmake-ninja' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-index', '--no-deps', $cmakeWheel, $ninjaWheel) -WorkingDirectory $NativeRoot
             Invoke-Python -Label 'bootstrap-pinned-native-build-tools' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-deps', '-r', (Join-Path $NativeRoot 'bootstrap-requirements.txt')) -WorkingDirectory $NativeRoot
+            Invoke-Python -Label 'audit-bootstrap-dependencies' -Python $bootstrapPythonExe -Arguments @((Join-Path $projectRoot 'packaging/dependency_audit.py'), '--report', (Join-Path $logRoot 'bootstrap-dependency-audit.json')) -WorkingDirectory $projectRoot
             foreach ($tool in @(
                 @{ Name = 'cmake'; Path = $cmakeExe; Arguments = @('--version'); Pattern = '^cmake version 4\.4\.3(?:\s|$)' },
                 @{ Name = 'ninja'; Path = $ninjaExe; Arguments = @('--version'); Pattern = '^1\.13\.2$' },
@@ -372,6 +373,7 @@ function Run-Stage {
             }
             Invoke-Python -Label 'secure-pyside-build-pip' -Python $pysidePython -Arguments @($pipBootstrap) -WorkingDirectory $pysideSource
             Invoke-Python -Label 'pyside-build-tools' -Python $pysidePython -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', 'setuptools==84.1.0', 'wheel==0.46.3', 'Cython==3.3.0', 'packaging==26.3') -WorkingDirectory $pysideSource
+            Invoke-Python -Label 'audit-pyside-build-dependencies' -Python $pysidePython -Arguments @((Join-Path $projectRoot 'packaging/dependency_audit.py'), '--report', (Join-Path $logRoot 'pyside-build-dependency-audit.json')) -WorkingDirectory $projectRoot
             if ($Build) { $env:LLVM_INSTALL_DIR = $LLVMRoot }
             $pysideBuildBase = Join-Path $NativeRoot 'pyside-build/build'
             $qtOptions = @("--qtpaths=$(Join-Path $NativeRoot 'qt-install/bin/qtpaths.exe')", "--cmake=$cmakeExe", '--make-spec=ninja', '--module-subset=Core,Gui,Widgets,Network,Svg,Test', '--ignore-git')
@@ -384,6 +386,7 @@ function Run-Stage {
             Assert-Inputs @($bootstrapPythonExe, (Join-Path $NativeRoot 'prepare-openblas.py'), $pipBootstrap, $releaseConstraints)
             Invoke-Python -Label 'secure-native-wheel-pip' -Python $bootstrapPythonExe -Arguments @($pipBootstrap) -WorkingDirectory $projectRoot
             Invoke-Python -Label 'pin-native-wheel-build-tools' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'install', '--only-binary=:all:', '--disable-pip-version-check', '--no-input', '-c', $releaseConstraints, 'setuptools==84.1.0', 'wheel==0.46.3') -WorkingDirectory $projectRoot
+            Invoke-Python -Label 'audit-native-wheel-build-dependencies' -Python $bootstrapPythonExe -Arguments @((Join-Path $projectRoot 'packaging/dependency_audit.py'), '--report', (Join-Path $logRoot 'native-wheel-build-dependency-audit.json')) -WorkingDirectory $projectRoot
             Ensure-RustEnvironment
             if ($Build) { New-Item -ItemType Directory -Force -Path $wheelsRoot | Out-Null }
             Invoke-Python -Label 'prepare-openblas-pkgconfig' -Python $bootstrapPythonExe -Arguments @((Join-Path $NativeRoot 'prepare-openblas.py')) -WorkingDirectory $NativeRoot
@@ -403,7 +406,7 @@ function Run-Stage {
             Invoke-Logged -Label 'libyaml-configure' -Executable $cmakeExe -Arguments @('-S', $yamlSource, '-B', $yamlBuild, '-G', 'Ninja', "-DCMAKE_MAKE_PROGRAM=$ninjaExe", '-DCMAKE_BUILD_TYPE=Release', "-DCMAKE_INSTALL_PREFIX=$yamlInstall", '-DBUILD_SHARED_LIBS=OFF', '-DYAML_BUILD_SHARED_LIBS=OFF') -WorkingDirectory $projectRoot
             Invoke-Logged -Label 'libyaml-build-install' -Executable $cmakeExe -Arguments @('--build', $yamlBuild, '--config', 'Release', '--target', 'install', '--parallel', '4') -WorkingDirectory $projectRoot
 
-            $pillowSource = Join-Path $sourceRoot 'pillow-source/pillow-12.3.0'
+            $pillowSource = Join-Path $sourceRoot 'pillow-source/pillow-13.0.0'
             $pillowWinBuild = Join-Path $pillowSource 'winbuild'
             $pillowBuild = Join-Path $NativeRoot 'pillow-dependencies/build'
             $pillowDepends = Join-Path $NativeRoot 'pillow-dependencies/cache'
@@ -421,13 +424,13 @@ function Run-Stage {
             }
 
             $sourceMap = @(
-                @{ Name = 'brotli'; Dir = 'brotli-source/brotli-1.2.0' },
+                @{ Name = 'brotli'; Dir = 'brotli-source/brotli-1.2.1' },
                 @{ Name = 'cffi'; Dir = 'cffi-source/cffi-2.1.1' },
                 @{ Name = 'charset-normalizer'; Dir = 'charset-normalizer-source/charset_normalizer-3.5.1' },
                 @{ Name = 'cryptography'; Dir = 'cryptography-source/cryptography-50.0.1' },
                 @{ Name = 'greenlet'; Dir = 'greenlet-source/greenlet-3.5.6' },
                 @{ Name = 'numpy'; Dir = 'numpy-source/numpy-2.5.3' },
-                @{ Name = 'pillow'; Dir = 'pillow-source/pillow-12.3.0' },
+                @{ Name = 'pillow'; Dir = 'pillow-source/pillow-13.0.0' },
                 @{ Name = 'pyclipper'; Dir = 'pyclipper-source/pyclipper-1.4.0' },
                 @{ Name = 'pyyaml'; Dir = 'PyYAML-source/pyyaml-6.0.3' },
                 @{ Name = 'shapely'; Dir = 'shapely-source/shapely-2.1.2' }
@@ -570,6 +573,9 @@ function Run-Stage {
                 '-DPython_LIBRARY=R:/Python-3.13.15/libs/python313.lib',
                 '-DPython_RUNTIME_LIBRARY=R:/Python-3.13.15/PCbuild/amd64/python313.dll'
             )
+            Invoke-Python -Label 'audit-onnx-build-dependencies' -Python $bootstrapPythonExe -Arguments @((Join-Path $projectRoot 'packaging/dependency_audit.py'), '--report', (Join-Path $logRoot 'onnx-build-dependency-audit.json')) -WorkingDirectory $projectRoot
+            Invoke-Python -Label 'secure-onnx-runtime-pip' -Python $finalPythonExe -Arguments @((Join-Path $projectRoot 'packaging/bootstrap_pip.py')) -WorkingDirectory $projectRoot
+            Invoke-Python -Label 'audit-onnx-runtime-dependencies' -Python $finalPythonExe -Arguments @((Join-Path $projectRoot 'packaging/dependency_audit.py'), '--report', (Join-Path $logRoot 'onnx-runtime-dependency-audit.json')) -WorkingDirectory $projectRoot
             Invoke-Logged -Label 'onnx-fresh-cmake-configure' -Executable $cmakeExe -Arguments (@('-S', 'R:/onnxruntime/cmake', '-B', 'R:/onnxruntime-build/Release', '-G', 'Ninja') + $cmakeDefinitions) -WorkingDirectory $projectRoot
             Invoke-Logged -Label 'onnx-cmake-build' -Executable $cmakeExe -Arguments @('--build', 'R:/onnxruntime-build/Release', '--config', 'Release', '--parallel', '4') -WorkingDirectory $projectRoot
             Invoke-Python -Label 'onnx-runtime-python-wheel' -Python $bootstrapPythonExe -Arguments @($onnxBuildScript, '--build_dir', 'R:/onnxruntime-build', '--config', 'Release', '--build_wheel', '--skip_tests', '--skip_submodule_sync', '--skip_pip_install', '--cmake_generator', 'Ninja') -WorkingDirectory $NativeRoot
@@ -588,6 +594,7 @@ function Run-Stage {
             Assert-Inputs @($bootstrapPythonExe, (Join-Path $NativeRoot 'run_waf.py'), (Join-Path $sourceRoot 'pyinstaller-source/pyinstaller-6.22.3/pyproject.toml'), $pipBootstrap, $releaseConstraints)
             Invoke-Python -Label 'secure-pyinstaller-pip' -Python $bootstrapPythonExe -Arguments @($pipBootstrap) -WorkingDirectory $projectRoot
             Invoke-Python -Label 'pin-pyinstaller-build-tools' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'install', '--only-binary=:all:', '--disable-pip-version-check', '--no-input', '-c', $releaseConstraints, 'setuptools==84.1.0', 'wheel==0.46.3') -WorkingDirectory $projectRoot
+            Invoke-Python -Label 'audit-pyinstaller-build-dependencies' -Python $bootstrapPythonExe -Arguments @((Join-Path $projectRoot 'packaging/dependency_audit.py'), '--report', (Join-Path $logRoot 'pyinstaller-build-dependency-audit.json')) -WorkingDirectory $projectRoot
             Invoke-Python -Label 'pyinstaller-bootloader' -Python $bootstrapPythonExe -Arguments @((Join-Path $NativeRoot 'run_waf.py'), 'all') -WorkingDirectory $NativeRoot
             Invoke-Python -Label 'wheel-pyinstaller' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation', '--wheel-dir', $wheelsRoot, (Join-Path $sourceRoot 'pyinstaller-source/pyinstaller-6.22.3')) -WorkingDirectory $NativeRoot
         }
@@ -597,11 +604,12 @@ function Run-Stage {
             Assert-Inputs @($finalPythonExe, (Join-Path $NativeRoot 'original-distributions.json'), (Join-Path $NativeRoot 'final-pure-requirements-no-omega.txt'), (Join-Path $NativeRoot 'stage-original-omegaconf.py'), $pipBootstrap, $releaseConstraints)
             Invoke-Python -Label 'secure-final-inventory-pip' -Python $finalPythonExe -Arguments @($pipBootstrap) -WorkingDirectory $NativeRoot
             Invoke-Python -Label 'install-pure-pins' -Python $finalPythonExe -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-deps', '-r', (Join-Path $NativeRoot 'final-pure-requirements-no-omega.txt')) -WorkingDirectory $NativeRoot
-            $nativePins = @('brotli==1.2.0', 'cffi==2.1.1', 'charset-normalizer==3.5.1', 'cryptography==50.0.1', 'greenlet==3.5.6', 'numpy==2.5.3', 'onnxruntime==1.29.0', 'opencv-python==5.0.0.93', 'pillow==12.3.0', 'pyclipper==1.4.0', 'pyinstaller==6.22.3', 'pymupdf==1.28.0', 'PyYAML==6.0.3', 'shapely==2.1.2', 'PySide6==6.11.2', 'PySide6_Addons==6.11.2', 'PySide6_Essentials==6.11.2', 'shiboken6==6.11.2')
+            $nativePins = @('brotli==1.2.1', 'cffi==2.1.1', 'charset-normalizer==3.5.1', 'cryptography==50.0.1', 'greenlet==3.5.6', 'numpy==2.5.3', 'onnxruntime==1.29.0', 'opencv-python==5.0.0.93', 'pillow==13.0.0', 'pyclipper==1.4.0', 'pyinstaller==6.22.3', 'pymupdf==1.28.0', 'PyYAML==6.0.3', 'shapely==2.1.2', 'PySide6==6.11.2', 'PySide6_Addons==6.11.2', 'PySide6_Essentials==6.11.2', 'shiboken6==6.11.2')
             foreach ($pin in $nativePins) {
                 Invoke-Python -Label ("install-native-{0}" -f ($pin -replace '[^A-Za-z0-9.-]', '_')) -Python $finalPythonExe -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-deps', '--no-index', '--find-links', $wheelsRoot, $pin) -WorkingDirectory $NativeRoot
             }
             Invoke-Python -Label 'stage-original-omegaconf' -Python $finalPythonExe -Arguments @((Join-Path $NativeRoot 'stage-original-omegaconf.py'), '--original-site-packages', (Join-Path $NativeRoot 'original-inputs/omegaconf'), '--destination-site-packages', (Join-Path $NativeRoot 'final-venv/Lib/site-packages')) -WorkingDirectory $NativeRoot
+            Invoke-Python -Label 'audit-final-runtime-dependencies' -Python $finalPythonExe -Arguments @((Join-Path $projectRoot 'packaging/dependency_audit.py'), '--report', (Join-Path $logRoot 'final-runtime-dependency-audit.json')) -WorkingDirectory $projectRoot
             Stage-FrameworkRuntime
             $validation = @'
 import importlib.metadata as md, json, re, sys
@@ -610,12 +618,14 @@ from pathlib import Path
 root, project = map(Path, sys.argv[1:])
 original = {canonicalize_name(k): str(v) for k, v in json.loads((root / "original-distributions.json").read_text(encoding="utf-8")).items()}
 active = {}
-security_packages = {"certifi", "pip", "setuptools", "wheel"}
+security_packages = {"certifi", "pip", "setuptools", "wheel", "brotli", "pillow"}
 security_minimums = {
     "certifi": (2026, 10, 19),
     "pip": (26, 2, 2),
     "setuptools": (84, 1, 0),
     "wheel": (0, 46, 2),
+    "brotli": (1, 2, 1),
+    "pillow": (13, 0, 0),
 }
 for raw in (project / "packaging" / "release-constraints.txt").read_text(encoding="utf-8").splitlines():
     line = raw.partition("#")[0].strip()

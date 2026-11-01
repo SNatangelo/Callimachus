@@ -848,8 +848,28 @@ def test_final_notices_and_public_linux_launcher_are_assembled(monkeypatch, tmp_
     notices.mkdir()
     (notices / "index.json").write_text("[]", encoding="utf-8")
     embedded = tmp_path / "dist" / "Callimachus" / "_internal" / "THIRD-PARTY-NOTICES"
+    events = []
+    dependency_report = {"status": "passed"}
+    monkeypatch.setattr(
+        build, "current_source_revision",
+        lambda current_root: events.append(("source-revision", current_root)) or "a" * 40,
+    )
+    monkeypatch.setattr(
+        build, "run_prebuild_audit",
+        lambda current_root: events.append(("audit", current_root)) or dependency_report,
+    )
+
+    def bind_audit(current_root, distribution, report, *, source_revision):
+        assert source_revision == "a" * 40
+        assert report is dependency_report
+        assert (distribution / "LICENSE").is_file()
+        assert (distribution / "THIRD-PARTY-NOTICES" / "index.json").is_file()
+        events.append(("bind", current_root, distribution))
+
+    monkeypatch.setattr(build, "bind_frozen_audit", bind_audit)
 
     def fake_build(_arguments):
+        events.append(("pyinstaller",))
         executable = tmp_path / "dist" / "Callimachus" / "Callimachus"
         executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_bytes(b"PyInstaller executable")
@@ -879,6 +899,12 @@ def test_final_notices_and_public_linux_launcher_are_assembled(monkeypatch, tmp_
     assert (embedded / "index.json").read_text(encoding="utf-8") == "[1]"
     assert (tmp_path / "dist" / "THIRD-PARTY-NOTICES" / "python.txt").read_text() == "PSF"
     assert checked == [notices, embedded, tmp_path / "dist" / "THIRD-PARTY-NOTICES"]
+    assert events == [
+        ("source-revision", build.ROOT),
+        ("audit", build.ROOT),
+        ("pyinstaller",),
+        ("bind", build.ROOT, tmp_path / "dist"),
+    ]
     bundle = tmp_path / "dist" / "Callimachus"
     public_launcher = bundle / "Callimachus"
     assert public_launcher.read_bytes() == (ROOT / "packaging" / "linux-launcher.sh").read_bytes()
@@ -947,6 +973,15 @@ def test_non_macos_bundle_finalization_does_not_change_resources(monkeypatch, tm
 def test_windows_build_ignores_unrelated_runner_toolchain_dlls(monkeypatch, tmp_path):
     monkeypatch.syspath_prepend(str(ROOT / "packaging"))
     build = _load("desktop_build_windows_path", "build_desktop.py")
+    events = []
+    monkeypatch.setattr(
+        build, "current_source_revision",
+        lambda current_root: events.append(("source-revision", current_root)) or "a" * 40,
+    )
+    monkeypatch.setattr(
+        build, "run_prebuild_audit",
+        lambda current_root: events.append(("audit", current_root)) or {"status": "passed"},
+    )
     monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
     monkeypatch.setattr(build, "build_arguments", lambda: ["run.py"])
     monkeypatch.setattr(build.sys, "platform", "win32")
@@ -959,6 +994,7 @@ def test_windows_build_ignores_unrelated_runner_toolchain_dlls(monkeypatch, tmp_
     entry = ModuleType("PyInstaller.__main__")
 
     def fake_build(_arguments):
+        events.append(("pyinstaller",))
         captured.append(build.os.environ["PATH"])
         raise RuntimeError("stopped after checking PATH")
 
@@ -971,6 +1007,9 @@ def test_windows_build_ignores_unrelated_runner_toolchain_dlls(monkeypatch, tmp_
     assert str(tmp_path / "python") in captured[0]
     assert str(tmp_path / "Windows" / "System32") in captured[0]
     assert build.os.environ["PATH"] == str(tmp_path / "Java")
+    assert events == [
+        ("source-revision", build.ROOT), ("audit", build.ROOT), ("pyinstaller",),
+    ]
 
 
 def test_windows_bundle_uses_system_vc_runtime(monkeypatch, tmp_path):
@@ -1086,6 +1125,11 @@ def test_archive_keeps_entire_distribution_and_checksum(monkeypatch, tmp_path):
     (dist / "THIRD-PARTY-NOTICES" / "README.txt").write_text("notices", encoding="utf-8")
     monkeypatch.setattr(archiver, "DIST", dist)
     monkeypatch.setattr(archiver, "ARTIFACTS", tmp_path / "artifacts")
+    verified = []
+    monkeypatch.setattr(
+        archiver, "verify_frozen_dependencies",
+        lambda root, distribution: verified.append((root, distribution)),
+    )
 
     archive = archiver.archive("linux-x64")
     with tarfile.open(archive) as content:
@@ -1110,6 +1154,7 @@ def test_archive_keeps_entire_distribution_and_checksum(monkeypatch, tmp_path):
     assert len(windows_digest) == 64
     assert all(byte in b"0123456789abcdef" for byte in windows_digest.encode("ascii"))
     assert windows_checksum.count(b"\n") == 1 and b"\r" not in windows_checksum
+    assert verified == [(archiver.ROOT, dist), (archiver.ROOT, dist)]
 
 
 def test_archive_rejects_missing_executable(monkeypatch, tmp_path):
@@ -1422,3 +1467,74 @@ def test_browser_driver_smoke_rejects_missing_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(smoke, "DIST", tmp_path)
     with pytest.raises(SystemExit, match="browser driver is missing"):
         smoke.smoke_browser_driver({})
+
+
+def test_desktop_dependency_audit_blocks_before_pyinstaller(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_audit_block", "build_desktop.py")
+    tool_calls = []
+
+    def blocked(_root):
+        raise RuntimeError("dependency audit blocked")
+
+    monkeypatch.setattr(build, "current_source_revision", lambda _root: "a" * 40)
+    monkeypatch.setattr(build, "run_prebuild_audit", blocked)
+    pyinstaller = ModuleType("PyInstaller")
+    entry = ModuleType("PyInstaller.__main__")
+    entry.run = lambda *_args: tool_calls.append("PyInstaller")
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller)
+    monkeypatch.setitem(sys.modules, "PyInstaller.__main__", entry)
+
+    with pytest.raises(RuntimeError, match="dependency audit blocked"):
+        build.main()
+
+    assert tool_calls == []
+
+
+
+
+def test_desktop_rejects_source_before_audit_or_pyinstaller(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_dirty_source_block", "build_desktop.py")
+    events = []
+
+    def reject_source(_root):
+        events.append("source")
+        raise RuntimeError("clean source Git checkout required")
+
+    monkeypatch.setattr(build, "current_source_revision", reject_source)
+    monkeypatch.setattr(build, "run_prebuild_audit", lambda _root: events.append("audit"))
+    pyinstaller = ModuleType("PyInstaller")
+    entry = ModuleType("PyInstaller.__main__")
+    entry.run = lambda *_args: events.append("PyInstaller")
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller)
+    monkeypatch.setitem(sys.modules, "PyInstaller.__main__", entry)
+
+    with pytest.raises(RuntimeError, match="clean source Git checkout"):
+        build.main()
+
+    assert events == ["source"]
+
+
+def test_archive_dependency_audit_blocks_before_archive_creation(monkeypatch, tmp_path):
+    archiver = _load("desktop_archive_audit_block", "archive_desktop.py")
+    dist = tmp_path / "dist"
+    executable = dist / "Callimachus" / "Callimachus"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"executable")
+    artifacts = tmp_path / "artifacts"
+    monkeypatch.setattr(archiver, "DIST", dist)
+    monkeypatch.setattr(archiver, "ARTIFACTS", artifacts)
+    calls = []
+
+    def blocked(root, distribution):
+        calls.append((root, distribution))
+        raise RuntimeError("fresh frozen audit blocked")
+
+    monkeypatch.setattr(archiver, "verify_frozen_dependencies", blocked)
+
+    with pytest.raises(RuntimeError, match="fresh frozen audit blocked"):
+        archiver.archive("linux-x64")
+
+    assert calls == [(archiver.ROOT, dist)]
+    assert not artifacts.exists()

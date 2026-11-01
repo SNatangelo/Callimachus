@@ -194,8 +194,9 @@ PY
 "$BUILD_PYTHON" -m venv "$AQT_VENV"
 "$AQT_VENV/bin/python" "$ROOT/packaging/bootstrap_pip.py"
 "$AQT_VENV/bin/python" -m pip install --only-binary=:all: \
-    "$AQT_WHEEL" cmake==4.4.4 ninja==1.13.2 py7zr==1.0.0
+    "$AQT_WHEEL" cmake==4.4.4 ninja==1.13.2 py7zr==1.0.0 packaging==26.3
 "$AQT_VENV/bin/python" -m pip check
+"$AQT_VENV/bin/python" "$ROOT/packaging/dependency_audit.py" --report "$WORK_ROOT/aqt-dependency-audit.json"
 "$AQT_VENV/bin/python" -m pip freeze --all > "$WORK_ROOT/toolchain-environment.txt"
 
 "$AQT_VENV/bin/aqt" list-qt mac desktop --archives "$TARGET_VERSION" clang_64 > "$WORK_ROOT/qt-archives.txt"
@@ -274,6 +275,7 @@ PY
 "$BUILD_VENV/bin/python" -m pip install \
     -c "$ROOT/packaging/release-constraints.txt" -r "$SOURCE_DIR/requirements.txt"
 "$BUILD_VENV/bin/python" -m pip check
+"$BUILD_VENV/bin/python" "$ROOT/packaging/dependency_audit.py" --report "$WORK_ROOT/pyside-dependency-audit.json"
 "$BUILD_VENV/bin/python" -m pip freeze --all > "$WORK_ROOT/source-build-environment.txt"
 
 (

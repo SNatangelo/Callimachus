@@ -13,5 +13,6 @@ pypdfium2>=4            # render PDF pages to images (bundles the PDFium binary)
 # the old package caps at Python <3.13, so it cannot install on 3.13+.
 # core/fetch/extraction/ocr.py imports either name, so both layouts keep working.
 rapidocr>=3             # OCR engine with bundled models (CPU, no torch)
+Pillow>=13.0.0          # patched image decoders; source OCR requires Python 3.11+
 onnxruntime>=1.23; sys_platform == "darwin" and platform_machine == "x86_64"  # latest Intel macOS wheel
 onnxruntime>=1.24; sys_platform != "darwin" or platform_machine != "x86_64"  # inference engine

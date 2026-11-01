@@ -67,3 +67,6 @@ PARSER_REWORK_PLAN.md
 
 # Preserved local native toolchains and verified dependency artifacts
 /build-cache/
+/build/security-audit/
+
+/build/security-pillow/

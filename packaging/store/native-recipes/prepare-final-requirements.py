@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import re
 
-SECURITY_OVERRIDE_PACKAGES={'certifi','pip','setuptools','wheel'}
-SECURITY_MINIMUMS={'certifi':'2026.10.19','pip':'26.2.2','setuptools':'84.1.0','wheel':'0.46.2'}
+SECURITY_OVERRIDE_PACKAGES={'certifi','pip','setuptools','wheel','brotli','pillow'}
+SECURITY_MINIMUMS={'certifi':'2026.10.19','pip':'26.2.2','setuptools':'84.1.0','wheel':'0.46.2','brotli':'1.2.1','pillow':'13.0.0'}
 
 def canonicalize(name):
     return re.sub(r'[-_.]+', '-', name).lower()

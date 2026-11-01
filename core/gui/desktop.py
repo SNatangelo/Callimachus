@@ -1116,7 +1116,7 @@ def create_desktop_window(
             self.brand_logo = logo
             self._update_brand_logo()
             row.addWidget(logo)
-            version = QtWidgets.QLabel("2.0.0", header)
+            version = QtWidgets.QLabel((resource_root() / "VERSION").read_text(encoding="utf-8").strip(), header)
             version.setObjectName("mutedText")
             row.addWidget(version)
             row.addStretch()

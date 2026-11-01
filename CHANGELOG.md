@@ -2,7 +2,9 @@
 
 ## 2.0.1 — 2026-11-01
 
-Security update: refresh certificate trust data used for HTTPS downloads, bootstrap pip 26.2.2 from a SHA-256-verified wheel before dependency installation, and update setuptools and wheel to patched releases.
+Security update for certificate trust, HTTP decompression and image processing, with patched packaging dependencies.
+
+Release packaging now blocks dependencies with known vulnerabilities that have a published fix, including when reusing a cached runtime or repackaging an existing distribution.
 
 ## 2.0.0 — 2026-10-31
 

@@ -671,6 +671,35 @@ def test_console_live_tail_stays_bounded_and_export_is_byte_identical(
     assert app is not None
 
 
+def test_header_version_uses_frozen_resource_root_version_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6 import QtWidgets
+    from core.app import runtime_paths
+    import core.gui.desktop as desktop
+
+    bundle_root = tmp_path / "frozen-resource-root"
+    bundle_root.mkdir()
+    version = "9.8.7-preview+bundle-fixture"
+    (bundle_root / "VERSION").write_text(version + "\n", encoding="utf-8")
+    monkeypatch.setattr(runtime_paths.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runtime_paths.sys, "_MEIPASS", str(bundle_root), raising=False)
+    monkeypatch.setattr(desktop, "user_data_root", lambda: tmp_path / "private-user-data")
+    monkeypatch.setattr(desktop, "_load_settings_environment_preferences", lambda: [])
+    assert desktop.resource_root() == bundle_root.resolve()
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    window = desktop.create_desktop_window(language="en")
+    try:
+        header = window.findChild(QtWidgets.QFrame, "brandHeader")
+        assert header is not None
+        labels = header.findChildren(QtWidgets.QLabel)
+        assert [label.text() for label in labels if label.text() == version] == [version]
+    finally:
+        window.close()
+        app.processEvents()
+
+
 
 
 

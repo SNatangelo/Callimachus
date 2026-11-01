@@ -101,18 +101,45 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libegl1 libgl1 libfontconfig1 libfreetype6 libgtk-3-0 \
+            libegl1 libgl1 libfontconfig1 libfreetype6 libgtk-3-0 patchelf \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0
       - name: Bootstrap verified pip before network installs
         if: runner.os != 'macOS'
         run: python packaging/bootstrap_pip.py
+      - name: Ensure pinned packaging and Brotli before Pillow validation
+        if: runner.os == 'Windows'
+        run: python packaging/prepare_windows_pillow.py --ensure-parent-packaging
+      - name: Fingerprint verified Windows Pillow toolchain
+        id: windows-pillow
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python packaging/prepare_windows_pillow.py --fingerprint >> $env:GITHUB_OUTPUT
+      - uses: actions/cache@0c45773b623bea8c8e75f6c82c208c3cf94ea4f # v4.2.4
+        if: runner.os == 'Windows'
+        with:
+          path: build/security-pillow/cache
+          key: ${{ steps.windows-pillow.outputs.key }}
+      - name: Build or restore verified Windows Pillow wheel
+        if: runner.os == 'Windows'
+        run: python packaging/prepare_windows_pillow.py
+      - name: Install qualified Windows Pillow before runtime dependencies
+        if: runner.os == 'Windows'
+        run: >-
+          python packaging/prepare_pillow.py
+          --wheel build/security-pillow/cache/pillow-13.0.0-1callimachus-cp313-cp313-win_amd64.whl
+          --install
       - name: Install runtime and build dependencies on the runner
         shell: bash
         run: |
           python -m pip install --only-binary=:all: -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt -r requirements-rag.txt -c packaging/release-constraints.txt
           python -m pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt
+      - name: Qualify Pillow bundled Brotli on Linux and macOS
+        if: runner.os != 'Windows'
+        run: python packaging/prepare_pillow.py --install
+      - name: Audit installed runtime and build dependencies
+        run: python packaging/dependency_audit.py --report build/security-audit/release.json
       - name: Verify pinned macOS CA bundle for standard-library HTTPS
         if: runner.os == 'macOS'
         env:

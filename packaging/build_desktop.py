@@ -14,10 +14,25 @@ import subprocess
 import sys
 from pathlib import Path, PureWindowsPath
 
+import importlib.util
+
 from collect_notices import (
     EXTERNAL_WINDOWS_RUNTIME, _bundled_binaries, _is_external_windows_runtime,
     add_native_notices, add_qt_attributions, collect, verify_notice_inventory,
 )
+
+
+# Load the sibling gate even when a caller imports this builder by file path.
+_audit_spec = importlib.util.spec_from_file_location(
+    "_callimachus_dependency_audit", Path(__file__).with_name("dependency_audit.py"),
+)
+if _audit_spec is None or _audit_spec.loader is None:
+    raise RuntimeError("the dependency security gate is missing")
+_dependency_audit = importlib.util.module_from_spec(_audit_spec)
+_audit_spec.loader.exec_module(_dependency_audit)
+bind_frozen_audit = _dependency_audit.bind_frozen_audit
+run_prebuild_audit = _dependency_audit.run_prebuild_audit
+current_source_revision = _dependency_audit._revision
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -311,6 +326,8 @@ def _externalize_windows_runtime(analysis_toc: Path) -> frozenset[str]:
 
 
 def main() -> None:
+    source_revision = current_source_revision(ROOT)
+    dependency_report = run_prebuild_audit(ROOT)
     cache = BUILD_ROOT / "cache"
     temporary = BUILD_ROOT / "tmp"
     cache.mkdir(parents=True, exist_ok=True)
@@ -360,6 +377,7 @@ def main() -> None:
     shutil.copy2(ROOT / "LICENSE", distribution / "LICENSE")
     _finalize_macos_bundle()
     _finalize_linux_bundle()
+    bind_frozen_audit(ROOT, distribution, dependency_report, source_revision=source_revision)
 
 
 if __name__ == "__main__":

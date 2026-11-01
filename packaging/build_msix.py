@@ -17,8 +17,21 @@ import tempfile
 import uuid
 import zipfile
 from pathlib import Path
+
+import importlib.util
 from typing import Iterable
 from xml.etree import ElementTree as ET
+
+
+# Load the sibling gate even when a caller imports this builder by file path.
+_audit_spec = importlib.util.spec_from_file_location(
+    "_callimachus_dependency_audit", Path(__file__).with_name("dependency_audit.py"),
+)
+if _audit_spec is None or _audit_spec.loader is None:
+    raise RuntimeError("the dependency security gate is missing")
+_dependency_audit = importlib.util.module_from_spec(_audit_spec)
+_audit_spec.loader.exec_module(_dependency_audit)
+verify_frozen_dependencies = _dependency_audit.verify_frozen_dependencies
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -474,6 +487,7 @@ def build(
         framework_appx=framework_appx,
     )
     _validate_distribution()
+    verify_frozen_dependencies(ROOT, DIST)
     framework_version, _ = _framework_manifest(framework_appx)
     makeappx_executable = _resolve_makeappx(makeappx)
     makepri_executable = _resolve_makepri(makepri, makeappx_executable)

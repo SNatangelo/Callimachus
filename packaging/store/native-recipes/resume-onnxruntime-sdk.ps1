@@ -7,6 +7,16 @@ $taskActual=($taskRLine -split '=>',2)[1].Trim()
 if (-not [string]::Equals([IO.Path]::GetFullPath($taskActual),[IO.Path]::GetFullPath($taskExpected),[StringComparison]::OrdinalIgnoreCase)) {throw 'R: must target workspace native directory'}
 . build/desktop/native-14.40/activate.ps1
 $env:CL='/wd4189 /external:env:INCLUDE'
+$taskAuditScript=Join-Path (Get-Location) 'packaging/dependency_audit.py'
+$taskBootstrapScript=Join-Path (Get-Location) 'packaging/bootstrap_pip.py'
+if (-not (Test-Path -LiteralPath $taskAuditScript)) {throw 'Dependency security gate is missing'}
+foreach ($taskAuditPython in @('R:/bootstrap/Scripts/python.exe')) {
+    & $taskAuditPython $taskBootstrapScript
+    if ($LASTEXITCODE -ne 0) {throw 'Could not qualify the native build environment pip'}
+    $taskAuditReport=Join-Path $taskExpected ('dependency-audit-resume-onnxruntime-sdk-' + ([guid]::NewGuid().ToString('N')) + '.json')
+    & $taskAuditPython $taskAuditScript --report $taskAuditReport
+    if ($LASTEXITCODE -ne 0) {throw 'Dependency security gate blocked the native resume build'}
+}
 $taskCMake=Join-Path $taskExpected 'bootstrap/Lib/site-packages/cmake/data/bin/cmake.exe'
 & $taskCMake --build R:/onnxruntime-build/Release --config Release --target onnxruntime_pybind11_state -- -j4 2>&1 | Tee-Object build/desktop/native-14.40/onnxruntime-build-5.log
 if ($LASTEXITCODE -ne 0) {exit $LASTEXITCODE}
