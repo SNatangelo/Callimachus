@@ -54,7 +54,7 @@ The package identity must match Partner Center:
 | Publisher | `CN=C9B83C55-1183-42F2-BE26-199806402671` |
 | Publisher display name | `Stefano Natangelo` |
 | Architecture | x64 |
-| Application version | 2.0.0 |
+| Application version | 2.0.1 |
 | Minimum Windows | 10.0.17763.0 |
 
 From a clean checkout with the tested onedir distribution:
@@ -66,7 +66,7 @@ python packaging/build_msix.py `
   --identity-name 'StefanoNatangelo.Callimachus' `
   --publisher 'CN=C9B83C55-1183-42F2-BE26-199806402671' `
   --publisher-display-name 'Stefano Natangelo' `
-  --version '2.0.0.0' `
+  --version '2.0.1.0' `
   --framework-appx $FrameworkAppx `
   --makeappx $MakeAppx
 if ($LASTEXITCODE -ne 0) { throw 'MSIX assembly failed' }

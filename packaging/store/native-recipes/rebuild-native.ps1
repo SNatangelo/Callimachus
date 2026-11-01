@@ -283,7 +283,9 @@ function Run-Stage {
             Ensure-BootstrapPython
             $cmakeWheel = Join-Path $ToolsRoot '_downloads/cmake-4.4.3-py3-none-win_amd64.whl'
             $ninjaWheel = Join-Path $ToolsRoot '_downloads/ninja-1.13.2-py3-none-win_amd64.whl'
-            Assert-Inputs @($cmakeWheel, $ninjaWheel, (Join-Path $NativeRoot 'bootstrap-requirements.txt'))
+            $pipBootstrap = Join-Path $projectRoot 'packaging/bootstrap_pip.py'
+            Assert-Inputs @($cmakeWheel, $ninjaWheel, (Join-Path $NativeRoot 'bootstrap-requirements.txt'), $pipBootstrap)
+            Invoke-Python -Label 'secure-bootstrap-pip' -Python $bootstrapPythonExe -Arguments @($pipBootstrap) -WorkingDirectory $projectRoot
             Invoke-Python -Label 'install-hash-verified-cmake-ninja' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-index', '--no-deps', $cmakeWheel, $ninjaWheel) -WorkingDirectory $NativeRoot
             Invoke-Python -Label 'bootstrap-pinned-native-build-tools' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-deps', '-r', (Join-Path $NativeRoot 'bootstrap-requirements.txt')) -WorkingDirectory $NativeRoot
             foreach ($tool in @(
@@ -363,11 +365,13 @@ function Run-Stage {
             $pysideSource = Join-Path $NativeRoot 'qt-sources/pyside-setup-everywhere-src-6.11.2'
             $pysidePython = Join-Path $NativeRoot 'pyside-build/venv/Scripts/python.exe'
             $pysideSetup = Join-Path $pysideSource 'setup.py'
-            Assert-Inputs @($pysideSetup, (Join-Path $NativeRoot 'qt-install/bin/qtpaths.exe'), $cmakeExe, $ninjaExe, (Join-Path $LLVMRoot 'bin/libclang.dll'))
+            $pipBootstrap = Join-Path $projectRoot 'packaging/bootstrap_pip.py'
+            Assert-Inputs @($pysideSetup, (Join-Path $NativeRoot 'qt-install/bin/qtpaths.exe'), $cmakeExe, $ninjaExe, (Join-Path $LLVMRoot 'bin/libclang.dll'), $pipBootstrap)
             if (-not (Test-Path -LiteralPath $pysidePython)) {
                 Invoke-Python -Label 'pyside-venv' -Python $buildPythonExe -Arguments @('-m', 'venv', (Join-Path $NativeRoot 'pyside-build/venv')) -WorkingDirectory $NativeRoot
             }
-            Invoke-Python -Label 'pyside-build-tools' -Python $pysidePython -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', 'setuptools==78.1.0', 'wheel==0.46.3', 'Cython==3.3.0', 'packaging==26.3') -WorkingDirectory $pysideSource
+            Invoke-Python -Label 'secure-pyside-build-pip' -Python $pysidePython -Arguments @($pipBootstrap) -WorkingDirectory $pysideSource
+            Invoke-Python -Label 'pyside-build-tools' -Python $pysidePython -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', 'setuptools==84.1.0', 'wheel==0.46.3', 'Cython==3.3.0', 'packaging==26.3') -WorkingDirectory $pysideSource
             if ($Build) { $env:LLVM_INSTALL_DIR = $LLVMRoot }
             $pysideBuildBase = Join-Path $NativeRoot 'pyside-build/build'
             $qtOptions = @("--qtpaths=$(Join-Path $NativeRoot 'qt-install/bin/qtpaths.exe')", "--cmake=$cmakeExe", '--make-spec=ninja', '--module-subset=Core,Gui,Widgets,Network,Svg,Test', '--ignore-git')
@@ -375,7 +379,11 @@ function Run-Stage {
             Invoke-Python -Label 'pyside-build-modules-and-wheels' -Python $pysidePython -Arguments $pysideArgs -WorkingDirectory $pysideSource
         }
         'NativeWheels' {
-            Assert-Inputs @($bootstrapPythonExe, (Join-Path $NativeRoot 'prepare-openblas.py'))
+            $pipBootstrap = Join-Path $projectRoot 'packaging/bootstrap_pip.py'
+            $releaseConstraints = Join-Path $projectRoot 'packaging/release-constraints.txt'
+            Assert-Inputs @($bootstrapPythonExe, (Join-Path $NativeRoot 'prepare-openblas.py'), $pipBootstrap, $releaseConstraints)
+            Invoke-Python -Label 'secure-native-wheel-pip' -Python $bootstrapPythonExe -Arguments @($pipBootstrap) -WorkingDirectory $projectRoot
+            Invoke-Python -Label 'pin-native-wheel-build-tools' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'install', '--only-binary=:all:', '--disable-pip-version-check', '--no-input', '-c', $releaseConstraints, 'setuptools==84.1.0', 'wheel==0.46.3') -WorkingDirectory $projectRoot
             Ensure-RustEnvironment
             if ($Build) { New-Item -ItemType Directory -Force -Path $wheelsRoot | Out-Null }
             Invoke-Python -Label 'prepare-openblas-pkgconfig' -Python $bootstrapPythonExe -Arguments @((Join-Path $NativeRoot 'prepare-openblas.py')) -WorkingDirectory $NativeRoot
@@ -575,12 +583,19 @@ function Run-Stage {
             }
         }
         'PyInstaller' {
-            Assert-Inputs @($bootstrapPythonExe, (Join-Path $NativeRoot 'run_waf.py'), (Join-Path $sourceRoot 'pyinstaller-source/pyinstaller-6.22.3/pyproject.toml'))
+            $pipBootstrap = Join-Path $projectRoot 'packaging/bootstrap_pip.py'
+            $releaseConstraints = Join-Path $projectRoot 'packaging/release-constraints.txt'
+            Assert-Inputs @($bootstrapPythonExe, (Join-Path $NativeRoot 'run_waf.py'), (Join-Path $sourceRoot 'pyinstaller-source/pyinstaller-6.22.3/pyproject.toml'), $pipBootstrap, $releaseConstraints)
+            Invoke-Python -Label 'secure-pyinstaller-pip' -Python $bootstrapPythonExe -Arguments @($pipBootstrap) -WorkingDirectory $projectRoot
+            Invoke-Python -Label 'pin-pyinstaller-build-tools' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'install', '--only-binary=:all:', '--disable-pip-version-check', '--no-input', '-c', $releaseConstraints, 'setuptools==84.1.0', 'wheel==0.46.3') -WorkingDirectory $projectRoot
             Invoke-Python -Label 'pyinstaller-bootloader' -Python $bootstrapPythonExe -Arguments @((Join-Path $NativeRoot 'run_waf.py'), 'all') -WorkingDirectory $NativeRoot
             Invoke-Python -Label 'wheel-pyinstaller' -Python $bootstrapPythonExe -Arguments @('-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation', '--wheel-dir', $wheelsRoot, (Join-Path $sourceRoot 'pyinstaller-source/pyinstaller-6.22.3')) -WorkingDirectory $NativeRoot
         }
         'FinalInventory' {
-            Assert-Inputs @($finalPythonExe, (Join-Path $NativeRoot 'original-distributions.json'), (Join-Path $NativeRoot 'final-pure-requirements-no-omega.txt'), (Join-Path $NativeRoot 'stage-original-omegaconf.py'))
+            $pipBootstrap = Join-Path $projectRoot 'packaging/bootstrap_pip.py'
+            $releaseConstraints = Join-Path $projectRoot 'packaging/release-constraints.txt'
+            Assert-Inputs @($finalPythonExe, (Join-Path $NativeRoot 'original-distributions.json'), (Join-Path $NativeRoot 'final-pure-requirements-no-omega.txt'), (Join-Path $NativeRoot 'stage-original-omegaconf.py'), $pipBootstrap, $releaseConstraints)
+            Invoke-Python -Label 'secure-final-inventory-pip' -Python $finalPythonExe -Arguments @($pipBootstrap) -WorkingDirectory $NativeRoot
             Invoke-Python -Label 'install-pure-pins' -Python $finalPythonExe -Arguments @('-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--no-deps', '-r', (Join-Path $NativeRoot 'final-pure-requirements-no-omega.txt')) -WorkingDirectory $NativeRoot
             $nativePins = @('brotli==1.2.0', 'cffi==2.1.1', 'charset-normalizer==3.5.1', 'cryptography==50.0.1', 'greenlet==3.5.6', 'numpy==2.5.3', 'onnxruntime==1.29.0', 'opencv-python==5.0.0.93', 'pillow==12.3.0', 'pyclipper==1.4.0', 'pyinstaller==6.22.3', 'pymupdf==1.28.0', 'PyYAML==6.0.3', 'shapely==2.1.2', 'PySide6==6.11.2', 'PySide6_Addons==6.11.2', 'PySide6_Essentials==6.11.2', 'shiboken6==6.11.2')
             foreach ($pin in $nativePins) {
@@ -589,19 +604,46 @@ function Run-Stage {
             Invoke-Python -Label 'stage-original-omegaconf' -Python $finalPythonExe -Arguments @((Join-Path $NativeRoot 'stage-original-omegaconf.py'), '--original-site-packages', (Join-Path $NativeRoot 'original-inputs/omegaconf'), '--destination-site-packages', (Join-Path $NativeRoot 'final-venv/Lib/site-packages')) -WorkingDirectory $NativeRoot
             Stage-FrameworkRuntime
             $validation = @'
-import importlib.metadata as md, json, sys
+import importlib.metadata as md, json, re, sys
 from packaging.utils import canonicalize_name
 from pathlib import Path
-root = Path(sys.argv[1])
-expected = {canonicalize_name(k): str(v) for k, v in json.loads((root / "original-distributions.json").read_text(encoding="utf-8")).items()}
+root, project = map(Path, sys.argv[1:])
+original = {canonicalize_name(k): str(v) for k, v in json.loads((root / "original-distributions.json").read_text(encoding="utf-8")).items()}
+active = {}
+security_packages = {"certifi", "pip", "setuptools", "wheel"}
+security_minimums = {
+    "certifi": (2026, 10, 19),
+    "pip": (26, 2, 2),
+    "setuptools": (84, 1, 0),
+    "wheel": (0, 46, 2),
+}
+for raw in (project / "packaging" / "release-constraints.txt").read_text(encoding="utf-8").splitlines():
+    line = raw.partition("#")[0].strip()
+    match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+-]+)", line)
+    if match:
+        name = canonicalize_name(match.group(1))
+        if name in security_packages:
+            active[name] = match.group(2)
+for name, minimum in security_minimums.items():
+    actual = active.get(name)
+    if actual is None or not re.fullmatch(r"\d+(?:\.\d+)*", actual):
+        raise SystemExit(f"release constraints are missing a supported active security pin: {name}")
+    if tuple(map(int, actual.split("."))) < minimum:
+        raise SystemExit(f"active security pin is below the required minimum: {name} {actual}")
+expected = dict(original)
+for name in tuple(expected):
+    if name in active:
+        expected[name] = active[name]
+expected["pip"] = active["pip"]
 site = root / "final-venv" / "Lib" / "site-packages"
 actual = {canonicalize_name(d.metadata["Name"]): d.version for d in md.distributions(path=[str(site)]) if d.metadata.get("Name")}
 diff = {name: (version, actual.get(name)) for name, version in expected.items() if actual.get(name) != version}
 if diff:
-    raise SystemExit("47-pin inventory mismatch: " + repr(diff))
-print("PINNED_DISTRIBUTIONS=" + str(len(expected)))
+    raise SystemExit("current runtime inventory mismatch against original records and active security pins: " + repr(diff))
+print("ORIGINAL_DISTRIBUTIONS=" + str(len(original)))
+print("ACTIVE_PIP=" + actual["pip"])
 '@
-            Invoke-Python -Label 'validate-47-version-inventory' -Python $finalPythonExe -Arguments @('-c', $validation, $NativeRoot) -WorkingDirectory $NativeRoot
+            Invoke-Python -Label 'validate-current-version-inventory' -Python $finalPythonExe -Arguments @('-c', $validation, $NativeRoot, $projectRoot) -WorkingDirectory $NativeRoot
         }
     }
 }

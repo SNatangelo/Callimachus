@@ -16,6 +16,9 @@ bm25s==0.3.10
 PyMuPDF==1.28.0
 pdfminer.six==20260107
 Brotli==1.2.0
-certifi==2026.6.17
+certifi==2026.10.19
+pip==26.2.2
+setuptools==84.1.0
+wheel==0.46.3
 flatbuffers==25.12.19
 antlr4-python3-runtime==4.9.3

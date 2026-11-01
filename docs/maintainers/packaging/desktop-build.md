@@ -7,6 +7,18 @@ versioned scripts and constraints; a successful old binary or a private temporar
 build directory is not a substitute for the recipe. PyInstaller remains the
 desktop packager.
 
+Before any pip network operation, run `python packaging/bootstrap_pip.py` with
+the interpreter that will perform the installation. It verifies the pinned pip
+wheel over normal HTTPS, checks its size and SHA-256, installs it offline, and
+confirms its vendored certificate bundle is current. Release constraints pin
+certifi 2026.10.19, pip 26.2.2, setuptools 84.1.0 and wheel 0.46.3. These
+application/build-tool updates do not require rebuilding the matching Qt/PySide
+cache; preserve the original native build receipts as historical records.
+On macOS, the bootstrap explicitly loads the OS-provided `/etc/ssl/cert.pem`:
+Python.org's `Install Certificates.command` creates the certifi trust link later
+and itself needs a secure pip connection. If that system CA file is missing or
+invalid, bootstrapping stops before downloading or installing anything.
+
 ### Reuse native dependencies before rebuilding them
 
 Keep verified native artifacts in a persistent workspace `build-cache` outside
@@ -463,7 +475,7 @@ Create the MSIX with the reserved Store identity, publisher/display name, the
 qualified x64 Microsoft VCLibs APPX and MakeAppx/MakePri from the selected Windows SDK:
 
 ```sh
-python packaging/build_msix.py --identity-name "$IDENTITY_NAME" --publisher "$PUBLISHER" --publisher-display-name "$PUBLISHER_DISPLAY_NAME" --version 2.0.0.0 --framework-appx "$VCLIBS_APPX" --makeappx "$MAKEAPPX"
+python packaging/build_msix.py --identity-name "$IDENTITY_NAME" --publisher "$PUBLISHER" --publisher-display-name "$PUBLISHER_DISPLAY_NAME" --version 2.0.1.0 --framework-appx "$VCLIBS_APPX" --makeappx "$MAKEAPPX"
 ```
 
 The builder selects MakePri beside MakeAppx, then on PATH; use `--makepri` to
@@ -522,6 +534,6 @@ Replace both the application and its archive at every known test-package
 location. Updating a `.app` while leaving an older TAR beside it allows the old
 application to be restored accidentally. Match each copied archive's SHA-256 to
 the qualified artifact and inspect the embedded build revision before handing
-it to the tester; the shared display version `2.0.0` does not distinguish builds.
+it to the tester; the shared display version `2.0.1` does not distinguish builds.
 Keep the deployment receipt with the new qualification evidence and preserve
 settings, credentials, runs and test papers outside application replacement.

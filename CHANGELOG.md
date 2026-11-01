@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.1 — 2026-11-01
+
+Security update: refresh certificate trust data used for HTTPS downloads, bootstrap pip 26.2.2 from a SHA-256-verified wheel before dependency installation, and update setuptools and wheel to patched releases.
+
 ## 2.0.0 — 2026-10-31
 
 Callimachus 2.0 significantly extends the desktop application, source acquisition, Library management, and model configuration. The GUI, multi-model verification engine, manual review, OCR, history/resume, and redacted HTML export existed in 1.1.x; this release integrates and expands them. The deterministic `parse → resolve → fetch → verify → report` pipeline and its fail-closed evidence boundaries remain in place.

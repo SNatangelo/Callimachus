@@ -105,10 +105,12 @@ jobs:
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0
+      - name: Bootstrap verified pip before network installs
+        if: runner.os != 'macOS'
+        run: python packaging/bootstrap_pip.py
       - name: Install runtime and build dependencies on the runner
         shell: bash
         run: |
-          python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt -r requirements-rag.txt -c packaging/release-constraints.txt
           python -m pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt
       - name: Verify pinned macOS CA bundle for standard-library HTTPS
@@ -442,7 +444,7 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ github.sha }}
         run: |
           if [[ "$EVENT_NAME" == push || "$RELEASE_TAG_EXISTS" == true ]]; then
-            gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.0.md
+            gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.1.md
           else
-            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_COMMIT_SHA" --notes-file docs/releases/2.0.0.md
+            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_COMMIT_SHA" --notes-file docs/releases/2.0.1.md
           fi

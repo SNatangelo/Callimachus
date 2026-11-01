@@ -78,6 +78,7 @@ print(pins[0])
 PY
 )" || die "could not read the pinned certifi version"
 readonly CERTIFI_VERSION
+"$BASE_PYTHON" "$ROOT/packaging/bootstrap_pip.py"
 PIP_CONSTRAINT="$ROOT/packaging/release-constraints.txt" PIP_NO_INPUT=1 \
     /bin/sh "$CERTIFICATES_COMMAND"
 BASE_CERTIFICATE_INFO="$("$BASE_PYTHON" - <<'PY'
@@ -158,6 +159,7 @@ readonly RUNTIME_INFO="$("$RUNTIME_PYTHON" -c 'import platform,sys; print(".".jo
 check_native_slice "$RUNTIME_PYTHON"
 VENV_MINIMUMS="$(minimum_versions "$RUNTIME_PYTHON")" || die "could not validate virtual environment macOS minimum"
 readonly VENV_MINIMUMS
+"$RUNTIME_PYTHON" "$ROOT/packaging/bootstrap_pip.py"
 "$RUNTIME_PYTHON" -m pip --version >/dev/null
 
 "$RUNTIME_PYTHON" - "$ROOT" "$INSTALLER_URL" "$INSTALLER_SHA256" "$TARGET_ARCH" \

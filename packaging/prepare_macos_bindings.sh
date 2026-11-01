@@ -171,6 +171,7 @@ PY
 
 download_pinned "$PYSIDE_SOURCE_URL" "$SOURCE_ARCHIVE" "$PYSIDE_SOURCE_SHA256"
 download_pinned "$LIBCLANG_ARCHIVE_URL" "$LIBCLANG_ARCHIVE" "$LIBCLANG_ARCHIVE_SHA256"
+"$BUILD_PYTHON" "$ROOT/packaging/bootstrap_pip.py"
 "$BUILD_PYTHON" -m pip download --only-binary=:all: --no-deps --dest "$INPUT_DIR" aqtinstall==3.3.0
 [[ -f "$AQT_WHEEL" ]] || die "pinned aqtinstall wheel was not downloaded"
 "$BUILD_PYTHON" - "$AQT_WHEEL" "$AQT_WHEEL_SHA256" <<'PY'
@@ -191,6 +192,7 @@ PY
 
 # Keep the SDK and source-build toolchains isolated from the app runtime.
 "$BUILD_PYTHON" -m venv "$AQT_VENV"
+"$AQT_VENV/bin/python" "$ROOT/packaging/bootstrap_pip.py"
 "$AQT_VENV/bin/python" -m pip install --only-binary=:all: \
     "$AQT_WHEEL" cmake==4.4.4 ninja==1.13.2 py7zr==1.0.0
 "$AQT_VENV/bin/python" -m pip check
@@ -266,7 +268,11 @@ PY
 [[ -f "$SOURCE_DIR/requirements.txt" ]] || die "PySide source requirements are missing"
 
 "$BUILD_PYTHON" -m venv "$BUILD_VENV"
-"$BUILD_VENV/bin/python" -m pip install -r "$SOURCE_DIR/requirements.txt"
+"$BUILD_VENV/bin/python" "$ROOT/packaging/bootstrap_pip.py"
+"$BUILD_VENV/bin/python" -m pip install --only-binary=:all: \
+    -c "$ROOT/packaging/release-constraints.txt" setuptools==84.1.0 wheel==0.46.3
+"$BUILD_VENV/bin/python" -m pip install \
+    -c "$ROOT/packaging/release-constraints.txt" -r "$SOURCE_DIR/requirements.txt"
 "$BUILD_VENV/bin/python" -m pip check
 "$BUILD_VENV/bin/python" -m pip freeze --all > "$WORK_ROOT/source-build-environment.txt"
 

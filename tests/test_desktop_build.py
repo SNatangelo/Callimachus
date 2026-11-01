@@ -732,7 +732,7 @@ def test_manual_source_audit_uploads_verified_archives_without_publishing():
 
     release = workflow.split("\n  release:\n", 1)[1]
     assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
-    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.0.md' in release
+    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.1.md' in release
 
 
 def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):

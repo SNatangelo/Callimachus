@@ -7,6 +7,15 @@ inventory. Its hashes identify the published archives, not a new release.
 `native-recipes/` preserves the corresponding small build scripts and source /
 dependency inventories. Copy them to `build/desktop/native-14.40` before use.
 
+The source and distribution JSON files in `native-recipes/` are historical
+receipts; keep their recorded versions unchanged. Current release constraints
+secure active packaging with certifi 2026.10.19, pip 26.2.2, setuptools 84.1.0
+and wheel 0.46.3. `prepare-final-requirements.py` overlays only those security
+pins onto the historical pure-package list, and `rebuild-native.ps1` validates
+the final environment against the same active pins while retaining historical
+Qt/PySide versions. Run `python packaging/bootstrap_pip.py` before any pip
+network operation so the pinned pip wheel is verified before installation.
+
 `prepare_sources.py` recovers 22 hash-pinned public source archives and original
 upstream wheel inputs and places them in the recipe layout. Its `--list` mode
 prints the recovery plan without touching the build directory. It does not use
