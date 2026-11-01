@@ -43,7 +43,7 @@ def _mock_host_tools(helper, monkeypatch, perl_banner):
     }
     calls = []
     monkeypatch.setattr(
-        helper.shutil, "which", lambda name: rf"C:\host-tools\{name}.exe",
+        helper.shutil, "which", lambda name: str(Path('host-tools') / f'{name}.exe'),
     )
 
     def fake_output(args, **_kwargs):
@@ -376,6 +376,7 @@ def test_git_archive_fetch_is_public_exact_commit_and_ignores_user_git_auth(tmp_
     assert row["repository"] in fetch and row["ref"] in fetch
     archive = next(args for args, _env in calls if "archive" in args)
     assert row["commit"] in archive and "--format=tar" in archive
+    assert archive[1:3] == ["-c", "core.autocrlf=true"]
     env = next(env for args, env in calls if "fetch" in args)
     assert "GITHUB_TOKEN" not in env and "GH_TOKEN" not in env
     assert "GIT_CREDENTIAL_HELPER" not in env

@@ -328,7 +328,15 @@ def test_release_runner_builds_and_smokes_windows_installer():
     smoke = workflow.index("python packaging/smoke_windows_installer.py")
     archive = workflow.index("python packaging/archive_desktop.py")
     assert build < smoke < archive
-    assert workflow.count("if: runner.os == 'Windows'") == 2
+    for command in (
+        "python packaging/build_windows_installer.py",
+        "python packaging/smoke_windows_installer.py",
+    ):
+        matching_steps = [
+            step for step in workflow.split("\n      - ") if command in step
+        ]
+        assert len(matching_steps) == 1
+        assert "\n        if: runner.os == 'Windows'\n" in matching_steps[0]
 
 
 def test_smoke_reports_qt_failure_before_aggregate_check(monkeypatch, tmp_path):

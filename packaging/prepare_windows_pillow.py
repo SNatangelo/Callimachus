@@ -729,7 +729,7 @@ def create_git_archive(row, destination: Path, work: Path):
     if commit.lower() != row["commit"].lower():
         raise RuntimeError("AVIF dependency fetch resolved to a different commit")
     with destination.open("xb") as output:
-        subprocess.run([git, "archive", "--format=tar",
+        subprocess.run([git, "-c", "core.autocrlf=true", "archive", "--format=tar",
                         "--prefix=" + row["archive_prefix"] + "/", commit],
                        cwd=git_root, env=env, stdout=output, stderr=subprocess.PIPE,
                        check=True, timeout=600)
