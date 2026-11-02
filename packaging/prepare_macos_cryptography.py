@@ -131,6 +131,36 @@ def run(
     return result.stdout.strip()
 
 
+def build_cryptography_wheel(
+    *,
+    python: Path,
+    build_venv: Path,
+    wheelhouse: Path,
+    release_constraints: Path,
+    build_constraints: Path,
+    source_archive: Path,
+    env: dict[str, str],
+) -> str:
+    """Build from the authenticated source archive with its pinned backend."""
+    wheel_env = env.copy()
+    venv_bin = str(build_venv / "bin")
+    wheel_env["PATH"] = os.pathsep.join(
+        value for value in (venv_bin, wheel_env.get("PATH")) if value
+    )
+    return run(
+        [
+            str(python), "-m", "pip", "wheel",
+            "--no-build-isolation", "--no-cache-dir",
+            "--only-binary=cffi,pycparser",
+            "--wheel-dir", str(wheelhouse),
+            "-c", str(release_constraints),
+            "-c", str(build_constraints),
+            str(source_archive),
+        ],
+        env=wheel_env,
+    )
+
+
 def build_and_install_openssl(
     openssl_source: Path,
     *,
@@ -556,7 +586,15 @@ def main() -> int:
             "PIP_NO_INPUT": "1",
             "PYTHONNOUSERSITE": "1",
         })
-        run([str(vpy), "-m", "pip", "wheel", "--no-build-isolation", "--no-cache-dir", "--only-binary=cffi,pycparser", "--wheel-dir", str(wheelhouse), "-c", str(release_constraints), "-c", str(build_constraints), str(source_archive)], env=rust_env)
+        build_cryptography_wheel(
+            python=vpy,
+            build_venv=venv_path,
+            wheelhouse=wheelhouse,
+            release_constraints=release_constraints,
+            build_constraints=build_constraints,
+            source_archive=source_archive,
+            env=rust_env,
+        )
         wheels = list(wheelhouse.glob("cryptography-50.0.1-*.whl"))
         if len(wheels) != 1:
             raise RuntimeError(f"expected one built cryptography wheel, found {wheels}")

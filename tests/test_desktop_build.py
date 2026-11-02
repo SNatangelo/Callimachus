@@ -1706,6 +1706,62 @@ def test_static_openssl_license_is_added_with_valid_cryptography_wheel_record(tm
         assert record in archive.namelist()
 
 
+def test_macos_cryptography_wheel_build_prepends_venv_bin_to_rust_path(tmp_path, monkeypatch):
+    helper = _load("macos_cryptography_wheel_path", "prepare_macos_cryptography.py")
+    build_venv = tmp_path / "build-venv"
+    rust_bin = tmp_path / "rust-prefix" / "bin"
+    original_path = os.pathsep.join((str(rust_bin), "/usr/bin", "/bin", "/usr/sbin", "/sbin"))
+    wheelhouse = tmp_path / "wheelhouse"
+    release_constraints = tmp_path / "release-constraints.txt"
+    build_constraints = tmp_path / "build-constraints.txt"
+    source_archive = tmp_path / "cryptography-50.0.1.tar.gz"
+    env = {
+        "PATH": original_path,
+        "OPENSSL_DIR": str(tmp_path / "openssl-prefix"),
+        "OPENSSL_STATIC": "1",
+        "MACOSX_DEPLOYMENT_TARGET": "14.4",
+        "RUSTFLAGS": "-C link-arg=-mmacosx-version-min=14.4",
+    }
+    calls = []
+
+    def capture(args, **kwargs):
+        calls.append((list(args), kwargs.copy()))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(helper.subprocess, "run", capture)
+    result = helper.build_cryptography_wheel(
+        python=build_venv / "bin" / "python",
+        build_venv=build_venv,
+        wheelhouse=wheelhouse,
+        release_constraints=release_constraints,
+        build_constraints=build_constraints,
+        source_archive=source_archive,
+        env=env,
+    )
+
+    expected_command = [
+        str(build_venv / "bin" / "python"), "-m", "pip", "wheel",
+        "--no-build-isolation", "--no-cache-dir", "--only-binary=cffi,pycparser",
+        "--wheel-dir", str(wheelhouse),
+        "-c", str(release_constraints), "-c", str(build_constraints),
+        str(source_archive),
+    ]
+    expected_path = os.pathsep.join((str(build_venv / "bin"), original_path))
+    assert result == ""
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command == expected_command
+    assert kwargs["env"]["PATH"] == expected_path
+    assert kwargs["env"]["OPENSSL_DIR"] == env["OPENSSL_DIR"]
+    assert kwargs["env"]["OPENSSL_STATIC"] == env["OPENSSL_STATIC"]
+    assert kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"] == env["MACOSX_DEPLOYMENT_TARGET"]
+    assert kwargs["env"]["RUSTFLAGS"] == env["RUSTFLAGS"]
+    assert env["PATH"] == original_path
+    assert kwargs["check"] is True
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+
+
 def test_macos_openssl_build_and_install_are_separate_serial_make_calls(tmp_path, monkeypatch):
     helper = _load("macos_openssl_serial_build", "prepare_macos_cryptography.py")
     source = tmp_path / "openssl-3.5.9"
