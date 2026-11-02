@@ -1,11 +1,90 @@
 # Desktop packaging
 
+## Mandatory dependency security gate
+
+Every desktop build audits the actual Python environment, including transitive
+and build dependencies, before freezing. Portable ZIP/TAR, MSIX and NSIS packaging also verify the
+frozen distribution's recorded file hashes and runtime inventory, then repeat
+the audit before repackaging. An old cache or a previous passing report is not a
+substitute for a current check.
+
+The gate uses pinned `pip-audit` in a separate build-only environment and queries
+the Python Packaging Advisory Database through PyPI. Known vulnerabilities with
+a published fix block packaging; findings without a fix remain visible in the
+report. Missing packages, skipped checks, malformed responses, service outages
+and timeouts fail the gate. The auditor is not added to the shipped runtime.
+
+Run the same check without building:
+
+```sh
+python packaging/dependency_audit.py --report build/security-audit/check.json
+```
+
+Update affected requirements and release constraints to a compatible fixed
+version, run regressions, and rerun the audit before building. The gate never
+changes pins through `--fix`, silently ignores advisories, or merges dependency
+updates. Dependabot is configured to propose security updates and patch-version
+updates; its configuration becomes active on the repository's default branch.
+Custom/native pins still require review and qualification. The scan covers
+installed Python distribution metadata; private vendored copies and native
+components require upstream qualification as well. The pip bootstrap explicitly
+checks its vendored certificate bundle. These checks do not replace interpreter
+or OS security updates, or detect vulnerabilities that have not been reported.
+
+### Pillow native Brotli qualification
+
+Pillow 13.0.0 fixes the image-decoder advisories, but its upstream wheels still
+bundle Brotli 1.2.0. The release therefore also requires Brotli 1.2.1 inside
+Pillow; a clean Python-package advisory report alone is insufficient.
+
+After installing runtime requirements, Linux and macOS builders run:
+
+```sh
+python packaging/prepare_pillow.py --install
+```
+
+Run the Linux repair on the Ubuntu 22.04/glibc 2.35 baseline. macOS builds retain
+the application's 14.4 deployment target and native architecture. The helper
+verifies the upstream wheel and source hashes, replaces the actual decoder and
+common libraries with Brotli 1.2.1, rewrites their native dependencies, regenerates
+wheel RECORD and binds the native binaries and license in a portable receipt.
+It preserves the other upstream Pillow codecs. The install also checks native
+loading and an image round-trip.
+
+Windows uses a qualified source-built wheel, because its bundled Brotli is
+statically linked and cannot be repaired by replacing a shared library:
+
+```sh
+python packaging/prepare_pillow.py --wheel path/to/qualified-pillow.whl --install
+```
+
+The wheel must carry `callimachus-pillow-native-security.json` in its dist-info,
+with the actual source archive, component version, license and native binary
+hashes. `security-source-inputs.json` distinguishes the Python Brotli source
+archive from the Google native source archive. Qualification runs before
+installation and the build gate checks the installed receipt again. Missing,
+tampered or unqualified native provenance blocks packaging. Keep completed
+qualified wheels and their source/tool receipts for reuse; rebuilding unchanged
+Qt or PySide is unnecessary.
+
 ## Maintainer build procedure
 
 Update this procedure in the same change as a packaging fix. Use the current
 versioned scripts and constraints; a successful old binary or a private temporary
 build directory is not a substitute for the recipe. PyInstaller remains the
 desktop packager.
+
+Before any pip network operation, run `python packaging/bootstrap_pip.py` with
+the interpreter that will perform the installation. It verifies the pinned pip
+wheel over normal HTTPS, checks its size and SHA-256, installs it offline, and
+confirms its vendored certificate bundle is current. Release constraints pin
+certifi 2026.10.19, pip 26.2.2, setuptools 84.1.0 and wheel 0.46.3. These
+application/build-tool updates do not require rebuilding the matching Qt/PySide
+cache; preserve the original native build receipts as historical records.
+On macOS, the bootstrap explicitly loads the OS-provided `/etc/ssl/cert.pem`:
+Python.org's `Install Certificates.command` creates the certifi trust link later
+and itself needs a secure pip connection. If that system CA file is missing or
+invalid, bootstrapping stops before downloading or installing anything.
 
 ### Reuse native dependencies before rebuilding them
 
@@ -463,7 +542,7 @@ Create the MSIX with the reserved Store identity, publisher/display name, the
 qualified x64 Microsoft VCLibs APPX and MakeAppx/MakePri from the selected Windows SDK:
 
 ```sh
-python packaging/build_msix.py --identity-name "$IDENTITY_NAME" --publisher "$PUBLISHER" --publisher-display-name "$PUBLISHER_DISPLAY_NAME" --version 2.0.0.0 --framework-appx "$VCLIBS_APPX" --makeappx "$MAKEAPPX"
+python packaging/build_msix.py --identity-name "$IDENTITY_NAME" --publisher "$PUBLISHER" --publisher-display-name "$PUBLISHER_DISPLAY_NAME" --version 2.0.1.0 --framework-appx "$VCLIBS_APPX" --makeappx "$MAKEAPPX"
 ```
 
 The builder selects MakePri beside MakeAppx, then on PATH; use `--makepri` to
@@ -522,6 +601,6 @@ Replace both the application and its archive at every known test-package
 location. Updating a `.app` while leaving an older TAR beside it allows the old
 application to be restored accidentally. Match each copied archive's SHA-256 to
 the qualified artifact and inspect the embedded build revision before handing
-it to the tester; the shared display version `2.0.0` does not distinguish builds.
+it to the tester; the shared display version `2.0.1` does not distinguish builds.
 Keep the deployment receipt with the new qualification evidence and preserve
 settings, credentials, runs and test papers outside application replacement.

@@ -328,7 +328,15 @@ def test_release_runner_builds_and_smokes_windows_installer():
     smoke = workflow.index("python packaging/smoke_windows_installer.py")
     archive = workflow.index("python packaging/archive_desktop.py")
     assert build < smoke < archive
-    assert workflow.count("if: runner.os == 'Windows'") == 2
+    for command in (
+        "python packaging/build_windows_installer.py",
+        "python packaging/smoke_windows_installer.py",
+    ):
+        matching_steps = [
+            step for step in workflow.split("\n      - ") if command in step
+        ]
+        assert len(matching_steps) == 1
+        assert "\n        if: runner.os == 'Windows'\n" in matching_steps[0]
 
 
 def test_smoke_reports_qt_failure_before_aggregate_check(monkeypatch, tmp_path):
@@ -342,6 +350,7 @@ def test_smoke_reports_qt_failure_before_aggregate_check(monkeypatch, tmp_path):
     monkeypatch.setenv("CITATION_VERIFIER_SIGNING_KEY", "synthetic-inherited-signing-key")
     monkeypatch.setenv("CITATION_VERIFIER_SIGNING_KEY_FILE", str(tmp_path / "unread-signing-key"))
     monkeypatch.setattr(smoke, "executable_path", lambda: executable)
+    monkeypatch.setattr(smoke, "verify_windows_gui_binary", lambda _path: None)
     monkeypatch.setattr(smoke, "check_linux_graphics_bundle", lambda: None)
     monkeypatch.setattr(smoke, "check_macos_minimum_version", lambda: None)
     monkeypatch.setattr(smoke, "create_image_only_pdf", lambda path: path.parent.mkdir(parents=True, exist_ok=True))
@@ -419,6 +428,7 @@ def test_smoke_rejects_package_self_test_without_required_marker(
     monkeypatch.setattr(smoke, "ROOT", tmp_path)
     (tmp_path / ".env.example").write_text("SMOKE_PROBE_API_KEY=\n", encoding="utf-8")
     monkeypatch.setattr(smoke, "executable_path", lambda: executable)
+    monkeypatch.setattr(smoke, "verify_windows_gui_binary", lambda _path: None)
     monkeypatch.setattr(smoke, "check_linux_graphics_bundle", lambda: None)
     monkeypatch.setattr(smoke, "check_macos_minimum_version", lambda: None)
     monkeypatch.setattr(
@@ -732,7 +742,7 @@ def test_manual_source_audit_uploads_verified_archives_without_publishing():
 
     release = workflow.split("\n  release:\n", 1)[1]
     assert "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in release
-    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.0.md' in release
+    assert 'gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.2.md' in release
 
 
 def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):
@@ -779,6 +789,8 @@ def test_build_includes_runtime_and_notice_resources(monkeypatch, tmp_path):
 
     monkeypatch.setattr(build.sys, "platform", "win32")
     windows_args = build.build_arguments()
+    assert "--windowed" in windows_args
+    assert "--hide-console" not in windows_args
     assert windows_args[windows_args.index("keyring.backends.Windows") - 1] == "--hidden-import"
     assert windows_args[windows_args.index("--icon") + 1] == str(
         ROOT / "packaging" / "assets" / "Callimachus.ico"
@@ -848,8 +860,28 @@ def test_final_notices_and_public_linux_launcher_are_assembled(monkeypatch, tmp_
     notices.mkdir()
     (notices / "index.json").write_text("[]", encoding="utf-8")
     embedded = tmp_path / "dist" / "Callimachus" / "_internal" / "THIRD-PARTY-NOTICES"
+    events = []
+    dependency_report = {"status": "passed"}
+    monkeypatch.setattr(
+        build, "current_source_revision",
+        lambda current_root: events.append(("source-revision", current_root)) or "a" * 40,
+    )
+    monkeypatch.setattr(
+        build, "run_prebuild_audit",
+        lambda current_root: events.append(("audit", current_root)) or dependency_report,
+    )
+
+    def bind_audit(current_root, distribution, report, *, source_revision):
+        assert source_revision == "a" * 40
+        assert report is dependency_report
+        assert (distribution / "LICENSE").is_file()
+        assert (distribution / "THIRD-PARTY-NOTICES" / "index.json").is_file()
+        events.append(("bind", current_root, distribution))
+
+    monkeypatch.setattr(build, "bind_frozen_audit", bind_audit)
 
     def fake_build(_arguments):
+        events.append(("pyinstaller",))
         executable = tmp_path / "dist" / "Callimachus" / "Callimachus"
         executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_bytes(b"PyInstaller executable")
@@ -879,6 +911,12 @@ def test_final_notices_and_public_linux_launcher_are_assembled(monkeypatch, tmp_
     assert (embedded / "index.json").read_text(encoding="utf-8") == "[1]"
     assert (tmp_path / "dist" / "THIRD-PARTY-NOTICES" / "python.txt").read_text() == "PSF"
     assert checked == [notices, embedded, tmp_path / "dist" / "THIRD-PARTY-NOTICES"]
+    assert events == [
+        ("source-revision", build.ROOT),
+        ("audit", build.ROOT),
+        ("pyinstaller",),
+        ("bind", build.ROOT, tmp_path / "dist"),
+    ]
     bundle = tmp_path / "dist" / "Callimachus"
     public_launcher = bundle / "Callimachus"
     assert public_launcher.read_bytes() == (ROOT / "packaging" / "linux-launcher.sh").read_bytes()
@@ -947,6 +985,15 @@ def test_non_macos_bundle_finalization_does_not_change_resources(monkeypatch, tm
 def test_windows_build_ignores_unrelated_runner_toolchain_dlls(monkeypatch, tmp_path):
     monkeypatch.syspath_prepend(str(ROOT / "packaging"))
     build = _load("desktop_build_windows_path", "build_desktop.py")
+    events = []
+    monkeypatch.setattr(
+        build, "current_source_revision",
+        lambda current_root: events.append(("source-revision", current_root)) or "a" * 40,
+    )
+    monkeypatch.setattr(
+        build, "run_prebuild_audit",
+        lambda current_root: events.append(("audit", current_root)) or {"status": "passed"},
+    )
     monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
     monkeypatch.setattr(build, "build_arguments", lambda: ["run.py"])
     monkeypatch.setattr(build.sys, "platform", "win32")
@@ -959,6 +1006,7 @@ def test_windows_build_ignores_unrelated_runner_toolchain_dlls(monkeypatch, tmp_
     entry = ModuleType("PyInstaller.__main__")
 
     def fake_build(_arguments):
+        events.append(("pyinstaller",))
         captured.append(build.os.environ["PATH"])
         raise RuntimeError("stopped after checking PATH")
 
@@ -971,6 +1019,9 @@ def test_windows_build_ignores_unrelated_runner_toolchain_dlls(monkeypatch, tmp_
     assert str(tmp_path / "python") in captured[0]
     assert str(tmp_path / "Windows" / "System32") in captured[0]
     assert build.os.environ["PATH"] == str(tmp_path / "Java")
+    assert events == [
+        ("source-revision", build.ROOT), ("audit", build.ROOT), ("pyinstaller",),
+    ]
 
 
 def test_windows_bundle_uses_system_vc_runtime(monkeypatch, tmp_path):
@@ -1086,6 +1137,11 @@ def test_archive_keeps_entire_distribution_and_checksum(monkeypatch, tmp_path):
     (dist / "THIRD-PARTY-NOTICES" / "README.txt").write_text("notices", encoding="utf-8")
     monkeypatch.setattr(archiver, "DIST", dist)
     monkeypatch.setattr(archiver, "ARTIFACTS", tmp_path / "artifacts")
+    verified = []
+    monkeypatch.setattr(
+        archiver, "verify_frozen_dependencies",
+        lambda root, distribution: verified.append((root, distribution)),
+    )
 
     archive = archiver.archive("linux-x64")
     with tarfile.open(archive) as content:
@@ -1110,6 +1166,7 @@ def test_archive_keeps_entire_distribution_and_checksum(monkeypatch, tmp_path):
     assert len(windows_digest) == 64
     assert all(byte in b"0123456789abcdef" for byte in windows_digest.encode("ascii"))
     assert windows_checksum.count(b"\n") == 1 and b"\r" not in windows_checksum
+    assert verified == [(archiver.ROOT, dist), (archiver.ROOT, dist)]
 
 
 def test_archive_rejects_missing_executable(monkeypatch, tmp_path):
@@ -1146,6 +1203,7 @@ def test_windows_installer_smoke_probes_installed_app(monkeypatch, tmp_path):
     monkeypatch.setattr(smoke, "BUILD_ROOT", tmp_path)
     monkeypatch.setattr(smoke, "INSTALL_ROOT", install_root)
     monkeypatch.setattr(smoke.sys, "platform", "win32")
+    monkeypatch.setattr(smoke, "verify_windows_gui_binary", lambda _path: None)
     calls = []
 
     def run(arguments, **kwargs):
@@ -1422,3 +1480,658 @@ def test_browser_driver_smoke_rejects_missing_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(smoke, "DIST", tmp_path)
     with pytest.raises(SystemExit, match="browser driver is missing"):
         smoke.smoke_browser_driver({})
+
+
+def test_desktop_dependency_audit_blocks_before_pyinstaller(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_audit_block", "build_desktop.py")
+    tool_calls = []
+
+    def blocked(_root):
+        raise RuntimeError("dependency audit blocked")
+
+    monkeypatch.setattr(build, "current_source_revision", lambda _root: "a" * 40)
+    monkeypatch.setattr(build, "run_prebuild_audit", blocked)
+    pyinstaller = ModuleType("PyInstaller")
+    entry = ModuleType("PyInstaller.__main__")
+    entry.run = lambda *_args: tool_calls.append("PyInstaller")
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller)
+    monkeypatch.setitem(sys.modules, "PyInstaller.__main__", entry)
+
+    with pytest.raises(RuntimeError, match="dependency audit blocked"):
+        build.main()
+
+    assert tool_calls == []
+
+
+
+
+def test_desktop_rejects_source_before_audit_or_pyinstaller(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "packaging"))
+    build = _load("desktop_build_dirty_source_block", "build_desktop.py")
+    events = []
+
+    def reject_source(_root):
+        events.append("source")
+        raise RuntimeError("clean source Git checkout required")
+
+    monkeypatch.setattr(build, "current_source_revision", reject_source)
+    monkeypatch.setattr(build, "run_prebuild_audit", lambda _root: events.append("audit"))
+    pyinstaller = ModuleType("PyInstaller")
+    entry = ModuleType("PyInstaller.__main__")
+    entry.run = lambda *_args: events.append("PyInstaller")
+    monkeypatch.setitem(sys.modules, "PyInstaller", pyinstaller)
+    monkeypatch.setitem(sys.modules, "PyInstaller.__main__", entry)
+
+    with pytest.raises(RuntimeError, match="clean source Git checkout"):
+        build.main()
+
+    assert events == ["source"]
+
+
+def test_archive_dependency_audit_blocks_before_archive_creation(monkeypatch, tmp_path):
+    archiver = _load("desktop_archive_audit_block", "archive_desktop.py")
+    dist = tmp_path / "dist"
+    executable = dist / "Callimachus" / "Callimachus"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"executable")
+    artifacts = tmp_path / "artifacts"
+    monkeypatch.setattr(archiver, "DIST", dist)
+    monkeypatch.setattr(archiver, "ARTIFACTS", artifacts)
+    calls = []
+
+    def blocked(root, distribution):
+        calls.append((root, distribution))
+        raise RuntimeError("fresh frozen audit blocked")
+
+    monkeypatch.setattr(archiver, "verify_frozen_dependencies", blocked)
+
+    with pytest.raises(RuntimeError, match="fresh frozen audit blocked"):
+        archiver.archive("linux-x64")
+
+    assert calls == [(archiver.ROOT, dist)]
+    assert not artifacts.exists()
+
+
+def test_macos_pyside_overlay_changes_only_the_verified_setuptools_pin(tmp_path):
+    overlay_helper = _load("macos_pyside_requirements_overlay", "patch_macos_pyside_requirements.py")
+    upstream = b"""# Build dependencies
+setuptools==78.1.0
+packaging==24.2
+build==1.2.2.post1
+wheel==0.46.3
+distro==1.9.0; sys_platform == 'linux'
+patchelf==0.17.2; sys_platform == 'linux'
+# 2.2.0 is the last version that supports Python 3.10
+numpy==2.2.0; python_version == '3.10'
+numpy==2.4.6; python_version > '3.10'
+mypy>=1.15.0    # note: 3.13 with disable-gil is not compiled yet
+"""
+    assert overlay_helper.sha256(upstream) == overlay_helper.SOURCE_SHA256
+    overlay = overlay_helper.render_overlay(upstream)
+    assert overlay == upstream.replace(b"setuptools==78.1.0", b"setuptools==84.1.0", 1)
+
+    source_path = tmp_path / "requirements.txt"
+    output_path = tmp_path / "requirements-overlay.txt"
+    manifest_path = tmp_path / "requirements-overlay.json"
+    source_path.write_bytes(upstream)
+    manifest = overlay_helper.create_overlay(source_path, output_path, manifest_path)
+    assert source_path.read_bytes() == upstream
+    assert output_path.read_bytes() == overlay
+    assert manifest["source_sha256"] == overlay_helper.SOURCE_SHA256
+    assert manifest["overlay_sha256"] == overlay_helper.sha256(overlay)
+    assert manifest["other_bytes_unchanged"] is True
+
+
+def test_macos_pyside_overlay_fails_closed_on_changed_or_duplicate_upstream_pins():
+    overlay_helper = _load("macos_pyside_requirements_overlay_guard", "patch_macos_pyside_requirements.py")
+    upstream = b"setuptools==78.1.0\n"
+    with pytest.raises(ValueError, match="SHA-256"):
+        overlay_helper.render_overlay(upstream)
+    duplicate = b"setuptools==78.1.0\nsetuptools==78.1.0\n"
+    with pytest.raises(ValueError, match="exactly one"):
+        overlay_helper.render_overlay(duplicate, overlay_helper.sha256(duplicate))
+
+
+def test_macos_pyside_installer_uses_the_overlay_for_its_second_install():
+    script = (ROOT / "packaging" / "prepare_macos_bindings.sh").read_text(encoding="utf-8")
+    overlay_call = script.index("patch_macos_pyside_requirements.py")
+    install_start = script.index('"$BUILD_VENV/bin/python" -m pip install \\\n    -c "$ROOT/packaging/release-constraints.txt" -r "$SOURCE_REQUIREMENTS_OVERLAY"')
+    raw_requirements = script.index('"$SOURCE_DIR/requirements.txt"', overlay_call)
+    assert overlay_call < raw_requirements < install_start
+    assert "setuptools==84.1.0 wheel==0.46.3" in script
+    assert "build_requirements_overlay_sha256" in script
+
+
+def test_macos_aqt_commands_run_from_work_root(tmp_path):
+    script = (ROOT / "packaging" / "prepare_macos_bindings.sh").read_text(encoding="utf-8")
+    aqt_blocks = re.findall(
+        r'(?ms)^\(\n    cd -- "\$WORK_ROOT"\n'
+        r'    "\$AQT_VENV/bin/aqt" .*?^\)',
+        script,
+    )
+    assert len(aqt_blocks) == 2
+    assert "list-qt" in aqt_blocks[0]
+    assert "install-qt" in aqt_blocks[1]
+
+    if os.name == "nt":
+        pytest.skip("Bash working-directory fixture runs on POSIX release runners")
+
+    repo = tmp_path / "checkout"
+    work_root = tmp_path / "runner-temp"
+    fake_bin = tmp_path / "aqt-venv" / "bin"
+    repo.mkdir()
+    work_root.mkdir()
+    fake_bin.mkdir(parents=True)
+    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
+
+    aqt = fake_bin / "aqt"
+    aqt.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\t%s\\n' "$PWD" "$*" >> "$AQT_TRACE"
+printf 'fixture log\\n' >> aqtinstall.log
+if [[ "$1" == list-qt ]]; then printf 'qtbase qtsvg\\n'; fi
+""",
+        encoding="utf-8",
+    )
+    aqt.chmod(0o755)
+    trace = tmp_path / "aqt-invocations.txt"
+    env = os.environ.copy()
+    env.update({
+        "AQT_VENV": str(aqt.parent.parent),
+        "AQT_TRACE": str(trace),
+        "WORK_ROOT": str(work_root),
+        "QT_ROOT": str(tmp_path / "qt-root"),
+        "TARGET_VERSION": "6.12.0",
+    })
+    subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", "\n".join(aqt_blocks)],
+        cwd=repo,
+        env=env,
+        check=True,
+    )
+
+    calls = trace.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 2
+    assert all(line.startswith(str(work_root) + "\t") for line in calls)
+    assert calls[0].split("\t", 1)[1].startswith("list-qt ")
+    assert calls[1].split("\t", 1)[1].startswith("install-qt ")
+    assert (work_root / "aqtinstall.log").is_file()
+    assert (work_root / "qt-archives.txt").read_text(encoding="utf-8") == "qtbase qtsvg\n"
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout
+    assert status == ""
+    assert not (repo / "aqtinstall.log").exists()
+
+
+def test_static_openssl_license_is_added_with_valid_cryptography_wheel_record(tmp_path):
+    import base64
+    import csv
+    import io
+    import zipfile
+
+    helper = _load("macos_cryptography_wheel_helper", "prepare_macos_cryptography.py")
+    wheel = tmp_path / "cryptography-50.0.1-cp39-abi3-macosx_14_4_x86_64.whl"
+    dist_info = "cryptography-50.0.1.dist-info"
+    members = {
+        f"{dist_info}/METADATA": b"Name: cryptography\nVersion: 50.0.1\n",
+        f"{dist_info}/WHEEL": b"Wheel-Version: 1.0\n",
+        "cryptography/hazmat/bindings/_rust.abi3.so": b"extension fixture",
+    }
+    rows = []
+    for name, body in members.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(body).digest()).decode("ascii").rstrip("=")
+        rows.append([name, "sha256=" + digest, str(len(body))])
+    record = f"{dist_info}/RECORD"
+    rows.append([record, "", ""])
+    stream = io.StringIO(newline="")
+    csv.writer(stream, lineterminator="\n").writerows(rows)
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, body in members.items():
+            archive.writestr(name, body)
+        archive.writestr(record, stream.getvalue())
+
+    helper.verify_wheel_record(wheel)
+    license_body = b"Apache License\nVersion 2.0\nOpenSSL 3.5.9 notice fixture\n"
+    helper.add_openssl_license(wheel, license_body)
+    helper.verify_wheel_record(wheel)
+    with zipfile.ZipFile(wheel) as archive:
+        license_name = f"{dist_info}/licenses/OpenSSL-LICENSE.txt"
+        assert archive.read(license_name) == license_body
+        assert record in archive.namelist()
+
+
+def _macos_cryptography_otool_load_commands(*dylib_commands):
+    commands = [
+        ("LC_ID_DYLIB", "@rpath/cryptography.hazmat.bindings._rust.abi3.so"),
+        ("LC_BUILD_VERSION", None),
+        *dylib_commands,
+    ]
+    lines = ["_rust.abi3.so:"]
+    for index, (command, name) in enumerate(commands):
+        lines.extend([f"Load command {index}", f"      cmd {command}", "  cmdsize 56"])
+        if name is not None:
+            lines.append(f"         name {name} (offset 24)")
+        if command == "LC_BUILD_VERSION":
+            lines.extend([" platform MACOS", " minos 14.4", " sdk 26.0"])
+    return "\n".join(lines) + "\n"
+
+
+def _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output):
+    helper = _load("macos_cryptography_load_command_inspector", "prepare_macos_cryptography.py")
+    smoke = _load("macos_cryptography_load_command_smoke", "smoke_desktop.py")
+    extension = tmp_path / "_rust.abi3.so"
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        if args[:2] == ["xcrun", "lipo"]:
+            return "x86_64"
+        assert args == ["/usr/bin/otool", "-arch", "x86_64", "-l", str(extension)]
+        return output
+
+    monkeypatch.setattr(helper, "run", fake_run)
+    monkeypatch.setattr(
+        helper.runpy,
+        "run_path",
+        lambda _path: {"_macos_minimum_versions": smoke._macos_minimum_versions},
+    )
+    return helper.inspect_extension(extension, ROOT), calls
+
+
+def test_macos_cryptography_inspector_ignores_only_dylib_id_for_dependencies(
+    tmp_path, monkeypatch,
+):
+    output = _macos_cryptography_otool_load_commands(
+        ("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib"),
+    )
+
+    proof, calls = _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output)
+
+    assert proof[0] == "14.4"
+    assert proof[2] == ["/usr/lib/libSystem.B.dylib"]
+    assert calls == [
+        ["xcrun", "lipo", "-archs", str(tmp_path / "_rust.abi3.so")],
+        ["/usr/bin/otool", "-arch", "x86_64", "-l", str(tmp_path / "_rust.abi3.so")],
+    ]
+
+
+@pytest.mark.parametrize(
+    "load_command",
+    [
+        "LC_LOAD_DYLIB",
+        "LC_LOAD_WEAK_DYLIB",
+        "LC_REEXPORT_DYLIB",
+        "LC_LAZY_LOAD_DYLIB",
+        "LC_LOAD_UPWARD_DYLIB",
+    ],
+)
+@pytest.mark.parametrize(
+    "dependency",
+    [
+        pytest.param("@rpath/libexternal.dylib", id="external"),
+        pytest.param(
+            "@rpath/cryptography.hazmat.bindings._rust.abi3.so",
+            id="same-as-dylib-id",
+        ),
+    ],
+)
+def test_macos_cryptography_rejects_non_system_dylib_load_commands(
+    tmp_path, monkeypatch, load_command, dependency,
+):
+    output = _macos_cryptography_otool_load_commands((load_command, dependency))
+
+    with pytest.raises(RuntimeError, match="non-system dynamic dependency"):
+        _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output)
+
+
+def test_macos_cryptography_rejects_dynamic_system_openssl_load(tmp_path, monkeypatch):
+    output = _macos_cryptography_otool_load_commands(
+        ("LC_LOAD_DYLIB", "/usr/lib/libcrypto.dylib"),
+    )
+
+    with pytest.raises(RuntimeError, match="dynamically links OpenSSL"):
+        _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output)
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ["missing-command-type", "missing-dylib-name", "missing-dylib-id-name"],
+)
+def test_macos_cryptography_rejects_malformed_dylib_load_commands(
+    tmp_path, monkeypatch, malformation,
+):
+    if malformation == "missing-command-type":
+        output = _macos_cryptography_otool_load_commands() + "Load command 2\n  cmdsize 8\n"
+    elif malformation == "missing-dylib-name":
+        output = _macos_cryptography_otool_load_commands(("LC_LOAD_DYLIB", None))
+    else:
+        output = _macos_cryptography_otool_load_commands().replace(
+            "         name @rpath/cryptography.hazmat.bindings._rust.abi3.so (offset 24)\n",
+            "",
+            1,
+        )
+
+    with pytest.raises(RuntimeError, match="malformed Mach-O"):
+        _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output)
+
+
+def test_macos_cryptography_wheel_build_prepends_venv_bin_to_rust_path(tmp_path, monkeypatch):
+    helper = _load("macos_cryptography_wheel_path", "prepare_macos_cryptography.py")
+    build_venv = tmp_path / "build-venv"
+    rust_bin = tmp_path / "rust-prefix" / "bin"
+    original_path = os.pathsep.join((str(rust_bin), "/usr/bin", "/bin", "/usr/sbin", "/sbin"))
+    wheelhouse = tmp_path / "wheelhouse"
+    release_constraints = tmp_path / "release-constraints.txt"
+    build_constraints = tmp_path / "build-constraints.txt"
+    source_archive = tmp_path / "cryptography-50.0.1.tar.gz"
+    env = {
+        "PATH": original_path,
+        "OPENSSL_DIR": str(tmp_path / "openssl-prefix"),
+        "OPENSSL_STATIC": "1",
+        "MACOSX_DEPLOYMENT_TARGET": "14.4",
+        "RUSTFLAGS": "-C link-arg=-mmacosx-version-min=14.4",
+    }
+    calls = []
+
+    def capture(args, **kwargs):
+        calls.append((list(args), kwargs.copy()))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(helper.subprocess, "run", capture)
+    result = helper.build_cryptography_wheel(
+        python=build_venv / "bin" / "python",
+        build_venv=build_venv,
+        wheelhouse=wheelhouse,
+        release_constraints=release_constraints,
+        build_constraints=build_constraints,
+        source_archive=source_archive,
+        env=env,
+    )
+
+    expected_command = [
+        str(build_venv / "bin" / "python"), "-m", "pip", "wheel",
+        "--no-build-isolation", "--no-cache-dir", "--only-binary=cffi,pycparser",
+        "--wheel-dir", str(wheelhouse),
+        "-c", str(release_constraints), "-c", str(build_constraints),
+        str(source_archive),
+    ]
+    expected_path = os.pathsep.join((str(build_venv / "bin"), original_path))
+    assert result == ""
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command == expected_command
+    assert kwargs["env"]["PATH"] == expected_path
+    assert kwargs["env"]["OPENSSL_DIR"] == env["OPENSSL_DIR"]
+    assert kwargs["env"]["OPENSSL_STATIC"] == env["OPENSSL_STATIC"]
+    assert kwargs["env"]["MACOSX_DEPLOYMENT_TARGET"] == env["MACOSX_DEPLOYMENT_TARGET"]
+    assert kwargs["env"]["RUSTFLAGS"] == env["RUSTFLAGS"]
+    assert env["PATH"] == original_path
+    assert kwargs["check"] is True
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+
+
+def test_macos_openssl_build_and_install_are_separate_serial_make_calls(tmp_path, monkeypatch):
+    helper = _load("macos_openssl_serial_build", "prepare_macos_cryptography.py")
+    source = tmp_path / "openssl-3.5.9"
+    env = {"PATH": "/usr/bin:/bin"}
+    failure_log_dir = tmp_path / "macos-cryptography-failure-logs"
+    calls = []
+
+    def succeed(args, **kwargs):
+        calls.append((list(args), kwargs))
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(helper.subprocess, "run", succeed)
+    helper.build_and_install_openssl(
+        source, env=env, failure_log_dir=failure_log_dir,
+    )
+
+    assert [command for command, _kwargs in calls] == [
+        ["/usr/bin/make", "-j1"],
+        ["/usr/bin/make", "-j1", "install_sw"],
+    ]
+    for _command, kwargs in calls:
+        assert kwargs["cwd"] == source
+        assert kwargs["env"] is env
+        assert kwargs["check"] is True
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+
+
+def test_macos_openssl_build_failure_prevents_install_and_preserves_logs(tmp_path, monkeypatch):
+    helper = _load("macos_openssl_build_failure", "prepare_macos_cryptography.py")
+    source = tmp_path / "openssl-3.5.9"
+    env = {"PATH": "/usr/bin:/bin"}
+    failure_log_dir = tmp_path / "macos-cryptography-failure-logs"
+    stdout = "OpenSSL build failed before install\n"
+    stderr = "build-stage compiler failure\n"
+    calls = []
+
+    def fail_build(args, **_kwargs):
+        calls.append(list(args))
+        raise subprocess.CalledProcessError(2, args, output=stdout, stderr=stderr)
+
+    monkeypatch.setattr(helper.subprocess, "run", fail_build)
+    with pytest.raises(RuntimeError, match="command failed") as error:
+        helper.build_and_install_openssl(
+            source, env=env, failure_log_dir=failure_log_dir,
+        )
+
+    assert calls == [["/usr/bin/make", "-j1"]]
+    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+    assert error.value.__cause__.returncode == 2
+    assert (failure_log_dir / "openssl-make.stdout.log").read_text(encoding="utf-8") == stdout
+    assert (failure_log_dir / "openssl-make.stderr.log").read_text(encoding="utf-8") == stderr
+
+
+def test_macos_openssl_install_failure_propagates_after_successful_build(tmp_path, monkeypatch):
+    helper = _load("macos_openssl_install_failure", "prepare_macos_cryptography.py")
+    source = tmp_path / "openssl-3.5.9"
+    env = {"PATH": "/usr/bin:/bin"}
+    failure_log_dir = tmp_path / "macos-cryptography-failure-logs"
+    stdout = "OpenSSL install output\n"
+    stderr = "OpenSSL install failed\n"
+    calls = []
+
+    def succeed_build_then_fail_install(args, **_kwargs):
+        calls.append(list(args))
+        if args == ["/usr/bin/make", "-j1"]:
+            return subprocess.CompletedProcess(args, 0, stdout="build complete\n", stderr="")
+        raise subprocess.CalledProcessError(3, args, output=stdout, stderr=stderr)
+
+    monkeypatch.setattr(helper.subprocess, "run", succeed_build_then_fail_install)
+    with pytest.raises(RuntimeError, match="command failed") as error:
+        helper.build_and_install_openssl(
+            source, env=env, failure_log_dir=failure_log_dir,
+        )
+
+    assert calls == [
+        ["/usr/bin/make", "-j1"],
+        ["/usr/bin/make", "-j1", "install_sw"],
+    ]
+    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+    assert error.value.__cause__.returncode == 3
+    assert (failure_log_dir / "openssl-make.stdout.log").read_text(encoding="utf-8") == stdout
+    assert (failure_log_dir / "openssl-make.stderr.log").read_text(encoding="utf-8") == stderr
+
+
+def test_macos_cryptography_failure_logs_preserve_both_streams(tmp_path, monkeypatch):
+    helper = _load("macos_cryptography_failure_diagnostics", "prepare_macos_cryptography.py")
+    stdout = (
+        "OpenSSL compile output begins\n"
+        + "stdout-noise\n" * 2_000
+        + "FATAL OPENSSL DIAGNOSTIC SENTINEL\n"
+        + "stdout-noise\n" * 2_000
+        + "OpenSSL stdout tail\n"
+    )
+    stderr = (
+        "ranlib: file: libcrypto.a(member.o) has no symbols\n" * 4_000
+        + "OpenSSL stderr tail sentinel\n"
+    )
+    command = ["/usr/bin/make", "-j1", "install_sw"]
+
+    def fail_make(args, **_kwargs):
+        raise subprocess.CalledProcessError(2, args, output=stdout, stderr=stderr)
+
+    monkeypatch.setattr(helper.subprocess, "run", fail_make)
+    log_dir = tmp_path / "macos-cryptography-failure-logs"
+
+    with pytest.raises(RuntimeError, match="command failed") as error:
+        helper.run(command, failure_log_dir=log_dir)
+
+    message = str(error.value)
+    assert "FATAL OPENSSL DIAGNOSTIC SENTINEL" in message
+    assert "OpenSSL stderr tail sentinel" in message
+    assert "stdout (bounded excerpt):" in message
+    assert "stderr (bounded excerpt):" in message
+    assert len(message) < 20_000
+    assert (log_dir / "openssl-make.stdout.log").read_text(encoding="utf-8") == stdout
+    assert (log_dir / "openssl-make.stderr.log").read_text(encoding="utf-8") == stderr
+    assert isinstance(error.value.__cause__, subprocess.CalledProcessError)
+    assert error.value.__cause__.returncode == 2
+
+
+def test_macos_cryptography_failure_logs_are_uploaded_only_for_failed_macos_jobs():
+    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(encoding="utf-8")
+    start = workflow.index("- name: Upload macOS cryptography build failure logs")
+    end = workflow.index("\n      - uses: actions/upload-artifact@", start)
+    step = workflow[start:end]
+
+    assert "if: failure() && runner.os == 'macOS'" in step
+    assert "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in step
+    assert "name: macos-cryptography-build-failure-$" + "{{ matrix.platform }}" in step
+    assert "path: build/desktop/macos-cryptography-failure-logs/" in step
+    assert "if-no-files-found: ignore" in step
+    assert "env:" not in step
+
+
+def test_macos_cryptography_source_build_pins_and_architecture_gate_are_explicit():
+    helper = _load("macos_cryptography_source_build", "prepare_macos_cryptography.py")
+    constraints = (ROOT / "packaging" / "macos-cryptography-build-constraints.txt").read_text(encoding="utf-8")
+    release = (ROOT / "packaging" / "release-constraints.txt").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "desktop-release.yml").read_text(encoding="utf-8")
+    pins = {line.split("==", 1)[0]: line.split("==", 1)[1] for line in constraints.splitlines() if "==" in line}
+
+    assert pins == helper.BUILD_REQUIREMENTS
+    assert release.count("cryptography==50.0.1") == 1
+    assert helper.OPENSSL_VERSION == "3.5.9"
+    assert helper.RUST_VERSION == "1.99.1"
+    assert helper.MACOS_MINIMUM == "14.4"
+    assert "runner.os == 'macOS' && runner.arch == 'X64'" in workflow
+    packaging_step = workflow.index("name: Install pinned packaging for Intel cryptography wheel validation")
+    cryptography_step = workflow.index("name: Build verified Intel cryptography wheel for macOS 14.4")
+    packaging_setup = workflow[packaging_step:cryptography_step]
+    assert packaging_step < cryptography_step
+    assert "packaging==26.3" in packaging_setup
+    assert "packaging/macos-cryptography-build-constraints.txt" in packaging_setup
+    assert "--find-links build/security-cryptography/wheelhouse" in workflow
+
+
+def test_rust_manifest_accepts_pinned_dated_urls_and_cargo_component_version(tmp_path, monkeypatch):
+    import hashlib
+
+    helper = _load("macos_rust_manifest_components", "prepare_macos_cryptography.py")
+    target = "x86_64-apple-darwin"
+    rows = ['date = "2026-10-15"', '']
+    for component in ("rustc", "cargo", "rust-std"):
+        rows.extend([
+            f"[pkg.{component}]",
+            f'version = "{helper.RUST_COMPONENT_VERSIONS[component]}"',
+            f"[pkg.{component}.target.{target}]",
+            f'available = true',
+            f'xz_hash = "{helper.RUST_COMPONENTS[component]}"',
+            f'xz_url = "https://static.rust-lang.org/dist/2026-10-15/{component}-1.99.1-{target}.tar.xz"',
+            "",
+        ])
+    manifest = "\n".join(rows).encode("utf-8")
+    path = tmp_path / "channel-rust-1.99.1.toml"
+    path.write_bytes(manifest)
+    monkeypatch.setattr(helper, "RUST_MANIFEST_SHA256", hashlib.sha256(manifest).hexdigest())
+
+    urls = helper.check_rust_manifest(path)
+    assert urls["cargo"] == f"https://static.rust-lang.org/dist/2026-10-15/cargo-1.99.1-{target}.tar.xz"
+    assert helper.RUST_COMPONENT_VERSIONS["cargo"] == "0.100.0 (5f94df478 2026-08-27)"
+
+    rustc_cli = "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    cargo_cli = "cargo 1.99.0 (5f94df478 2026-08-27)"
+    rust_verbose = "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nhost: x86_64-apple-darwin"
+    cargo_verbose = "\n".join([
+        cargo_cli,
+        "release: 1.99.0",
+        "commit-hash: 5f94df478",
+        "commit-date: 2026-08-27",
+        "host: x86_64-apple-darwin",
+    ])
+    proof = helper.verify_rust_cli_versions(rustc_cli, cargo_cli, rust_verbose, cargo_verbose)
+    assert proof["cargo_release"] == "1.99.0"
+    assert proof["cargo_commit_prefix"] == "5f94df478"
+    assert proof["cargo_host"] == "x86_64-apple-darwin"
+    latest_cli = cargo_cli.replace("1.99.0", "1.99.1")
+    latest_verbose = cargo_verbose.replace("1.99.0", "1.99.1")
+    assert helper.verify_rust_cli_versions(rustc_cli, latest_cli, rust_verbose, latest_verbose)["cargo_release"] == "1.99.1"
+    with pytest.raises(RuntimeError, match="Cargo CLI version"):
+        helper.verify_rust_cli_versions(rustc_cli, "cargo 0.100.0 (5f94df478 2026-08-27)", rust_verbose, cargo_verbose)
+    for wrong_release in ("1.98.9", "1.100.0", "2.99.0"):
+        wrong_cli = cargo_cli.replace("1.99.0", wrong_release)
+        wrong_verbose = cargo_verbose.replace("1.99.0", wrong_release)
+        with pytest.raises(RuntimeError, match="Cargo CLI version"):
+            helper.verify_rust_cli_versions(rustc_cli, wrong_cli, rust_verbose, wrong_verbose)
+    with pytest.raises(RuntimeError, match="commit or release"):
+        helper.verify_rust_cli_versions(rustc_cli, cargo_cli, rust_verbose, cargo_verbose.replace("commit-hash: 5f94df478", "commit-hash: deadbeef0"))
+    with pytest.raises(RuntimeError, match="host triples"):
+        helper.verify_rust_cli_versions(rustc_cli, cargo_cli, rust_verbose, cargo_verbose.replace("host: x86_64-apple-darwin", "host: aarch64-apple-darwin"))
+
+    bad_url = manifest.replace(b"/dist/2026-10-15/cargo-", b"/dist/cargo-")
+    path.write_bytes(bad_url)
+    monkeypatch.setattr(helper, "RUST_MANIFEST_SHA256", hashlib.sha256(bad_url).hexdigest())
+    with pytest.raises(RuntimeError, match="unexpected Rust component URL for cargo"):
+        helper.check_rust_manifest(path)
+
+    bad_cargo = manifest.replace(b"0.100.0 (5f94df478 2026-08-27)", b"1.99.1 (58cf8f9c3 2026-10-13)")
+    path.write_bytes(bad_cargo)
+    monkeypatch.setattr(helper, "RUST_MANIFEST_SHA256", hashlib.sha256(bad_cargo).hexdigest())
+    with pytest.raises(RuntimeError, match="unexpected cargo version"):
+        helper.check_rust_manifest(path)
+
+
+def test_selected_xcode_apple_clang_path_is_accepted_and_homebrew_is_rejected(tmp_path):
+    helper = _load("macos_apple_clang_selection", "prepare_macos_cryptography.py")
+    developer = tmp_path / "Xcode_26.1.app" / "Contents" / "Developer"
+    compiler = developer / "Toolchains" / "XcodeDefault.xctoolchain" / "usr" / "bin" / "clang"
+    compiler.parent.mkdir(parents=True)
+    compiler.write_bytes(b"Apple clang fixture")
+    version = "Apple clang version 17.0.0 (clang-1700.0.13.3)"
+
+    assert helper.validate_apple_clang(developer, compiler, version) == compiler.resolve()
+
+    brew = tmp_path / "opt" / "homebrew" / "bin" / "clang"
+    brew.parent.mkdir(parents=True)
+    brew.write_bytes(b"clang fixture")
+    with pytest.raises(RuntimeError, match="outside the selected Apple developer directory"):
+        helper.validate_apple_clang(developer, brew, version)
+    with pytest.raises(RuntimeError, match="not Apple Clang"):
+        helper.validate_apple_clang(developer, compiler, "clang version 17.0.0")
+
+
+def test_macos_14_4_accepts_normalized_14_0_wheel_tag_and_rejects_bad_arch_or_minimum():
+    helper = _load("macos_wheel_platform_compatibility", "prepare_macos_cryptography.py")
+    proof = helper.verify_wheel_tag("cryptography-50.0.1-cp39-abi3-macosx_14_0_x86_64.whl")
+    assert proof["platform_tags"] == ["macosx_14_0_x86_64"]
+    assert proof["python_abi_tags"] == ["cp39-abi3"]
+    assert helper.validate_macos_minimums(["14.0", "14.4"]) == ["14.0", "14.4"]
+
+    with pytest.raises(RuntimeError, match="platform tags"):
+        helper.verify_wheel_tag("cryptography-50.0.1-cp39-abi3-macosx_14_0_arm64.whl")
+    with pytest.raises(RuntimeError, match="platform tags"):
+        helper.verify_wheel_tag("cryptography-50.0.1-cp39-abi3-macosx_15_0_x86_64.whl")
+    with pytest.raises(RuntimeError, match="stable-ABI"):
+        helper.verify_wheel_tag("cryptography-50.0.1-cp313-cp313-macosx_14_0_x86_64.whl")
+    with pytest.raises(RuntimeError, match="above macOS 14.4"):
+        helper.validate_macos_minimums(["14.4", "15.0"])

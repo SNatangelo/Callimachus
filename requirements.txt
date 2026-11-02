@@ -7,12 +7,12 @@
 
 # TLS trust bundle for urllib HTTPS requests on environments whose Python trust
 # store does not include every issuer used by OA repositories.
-certifi>=2024.2.2
+certifi>=2026.10.19
 
 # Decode HTTP Brotli responses before any HTML/PDF parser sees the body. Raw
 # Wayback snapshots may preserve the archived Content-Encoding even though the
 # live request did not advertise compression.
-Brotli>=1.2.0
+Brotli>=1.2.1
 
 # PDF extraction with layout/column detection (Phase 2b: OA fulltext + manuscript PDFs).
 # pymupdf is the preferred backend (fastest, best layout/column handling); the code

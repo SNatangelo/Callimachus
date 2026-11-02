@@ -101,16 +101,71 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libegl1 libgl1 libfontconfig1 libfreetype6 libgtk-3-0 \
+            libegl1 libgl1 libfontconfig1 libfreetype6 libgtk-3-0 patchelf \
             libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0
+      - name: Bootstrap verified pip before network installs
+        if: runner.os != 'macOS'
+        run: python packaging/bootstrap_pip.py
+      - name: Ensure pinned packaging and Brotli before Pillow validation
+        if: runner.os == 'Windows'
+        run: python packaging/prepare_windows_pillow.py --ensure-parent-packaging
+      - name: Fingerprint verified Windows Pillow toolchain
+        id: windows-pillow
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python packaging/prepare_windows_pillow.py --fingerprint >> $env:GITHUB_OUTPUT
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        if: runner.os == 'Windows'
+        with:
+          path: build/security-pillow/cache
+          key: ${{ steps.windows-pillow.outputs.key }}
+      - name: Build or restore verified Windows Pillow wheel
+        if: runner.os == 'Windows'
+        run: python packaging/prepare_windows_pillow.py
+      - name: Install qualified Windows Pillow before runtime dependencies
+        if: runner.os == 'Windows'
+        run: >-
+          python packaging/prepare_pillow.py
+          --wheel build/security-pillow/cache/pillow-13.0.0-1callimachus-cp313-cp313-win_amd64.whl
+          --install
+      - name: Install pinned packaging for Intel cryptography wheel validation
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        env:
+          RUNTIME_PYTHON: ${{ steps.macos-runtime.outputs.python-path }}
+          PIP_CONFIG_FILE: /dev/null
+          PIP_INDEX_URL: https://pypi.org/simple
+          PIP_NO_INPUT: "1"
+          PYTHONNOUSERSITE: "1"
+        shell: bash
+        run: >-
+          "$RUNTIME_PYTHON" -m pip install --only-binary=:all:
+          -c packaging/macos-cryptography-build-constraints.txt packaging==26.3
+      - name: Build verified Intel cryptography wheel for macOS 14.4
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        env:
+          RUNTIME_PYTHON: ${{ steps.macos-runtime.outputs.python-path }}
+        shell: bash
+        run: >-
+          "$RUNTIME_PYTHON" packaging/prepare_macos_cryptography.py
       - name: Install runtime and build dependencies on the runner
+        if: runner.os != 'macOS' || runner.arch != 'X64'
         shell: bash
         run: |
-          python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt -r requirements-rag.txt -c packaging/release-constraints.txt
           python -m pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt
+      - name: Install runtime and build dependencies with verified Intel cryptography wheel
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          python -m pip install --only-binary=:all: --find-links build/security-cryptography/wheelhouse -r requirements.txt -r requirements-gui.txt -r requirements-ocr.txt -r requirements-rag.txt -c packaging/release-constraints.txt
+          python -m pip install --only-binary=:all: pyinstaller==6.22.3 pytest -c packaging/release-constraints.txt
+      - name: Qualify Pillow bundled Brotli on Linux and macOS
+        if: runner.os != 'Windows'
+        run: python packaging/prepare_pillow.py --install
+      - name: Audit installed runtime and build dependencies
+        run: python packaging/dependency_audit.py --report build/security-audit/release.json
       - name: Verify pinned macOS CA bundle for standard-library HTTPS
         if: runner.os == 'macOS'
         env:
@@ -188,6 +243,7 @@ jobs:
         run: >-
           python -m pytest
           tests/test_desktop_build.py
+          tests/test_windows_gui_binary.py
           tests/test_desktop_licenses.py
           tests/test_desktop_matrix.py
           tests/test_windows_installer_build.py
@@ -301,11 +357,28 @@ jobs:
           test -s "$runtime_manifest"
           cp "$runtime_manifest" "build/desktop/artifacts/Callimachus-${PLATFORM}-runtime-python-provenance.json"
           (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-runtime-python-provenance.json" > "Callimachus-${PLATFORM}-runtime-python-provenance.json.sha256")
+          if [[ "$PLATFORM" == macos-x64 ]]; then
+            crypto_manifest="build/desktop/macos-cryptography-provenance-x86_64.json"
+            openssl_license="build/security-cryptography/OpenSSL-LICENSE.txt"
+            test -s "$crypto_manifest" && test -s "$openssl_license"
+            cp "$crypto_manifest" "build/desktop/artifacts/Callimachus-${PLATFORM}-cryptography-provenance.json"
+            cp "$openssl_license" "build/desktop/artifacts/Callimachus-${PLATFORM}-OpenSSL-3.5.9-LICENSE.txt"
+            (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-cryptography-provenance.json" > "Callimachus-${PLATFORM}-cryptography-provenance.json.sha256")
+            (cd build/desktop/artifacts && shasum -a 256 "Callimachus-${PLATFORM}-OpenSSL-3.5.9-LICENSE.txt" > "Callimachus-${PLATFORM}-OpenSSL-3.5.9-LICENSE.txt.sha256")
+          fi
       - name: Remove temporary macOS signing keychain
         if: always() && runner.os == 'macOS' && github.event_name != 'pull_request'
         run: |
           keychain="$RUNNER_TEMP/callimachus-signing.keychain-db"
           if test -f "$keychain"; then security delete-keychain "$keychain"; fi
+      - name: Upload macOS cryptography build failure logs
+        if: failure() && runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-cryptography-build-failure-${{ matrix.platform }}
+          path: build/desktop/macos-cryptography-failure-logs/
+          if-no-files-found: ignore
+          retention-days: 1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: callimachus-${{ matrix.platform }}
@@ -442,7 +515,7 @@ jobs:
           RELEASE_COMMIT_SHA: ${{ github.sha }}
         run: |
           if [[ "$EVENT_NAME" == push || "$RELEASE_TAG_EXISTS" == true ]]; then
-            gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.0.md
+            gh release create "$RELEASE_TAG" release/* --verify-tag --notes-file docs/releases/2.0.2.md
           else
-            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_COMMIT_SHA" --notes-file docs/releases/2.0.0.md
+            gh release create "$RELEASE_TAG" release/* --target "$RELEASE_COMMIT_SHA" --notes-file docs/releases/2.0.2.md
           fi

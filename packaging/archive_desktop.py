@@ -6,9 +6,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import tarfile
 import zipfile
 from pathlib import Path
+
+
+# Keep direct script execution and isolated file imports on the same security gate.
+_audit_spec = importlib.util.spec_from_file_location(
+    "_callimachus_dependency_audit", Path(__file__).with_name("dependency_audit.py"),
+)
+if _audit_spec is None or _audit_spec.loader is None:
+    raise RuntimeError("the dependency security gate is missing")
+_dependency_audit = importlib.util.module_from_spec(_audit_spec)
+_audit_spec.loader.exec_module(_dependency_audit)
+verify_frozen_dependencies = _dependency_audit.verify_frozen_dependencies
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +49,7 @@ def archive(platform: str) -> Path:
         )
         if bundled_runtime:
             raise RuntimeError(f"Windows runtime files must not be bundled: {bundled_runtime}")
+    verify_frozen_dependencies(ROOT, DIST)
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     suffix = ".zip" if platform.startswith("windows") else ".tar.gz"
     result = ARTIFACTS / f"Callimachus-{platform}{suffix}"

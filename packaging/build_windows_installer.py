@@ -17,6 +17,19 @@ import uuid
 from ctypes import wintypes
 from pathlib import Path, PureWindowsPath
 
+import importlib.util
+
+
+# Load the sibling gate even when a caller imports this builder by file path.
+_audit_spec = importlib.util.spec_from_file_location(
+    "_callimachus_dependency_audit", Path(__file__).with_name("dependency_audit.py"),
+)
+if _audit_spec is None or _audit_spec.loader is None:
+    raise RuntimeError("the dependency security gate is missing")
+_dependency_audit = importlib.util.module_from_spec(_audit_spec)
+_audit_spec.loader.exec_module(_dependency_audit)
+verify_frozen_dependencies = _dependency_audit.verify_frozen_dependencies
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "build" / "desktop" / "dist"
@@ -153,6 +166,7 @@ def build() -> Path:
     if compiler is None:
         raise RuntimeError("makensis was not found; install NSIS 3.10 and retry")
 
+    verify_frozen_dependencies(ROOT, DIST)
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     temporary_output = ARTIFACTS / f".Callimachus-Setup-{uuid.uuid4().hex}.exe"
     try:

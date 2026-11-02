@@ -13,6 +13,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+import importlib.util
+
+_windows_gui_spec = importlib.util.spec_from_file_location(
+    "_callimachus_windows_gui", Path(__file__).with_name("windows_gui.py")
+)
+if _windows_gui_spec is None or _windows_gui_spec.loader is None:
+    raise RuntimeError("could not load the Windows GUI binary validator")
+_windows_gui = importlib.util.module_from_spec(_windows_gui_spec)
+_windows_gui_spec.loader.exec_module(_windows_gui)
+verify_windows_gui_binary = _windows_gui.verify_windows_gui_binary
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "build" / "desktop" / "dist"
@@ -322,6 +333,11 @@ def main() -> None:
     executable = executable_path()
     if not executable.is_file():
         raise SystemExit(f"missing frozen executable: {executable}")
+    if sys.platform == "win32":
+        try:
+            verify_windows_gui_binary(executable)
+        except ValueError as exc:
+            raise SystemExit(f"frozen executable is not a Windows GUI binary: {exc}") from exc
     if sys.platform == "linux":
         check_linux_graphics_bundle()
     elif sys.platform == "darwin":

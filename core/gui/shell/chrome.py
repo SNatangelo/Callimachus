@@ -368,7 +368,7 @@ def install(window, QtCore, QtGui, QtWidgets, text):
             button = QtWidgets.QToolButton(parent)
             button.setObjectName("windowClose" if key == "close" else "windowControl")
             button.setProperty("atlasIcon", key)
-            button.setIcon(icon(QtCore, QtGui, key, "#afbfdb" if window._dark else "#455374"))
+            button.setIcon(icon(QtCore, QtGui, key, "#e6edf6" if window._dark else "#455374"))
             button.setIconSize(QtCore.QSize(20, 20))
             button.setFixedSize(38, 34)
             button.setToolTip(label)
@@ -866,7 +866,7 @@ def install(window, QtCore, QtGui, QtWidgets, text):
                 )
                 close_button.setIcon(icon(
                     QtCore, QtGui, key,
-                    "#afbfdb" if window._dark else "#455374",
+                    "#e6edf6" if window._dark else "#455374",
                 ))
                 close_button.setToolTip(label)
                 close_button.setAccessibleName(label)
@@ -997,7 +997,7 @@ def install(window, QtCore, QtGui, QtWidgets, text):
             if receiver is window and kind == QtCore.QEvent.Type.WindowStateChange and self.maximize_button is not None:
                 key = "window-restore" if window.isMaximized() else "window-maximize"
                 self.maximize_button.setProperty("atlasIcon", key)
-                self.maximize_button.setIcon(icon(QtCore, QtGui, key))
+                self.maximize_button.setIcon(icon(QtCore, QtGui, key, "#e6edf6" if window._dark else "#455374"))
                 window._atlas_size_grip.setVisible(not window.isMaximized())
                 self.update_main_corner_mask(window)
                 self.update_outline(window)

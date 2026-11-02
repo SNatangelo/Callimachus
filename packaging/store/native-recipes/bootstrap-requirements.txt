@@ -23,7 +23,7 @@ numpy==2.5.3
 packaging==26.3
 pathspec==1.1.1
 pefile==2024.8.26
-pip==26.2.1
+pip==26.2.2
 pipcl==13
 pkgconf==3.0.7.post0
 pluggy==1.6.0
@@ -37,11 +37,11 @@ pyreadline3==3.5.6
 pytest==9.1.1
 scikit-build==0.19.1
 scipy-openblas64==0.3.34.106.0
-setuptools==84.0.0
+setuptools==84.1.0
 setuptools-scm==10.3.4
 swig==4.4.1
 sympy==1.14.0
 tomlkit==0.15.1
 trove-classifiers==2026.9.21.13
 vcs-versioning==2.5.0
-wheel==0.45.1
+wheel==0.46.3

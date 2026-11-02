@@ -7,7 +7,7 @@ on:
   pull_request:
     branches: ["main"]
   push:
-    branches: ["main", "Callimachus-2.0.0"]
+    branches: ["main", "Callimachus-*"]
   workflow_dispatch:
     inputs:
       native_macos_fixture:
@@ -46,20 +46,51 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: "3.13.15"
+      - name: Bootstrap secure pip before Windows Pillow preparation
+        if: runner.os == 'Windows'
+        run: python packaging/bootstrap_pip.py
+      - name: Ensure pinned packaging and Brotli before Pillow validation
+        if: runner.os == 'Windows'
+        run: python packaging/prepare_windows_pillow.py --ensure-parent-packaging
+      - name: Fingerprint verified Windows Pillow toolchain
+        id: windows-pillow
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python packaging/prepare_windows_pillow.py --fingerprint >> $env:GITHUB_OUTPUT
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        if: runner.os == 'Windows'
+        with:
+          path: build/security-pillow/cache
+          key: ${{ steps.windows-pillow.outputs.key }}
+      - name: Build or restore verified Windows Pillow wheel
+        if: runner.os == 'Windows'
+        run: python packaging/prepare_windows_pillow.py
+      - name: Install qualified Windows Pillow before runtime dependencies
+        if: runner.os == 'Windows'
+        run: >-
+          python packaging/prepare_pillow.py
+          --wheel build/security-pillow/cache/pillow-13.0.0-1callimachus-cp313-cp313-win_amd64.whl
+          --install
       - name: Install Linux Qt system library
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libegl1
+          sudo apt-get install --yes libegl1 patchelf
       - name: Install selected-suite dependencies
         shell: bash
         run: |
-          python -m pip install --upgrade pip
+          python packaging/bootstrap_pip.py
           python -m pip install --only-binary=:all: \
             -c packaging/release-constraints.txt \
             -r requirements.txt -r requirements-gui.txt \
             -r requirements-ocr.txt -r requirements-rag.txt \
             pytest pytest-subtests
+      - name: Qualify Pillow bundled Brotli on Linux
+        if: runner.os == 'Linux'
+        run: python packaging/prepare_pillow.py --install
+      - name: Audit installed Python dependencies
+        run: python packaging/dependency_audit.py --report build/security-audit/ci.json
+
       - name: Run the retained selected suite
         if: runner.os == 'Linux'
         run: python -m pytest tests -q
@@ -87,8 +118,9 @@ jobs:
         with:
           python-version: "3.13.15"
       - name: Install native fixture dependencies
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
+          python packaging/bootstrap_pip.py
           python -m pip install --only-binary=:all: \
             -c packaging/release-constraints.txt \
             -r requirements.txt -r requirements-gui.txt pytest

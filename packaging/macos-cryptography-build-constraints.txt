@@ -1,0 +1,7 @@
+# Direct tool and dependency pins for the Intel macOS cryptography source build.
+cffi==2.1.1
+maturin==1.14.1
+packaging==26.3
+pycparser==2.23
+setuptools==84.1.0
+wheel==0.46.3

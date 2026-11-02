@@ -639,7 +639,7 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
     )
     if actions is not None:
         actions.setSizeConstraint(
-            QtWidgets.QLayout.SizeConstraint.SetFixedSize
+            QtWidgets.QLayout.SizeConstraint.SetMinimumSize
         )
         for button in (
             window.history_select_all,
@@ -652,6 +652,8 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
             *history_action_buttons,
         )):
             actions.addWidget(button, 0, column)
+    post_layout_timer = QtCore.QTimer(tab)
+    post_layout_timer.setSingleShot(True)
     window.history_actions_widget.setObjectName("historyActionStripContent")
     window.history_actions_scroll.setObjectName("historyActions")
     window.history_actions_scroll.setWidgetResizable(False)
@@ -665,7 +667,7 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
     window.history_actions_scroll.setFixedHeight(58)
     window.history_actions_widget.adjustSize()
 
-    def reflow_history_controls(compact):
+    def reflow_history_controls(compact, *, post_layout=False):
         page_margins = layout.contentsMargins()
         selection_margins = selection_layout.contentsMargins()
         selection_width = max(
@@ -689,7 +691,20 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
         if actions is not None:
             for button in history_action_buttons:
                 actions.removeWidget(button)
-            if compact:
+                button.setMinimumHeight(0)
+                if (
+                    button.property("_atlasOriginalText") is not None
+                    and "\n" in button.text()
+                ):
+                    _fit_button_label(button, 16777215)
+            viewport = window.history_actions_scroll.viewport()
+            viewport_is_live = (
+                window.history_actions_scroll.isVisible()
+                and viewport.width() > 0
+            )
+            if viewport_is_live:
+                available_width = viewport.width()
+            else:
                 panel_margins = panel_layout.contentsMargins()
                 footer_margins = footer_layout.contentsMargins()
                 available_width = max(
@@ -701,67 +716,83 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
                     - footer_margins.left() - footer_margins.right()
                     - window.history_actions_scroll.frameWidth() * 2
                 )
-            else:
-                available_width = max(1, tab.width() - 108)
-            for button in history_action_buttons:
-                if not button.isHidden():
-                    _fit_button_label(button, available_width)
             spacing = max(0, actions.horizontalSpacing())
             visible_buttons = tuple(
                 button for button in history_action_buttons
                 if not button.isHidden()
             )
-            widths = [button.sizeHint().width() for button in visible_buttons]
-            natural_column_count = None
-            if visible_buttons:
-                for candidate in range(
-                    len(visible_buttons),
-                    (len(visible_buttons) + 1) // 2 - 1,
-                    -1,
-                ):
-                    column_widths = [
-                        max(widths[index] for index in range(column, len(widths), candidate))
-                        for column in range(candidate)
-                    ]
-                    if sum(column_widths) + spacing * (candidate - 1) <= available_width:
-                        natural_column_count = candidate
-                        break
-            natural_layout = natural_column_count is not None
-            regular_buttons = tuple(
-                button for button in visible_buttons
-                if natural_layout or button is not window.history_delete_run_button
+            common_width = max(
+                (
+                    max(button.sizeHint().width(), button.minimumSizeHint().width())
+                    for button in visible_buttons
+                ),
+                default=0,
             )
-            column_count = natural_column_count or len(regular_buttons) or 1
-            maximum = max((button.sizeHint().width() for button in regular_buttons), default=0)
-            wrapped = not natural_layout
-            if wrapped:
-                column_count = 1
-                for candidate in range(2, min(3, len(regular_buttons)) + 1):
-                    if maximum * candidate + spacing * (candidate - 1) <= available_width:
-                        column_count = candidate
+            common_height = max(
+                (
+                    max(button.sizeHint().height(), button.minimumSizeHint().height())
+                    for button in visible_buttons
+                ),
+                default=0,
+            )
+            all_fit = bool(visible_buttons) and (
+                len(visible_buttons) * common_width
+                + spacing * (len(visible_buttons) - 1)
+                <= available_width
+            )
+            column_count = 1
+            for candidate in range(len(visible_buttons), 0, -1):
+                if (
+                    candidate * common_width + spacing * (candidate - 1)
+                    <= available_width
+                ):
+                    column_count = candidate
+                    break
+            wrapped = bool(visible_buttons) and not all_fit
+            if (
+                wrapped and column_count == 1
+                and common_width > available_width
+                and viewport_is_live
+            ):
+                for button in visible_buttons:
+                    _fit_button_label(button, available_width)
+                common_width = max(
+                    (
+                        max(button.sizeHint().width(), button.minimumSizeHint().width())
+                        for button in visible_buttons
+                    ),
+                    default=0,
+                )
+                common_height = max(
+                    (
+                        max(button.sizeHint().height(), button.minimumSizeHint().height())
+                        for button in visible_buttons
+                    ),
+                    default=0,
+                )
+            row_count = (
+                (len(visible_buttons) + column_count - 1) // column_count
+                if visible_buttons else 0
+            )
             actions.setSizeConstraint(
                 QtWidgets.QLayout.SizeConstraint.SetMinimumSize
                 if wrapped else QtWidgets.QLayout.SizeConstraint.SetFixedSize
             )
             window.history_actions_scroll.setWidgetResizable(wrapped)
-            if wrapped:
-                # SetMinimumSize does not clear the maximum left by a former
-                # SetFixedSize layout; release it so wrapped rows fill the pane.
-                window.history_actions_widget.setMaximumSize(16777215, 16777215)
+            window.history_actions_widget.setMaximumSize(16777215, 16777215)
             for column in range(len(history_action_buttons)):
-                actions.setColumnStretch(column, 1 if wrapped and column < column_count else 0)
-                actions.setColumnMinimumWidth(column, maximum if wrapped and column < column_count else 0)
-            for index, button in enumerate(regular_buttons):
-                actions.addWidget(
-                    button, index // column_count, index % column_count,
-                    QtCore.Qt.AlignmentFlag.AlignLeft if natural_layout else QtCore.Qt.AlignmentFlag(0),
+                active = bool(visible_buttons) and column < column_count
+                actions.setColumnStretch(column, 1 if wrapped and active else 0)
+                actions.setColumnMinimumWidth(
+                    column, common_width if active else 0
                 )
-            if wrapped and window.history_delete_run_button in visible_buttons:
-                actions.addWidget(
-                    window.history_delete_run_button,
-                    (len(regular_buttons) + column_count - 1) // column_count,
-                    0, 1, column_count,
+            for row in range(len(history_action_buttons)):
+                actions.setRowMinimumHeight(
+                    row, common_height if row < row_count else 0
                 )
+            for index, button in enumerate(visible_buttons):
+                button.setMinimumHeight(common_height)
+                actions.addWidget(button, index // column_count, index % column_count)
             actions.activate()
         _fit_button_label(
             window.history_delete_button,
@@ -776,6 +807,15 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
         window.history_actions_scroll.setFixedHeight(
             min(max_height, max(58, content_height + 8))
         )
+        if not post_layout:
+            post_layout_timer.start(0)
+
+    post_layout_timer.timeout.connect(
+        lambda: reflow_history_controls(
+            tab.height() < 480 or tab.width() < 640,
+            post_layout=True,
+        )
+    )
 
     footer = QtWidgets.QWidget(panel)
     footer.setObjectName("historyActionFooter")
@@ -795,6 +835,7 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
         attr_name="_atlas_history_reflow",
         compact_insets=(8, 12, 8, 0),
         visibility_widgets=history_action_buttons,
+        reflow_widgets=history_action_buttons,
         compact_callback=lambda: (
             footer_layout.setContentsMargins(0, 6, 0, 6),
             reflow_history_controls(True),

@@ -159,6 +159,7 @@ def _configured_builder(monkeypatch, tmp_path: Path, framework_appx: Path):
         build.shutil, "which",
         lambda name: {"makeappx.exe": "MakeAppx.exe", "makepri.exe": "MakePri.exe"}.get(name.casefold()),
     )
+    monkeypatch.setattr(build, "verify_frozen_dependencies", lambda *_args: None)
     return build, framework_appx, runtime_sources
 
 
@@ -498,3 +499,33 @@ def test_makepri_resolution_prefers_selected_sdk_then_path(monkeypatch, tmp_path
     monkeypatch.setattr(build.shutil, "which", lambda _name: None)
     with pytest.raises(RuntimeError, match="MakePri was not found"):
         build._resolve_makepri(None, str(makeappx))
+
+
+def test_msix_dependency_audit_blocks_before_makeappx(monkeypatch, tmp_path):
+    framework = _make_framework(tmp_path / "vclibs.appx")
+    build, framework, _ = _configured_builder(monkeypatch, tmp_path, framework)
+    calls = []
+
+    def blocked(root, distribution):
+        calls.append((root, distribution))
+        raise RuntimeError("fresh frozen audit blocked")
+
+    monkeypatch.setattr(build, "verify_frozen_dependencies", blocked)
+    monkeypatch.setattr(
+        build, "_resolve_makeappx",
+        lambda *_args: pytest.fail("MakeAppx resolution occurred before the frozen audit"),
+    )
+    monkeypatch.setattr(
+        build, "_resolve_makepri",
+        lambda *_args: pytest.fail("MakePri resolution occurred before the frozen audit"),
+    )
+    monkeypatch.setattr(
+        build.subprocess, "run",
+        lambda *_args, **_kwargs: pytest.fail("a packaging executable ran before the frozen audit"),
+    )
+
+    with pytest.raises(RuntimeError, match="fresh frozen audit blocked"):
+        build.build(**_build_arguments(framework))
+
+    assert calls == [(build.ROOT, build.DIST)]
+    assert not build.ARTIFACTS.exists()

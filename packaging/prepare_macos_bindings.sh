@@ -171,6 +171,7 @@ PY
 
 download_pinned "$PYSIDE_SOURCE_URL" "$SOURCE_ARCHIVE" "$PYSIDE_SOURCE_SHA256"
 download_pinned "$LIBCLANG_ARCHIVE_URL" "$LIBCLANG_ARCHIVE" "$LIBCLANG_ARCHIVE_SHA256"
+"$BUILD_PYTHON" "$ROOT/packaging/bootstrap_pip.py"
 "$BUILD_PYTHON" -m pip download --only-binary=:all: --no-deps --dest "$INPUT_DIR" aqtinstall==3.3.0
 [[ -f "$AQT_WHEEL" ]] || die "pinned aqtinstall wheel was not downloaded"
 "$BUILD_PYTHON" - "$AQT_WHEEL" "$AQT_WHEEL_SHA256" <<'PY'
@@ -191,12 +192,17 @@ PY
 
 # Keep the SDK and source-build toolchains isolated from the app runtime.
 "$BUILD_PYTHON" -m venv "$AQT_VENV"
+"$AQT_VENV/bin/python" "$ROOT/packaging/bootstrap_pip.py"
 "$AQT_VENV/bin/python" -m pip install --only-binary=:all: \
-    "$AQT_WHEEL" cmake==4.4.4 ninja==1.13.2 py7zr==1.0.0
+    "$AQT_WHEEL" cmake==4.4.4 ninja==1.13.2 py7zr==1.1.3 packaging==26.3 setuptools==84.1.0
 "$AQT_VENV/bin/python" -m pip check
+"$AQT_VENV/bin/python" "$ROOT/packaging/dependency_audit.py" --report "$WORK_ROOT/aqt-dependency-audit.json"
 "$AQT_VENV/bin/python" -m pip freeze --all > "$WORK_ROOT/toolchain-environment.txt"
 
-"$AQT_VENV/bin/aqt" list-qt mac desktop --archives "$TARGET_VERSION" clang_64 > "$WORK_ROOT/qt-archives.txt"
+(
+    cd -- "$WORK_ROOT"
+    "$AQT_VENV/bin/aqt" list-qt mac desktop --archives "$TARGET_VERSION" clang_64 > "$WORK_ROOT/qt-archives.txt"
+)
 "$AQT_VENV/bin/python" - "$WORK_ROOT/qt-archives.txt" <<'PY'
 from pathlib import Path
 import sys
@@ -206,8 +212,11 @@ required = {"qtbase", "qtsvg"}
 if not required <= available:
     raise SystemExit(f"Qt 6.12.0 mac SDK is missing archives: {sorted(required - available)}")
 PY
-"$AQT_VENV/bin/aqt" install-qt mac desktop "$TARGET_VERSION" clang_64 \
-    --outputdir "$QT_ROOT" --archives qtbase qtsvg
+(
+    cd -- "$WORK_ROOT"
+    "$AQT_VENV/bin/aqt" install-qt mac desktop "$TARGET_VERSION" clang_64 \
+        --outputdir "$QT_ROOT" --archives qtbase qtsvg
+)
 
 "$AQT_VENV/bin/python" - "$LIBCLANG_ARCHIVE" "$LLVM_ROOT" <<'PY'
 from pathlib import Path
@@ -264,10 +273,19 @@ print(matches[0].parent)
 PY
 )"
 [[ -f "$SOURCE_DIR/requirements.txt" ]] || die "PySide source requirements are missing"
+readonly SOURCE_REQUIREMENTS_OVERLAY="$WORK_ROOT/pyside-requirements-overlay.txt"
+readonly SOURCE_REQUIREMENTS_MANIFEST="$WORK_ROOT/pyside-requirements-overlay.json"
+"$AQT_VENV/bin/python" "$ROOT/packaging/patch_macos_pyside_requirements.py" \
+    "$SOURCE_DIR/requirements.txt" "$SOURCE_REQUIREMENTS_OVERLAY" "$SOURCE_REQUIREMENTS_MANIFEST"
 
 "$BUILD_PYTHON" -m venv "$BUILD_VENV"
-"$BUILD_VENV/bin/python" -m pip install -r "$SOURCE_DIR/requirements.txt"
+"$BUILD_VENV/bin/python" "$ROOT/packaging/bootstrap_pip.py"
+"$BUILD_VENV/bin/python" -m pip install --only-binary=:all: \
+    -c "$ROOT/packaging/release-constraints.txt" setuptools==84.1.0 wheel==0.46.3
+"$BUILD_VENV/bin/python" -m pip install \
+    -c "$ROOT/packaging/release-constraints.txt" -r "$SOURCE_REQUIREMENTS_OVERLAY"
 "$BUILD_VENV/bin/python" -m pip check
+"$BUILD_VENV/bin/python" "$ROOT/packaging/dependency_audit.py" --report "$WORK_ROOT/pyside-dependency-audit.json"
 "$BUILD_VENV/bin/python" -m pip freeze --all > "$WORK_ROOT/source-build-environment.txt"
 
 (
@@ -548,6 +566,8 @@ manifest = {
     "platform": f"macos-{'arm64' if arch == 'arm64' else 'x64'}",
     "deployment_target": "14.4",
     "pyside_source_sha256": "099c1a597cf33c1b000e11cf68a0b82d216fb802bf81726efc720394f10c7751",
+    "upstream_build_requirements_sha256": json.loads((work / "pyside-requirements-overlay.json").read_text(encoding="utf-8"))["source_sha256"],
+    "build_requirements_overlay_sha256": json.loads((work / "pyside-requirements-overlay.json").read_text(encoding="utf-8"))["overlay_sha256"],
     "static_libclang_archive_sha256": "0bca8fe7e2f313e12a17ca3a6d44484c5dd5e2274038869398ed2eec36b8a9e4",
     "aqtinstall_wheel_sha256": "e88dbd87226f276fdd5d05347a44578d390d93a7f176e9476fbda0a7c9635f69",
     "qt_version": "6.12.0",

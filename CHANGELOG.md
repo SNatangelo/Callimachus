@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.0.2 — 2026-11-01
+
+- Windows frozen builds now use the GUI subsystem, so Callimachus starts without opening or attaching to a console window.
+- Keep dark-theme titlebar controls readable when the theme changes and when the window is maximized or restored.
+- Run AQT from its temporary work directory during macOS binding preparation, preventing its generated log from dirtying the source checkout during clean-source validation.
+
+## 2.0.1 — 2026-11-01
+
+Security update for certificate trust, HTTP decompression and image processing, with patched packaging dependencies.
+
+Release packaging now blocks dependencies with known vulnerabilities that have a published fix, including when reusing a cached runtime or repackaging an existing distribution.
+
 ## 2.0.0 — 2026-10-31
 
 Callimachus 2.0 significantly extends the desktop application, source acquisition, Library management, and model configuration. The GUI, multi-model verification engine, manual review, OCR, history/resume, and redacted HTML export existed in 1.1.x; this release integrates and expands them. The deterministic `parse → resolve → fetch → verify → report` pipeline and its fail-closed evidence boundaries remain in place.

@@ -1,0 +1,23 @@
+# Copyright (C) 2026 Stefano Natangelo
+# SPDX-License-Identifier: AGPL-3.0-only
+version: 2
+updates:
+  - package-ecosystem: pip
+    directories:
+      - /
+      - /packaging
+      - /packaging/store/native-recipes
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+    groups:
+      security-patches:
+        applies-to: security-updates
+        patterns: ["*"]
+      compatible-patches:
+        applies-to: version-updates
+        update-types: [patch]
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major, version-update:semver-minor]

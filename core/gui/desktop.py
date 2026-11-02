@@ -1116,7 +1116,7 @@ def create_desktop_window(
             self.brand_logo = logo
             self._update_brand_logo()
             row.addWidget(logo)
-            version = QtWidgets.QLabel("2.0.0", header)
+            version = QtWidgets.QLabel((resource_root() / "VERSION").read_text(encoding="utf-8").strip(), header)
             version.setObjectName("mutedText")
             row.addWidget(version)
             row.addStretch()
@@ -3748,6 +3748,8 @@ def create_desktop_window(
                         icon_ink = "#7ab4ff" if self._dark else "#175fe6"
                     elif widget.objectName() == "clearCacheButton":
                         icon_ink = "#ffffff"
+                    elif widget.objectName() in {"windowControl", "windowClose"}:
+                        icon_ink = "#e6edf6" if self._dark else "#455374"
                     elif widget.objectName() in {"clearBrowserCache", "libraryDeleteSelected"}:
                         icon_ink = "#ef8997" if self._dark else "#be3046"
                     elif widget.objectName() == "openRunReport" or (

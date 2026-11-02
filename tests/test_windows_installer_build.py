@@ -37,6 +37,7 @@ def _make_distribution(dist: Path) -> None:
 
 def test_builder_compiles_dist_to_installer_and_sha256(monkeypatch, tmp_path):
     build = _load_builder()
+    monkeypatch.setattr(build, "verify_frozen_dependencies", lambda *_args: None)
     dist = tmp_path / "dist"
     _make_distribution(dist)
     artifacts = tmp_path / "artifacts"
@@ -242,3 +243,33 @@ def test_runtime_preflight_checks_trust_prompts_and_blocks_silent_download():
     assert "if ($Silent)" in source
     assert "exit 15" in source
     assert "Invoke-WebRequest" in source
+
+
+def test_dependency_audit_blocks_before_makensis_invocation(monkeypatch, tmp_path):
+    build = _load_builder()
+    dist = tmp_path / "dist"
+    _make_distribution(dist)
+    artifacts = tmp_path / "artifacts"
+    monkeypatch.setattr(build.sys, "platform", "win32")
+    monkeypatch.setattr(build, "DIST", dist)
+    monkeypatch.setattr(build, "ARTIFACTS", artifacts)
+    monkeypatch.setattr(build, "OUTPUT", artifacts / "Callimachus-Setup.exe")
+    monkeypatch.setattr(build.shutil, "which", lambda name: "makensis.exe" if name == "makensis" else None)
+    compiler_calls = []
+
+    def blocked(root, distribution):
+        assert root == build.ROOT
+        assert distribution == dist
+        raise RuntimeError("fresh frozen audit blocked")
+
+    monkeypatch.setattr(build, "verify_frozen_dependencies", blocked)
+    monkeypatch.setattr(
+        build.subprocess, "run",
+        lambda *args, **kwargs: compiler_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError, match="fresh frozen audit blocked"):
+        build.build()
+
+    assert compiler_calls == []
+    assert not artifacts.exists()

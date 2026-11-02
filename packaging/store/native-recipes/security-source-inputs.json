@@ -1,0 +1,41 @@
+{
+  "pillow_brotli_pin": {
+    "filename": "pillow-13.0.0-dependencies.json",
+    "from_version": "1.2.0",
+    "original_sha256": "63413d6dccf72367fc4c04c2560999e7a40ea14cf226dcc995d238cf3d25533b",
+    "patched_sha256": "1ad5089c5f81f70e75b17653ea621dd9c07d6836b69a0a695ac7c113a2861606",
+    "path": ".github/dependencies.json",
+    "size_bytes": 376,
+    "to_version": "1.2.1",
+    "upstream_commit": "293218ad059d994baf1777d882911bed6a49704a",
+    "url": "https://raw.githubusercontent.com/python-pillow/Pillow/293218ad059d994baf1777d882911bed6a49704a/.github/dependencies.json"
+  },
+  "pillow_brotli_native_source": {
+    "filename": "brotli-1.2.1-github.tar.gz",
+    "version": "1.2.1",
+    "url": "https://github.com/google/brotli/archive/refs/tags/v1.2.1.tar.gz",
+    "sha256": "98d35d11a78dc453aebb7d10c3748f3f73ff78c8267c0dc697b8631f67bf7e8f",
+    "size_bytes": 646598
+  },
+  "schema_version": 1,
+  "source_overrides": [
+    {
+      "filename": "brotli-1.2.1.tar.gz",
+      "historical_version": "1.2.0",
+      "name": "Brotli",
+      "sha256": "02b2f7b5a83485efe448a44ddf7983def05c3bb1dcf917d4f7154070260e13de",
+      "size_bytes": 7389447,
+      "url": "https://files.pythonhosted.org/packages/cf/81/1546c983678a9b4e77cb4718eaedd1b2caf24a6cdbf1eb8775938d22aff7/brotli-1.2.1.tar.gz",
+      "version": "1.2.1"
+    },
+    {
+      "filename": "pillow-13.0.0.tar.gz",
+      "historical_version": "12.3.0",
+      "name": "Pillow",
+      "sha256": "cdcd1ba258178f7356d74170c9a81ba4eab6a5d55748bc402a5a2a6fe6be3510",
+      "size_bytes": 47058631,
+      "url": "https://files.pythonhosted.org/packages/ce/a4/9cc30690a394a8305e8be4c9036aa16d0dfddadd09079860b582f562496d/pillow-13.0.0.tar.gz",
+      "version": "13.0.0"
+    }
+  ]
+}
