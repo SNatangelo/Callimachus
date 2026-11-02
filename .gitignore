@@ -69,4 +69,5 @@ PARSER_REWORK_PLAN.md
 /build-cache/
 /build/security-audit/
 
+/build/security-cryptography/
 /build/security-pillow/

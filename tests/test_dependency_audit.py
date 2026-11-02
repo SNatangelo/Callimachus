@@ -664,6 +664,60 @@ def test_source_revision_accepts_clean_checkout_and_ignored_build_outputs(tmp_pa
     assert revision == _git(root, "rev-parse", "HEAD")
 
 
+def test_source_revision_accepts_only_generated_cryptography_build_outputs(tmp_path):
+    audit = _load_audit()
+    root = _clean_git_checkout(tmp_path / "source")
+    repository_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    generated_rule = "/build/security-cryptography/"
+    assert repository_ignore.count(generated_rule) == 1
+    legacy_ignore = repository_ignore.replace(generated_rule + "\n", "", 1)
+    assert legacy_ignore != repository_ignore
+    (root / ".gitignore").write_text(legacy_ignore, encoding="utf-8")
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "--quiet", "-m", "use prior generated-output ignore rules")
+
+    output_root = root / "build" / "security-cryptography"
+    generated_outputs = (
+        "build-venv/pyvenv.cfg",
+        "wheelhouse/cryptography-50.0.1-cp313-abi3-macosx_14_4_x86_64.whl",
+        "build-dependency-audit.json",
+        "OpenSSL-LICENSE.txt",
+        "cryptography-dependency-audit.json",
+        "build-environment.txt",
+    )
+    for relative_path in generated_outputs:
+        output = output_root / relative_path
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("synthetic generated build output\n", encoding="utf-8")
+    provenance = root / "build" / "desktop" / "macos-cryptography-provenance-x86_64.json"
+    provenance.parent.mkdir(parents=True, exist_ok=True)
+    provenance.write_text("synthetic provenance\n", encoding="utf-8")
+
+    with pytest.raises(audit.DependencyAuditError, match="clean source Git checkout") as error:
+        audit._revision(root)
+    assert "?? build/" in str(error.value)
+
+    (root / ".gitignore").write_text(repository_ignore, encoding="utf-8")
+    _git(root, "add", ".gitignore")
+    _git(root, "commit", "--quiet", "-m", "use repository generated-output ignore rules")
+
+    revision = audit._revision(root)
+    assert revision == _git(root, "rev-parse", "HEAD")
+
+    unexpected = root / "build" / "unexpected.py"
+    unexpected.write_text("untracked source\n", encoding="utf-8")
+    untracked_status = _git(root, "status", "--porcelain", "--untracked-files=all")
+    assert untracked_status.splitlines() == ["?? build/unexpected.py"]
+    with pytest.raises(audit.DependencyAuditError, match="clean source Git checkout") as error:
+        audit._revision(root)
+    assert "?? build/" in str(error.value)
+
+    unexpected.unlink()
+    (root / "tracked.txt").write_text("modified source\n", encoding="utf-8")
+    with pytest.raises(audit.DependencyAuditError, match="clean source Git checkout") as error:
+        audit._revision(root)
+    assert "tracked.txt" in str(error.value)
+
 @pytest.mark.parametrize("dirty_path", ["tracked", "untracked"])
 def test_source_revision_rejects_tracked_and_untracked_changes(tmp_path, dirty_path):
     audit = _load_audit()
