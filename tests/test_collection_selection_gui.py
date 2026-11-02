@@ -11,8 +11,8 @@ def collection_ui(monkeypatch, tmp_path):
     monkeypatch.setattr(C, "QSettings", lambda *_a, **_k: base(str(tmp_path / "settings.ini"), base.Format.IniFormat))
     app = W.QApplication.instance() or W.QApplication([])
     windows = []
-    def make(**kwargs):
-        window = create_desktop_window(language="en", settings_loader=lambda: [], **kwargs)
+    def make(*, language="en", **kwargs):
+        window = create_desktop_window(language=language, settings_loader=lambda: [], **kwargs)
         windows.append(window)
         window.resize(540, 850)
         window.show()
@@ -24,6 +24,66 @@ def collection_ui(monkeypatch, tmp_path):
     for window in windows:
         window.close()
     app.processEvents()
+
+
+def _history_action_buttons(window):
+    return (
+        window.history_resume_button,
+        window.history_open_report_button,
+        window.history_parse_review_button,
+        window.history_report_button,
+        window.history_verify_fork_button,
+        window.history_report_folder_button,
+        window.history_export_report_button,
+        window.history_delete_run_button,
+    )
+
+
+def _history_action_rows(buttons):
+    rows = []
+    for button in buttons:
+        if not rows or abs(button.geometry().top() - rows[-1][0].geometry().top()) > 1:
+            rows.append([])
+        rows[-1].append(button)
+    return rows
+
+
+def _assert_history_action_geometry(window, buttons, expected_columns):
+    content = window.history_actions_widget
+    layout = content.layout()
+    rect = layout.contentsRect()
+    scroll = window.history_actions_scroll
+    rows = _history_action_rows(buttons)
+    wrapped = expected_columns < len(buttons)
+    expected_rows = [
+        min(expected_columns, len(buttons) - offset)
+        for offset in range(0, len(buttons), expected_columns)
+    ]
+
+    assert scroll.horizontalScrollBar().maximum() == 0
+    if wrapped:
+        assert content.width() == scroll.viewport().width()
+    else:
+        assert content.width() <= scroll.viewport().width()
+    assert scroll.widgetResizable() is wrapped
+    assert [len(row) for row in rows] == expected_rows
+    widths = [button.geometry().width() for button in buttons]
+    heights = [button.geometry().height() for button in buttons]
+    assert max(widths) - min(widths) <= 1, widths
+    assert max(heights) - min(heights) <= 1, heights
+    if not wrapped:
+        natural_width = max(button.sizeHint().width() for button in buttons)
+        assert all(abs(width - natural_width) <= 1 for width in widths)
+    assert rows[0][0].geometry().left() == rect.left()
+    assert rows[0][-1].geometry().right() == rect.right()
+    for row_index, row in enumerate(rows):
+        assert row[0].geometry().left() == rect.left()
+        if row_index:
+            for column, button in enumerate(row):
+                upper = rows[0][column]
+                assert abs(button.geometry().left() - upper.geometry().left()) <= 1
+                assert abs(button.geometry().width() - upper.geometry().width()) <= 1
+                assert abs(button.geometry().height() - upper.geometry().height()) <= 1
 
 @pytest.mark.parametrize("checked", [False, True])
 def test_library_deletes_highlighted_row_or_prioritizes_checkmarks(collection_ui, monkeypatch, checked):
@@ -61,7 +121,7 @@ def test_library_selection_does_not_transfer_to_replaced_rows(collection_ui):
     assert not window.cache_table.selectedItems()
 
 @pytest.mark.parametrize("width", [380, 540])
-def test_compact_history_delete_uses_the_whole_action_row(collection_ui, width):
+def test_compact_history_actions_share_uniform_rows(collection_ui, width):
     app, C, W, T, make = collection_ui
     window = make()
     window.resize(width, 950)
@@ -70,12 +130,16 @@ def test_compact_history_delete_uses_the_whole_action_row(collection_ui, width):
     app.processEvents()
     tab = window.pages.widget(1)
     assert tab.width() < 640 or tab.height() < 480, (tab.width(), tab.height())
-    button = window.history_delete_run_button
-    content = window.history_actions_widget
-    rect = content.layout().contentsRect()
-    assert abs(button.geometry().left() - rect.left()) <= 1
-    assert abs(button.geometry().right() - rect.right()) <= 1
-    assert window.history_actions_scroll.horizontalScrollBar().maximum() == 0
+    buttons = [button for button in _history_action_buttons(window) if not button.isHidden()]
+    actions = window.history_actions_widget.layout()
+    common_width = max(button.sizeHint().width() for button in buttons)
+    spacing = max(0, actions.horizontalSpacing())
+    columns = max(
+        candidate for candidate in range(1, len(buttons) + 1)
+        if candidate * common_width + spacing * (candidate - 1)
+        <= window.history_actions_scroll.viewport().width()
+    )
+    _assert_history_action_geometry(window, buttons, columns)
 
 
 @pytest.mark.parametrize("width", [760, 1100])
@@ -86,29 +150,181 @@ def test_history_actions_fit_at_boundary_and_wide_sizes(collection_ui, width):
     window.navigation.setCurrentRow(1)
     T.QTest.qWait(300)
     app.processEvents()
-    tab = window.pages.widget(1)
-    compact = tab.width() < 640 or tab.height() < 480
 
-    content = window.history_actions_widget
-    rect = content.layout().contentsRect()
-    assert window.history_actions_scroll.horizontalScrollBar().maximum() == 0
-    for button in (
-        window.history_resume_button,
-        window.history_open_report_button,
-        window.history_parse_review_button,
-        window.history_report_button,
-        window.history_verify_fork_button,
-        window.history_report_folder_button,
-        window.history_export_report_button,
-        window.history_delete_run_button,
-    ):
-        if button.isHidden():
+    buttons = [button for button in _history_action_buttons(window) if not button.isHidden()]
+    assert buttons
+    actions = window.history_actions_widget.layout()
+    common_width = max(button.sizeHint().width() for button in buttons)
+    spacing = max(0, actions.horizontalSpacing())
+    columns = max(
+        candidate for candidate in range(1, len(buttons) + 1)
+        if candidate * common_width + spacing * (candidate - 1)
+        <= window.history_actions_scroll.viewport().width()
+    )
+    _assert_history_action_geometry(window, buttons, columns)
+
+
+@pytest.mark.parametrize("language", ["en", "it"])
+@pytest.mark.parametrize("visible_count", [7, 8])
+def test_history_actions_use_maximum_sequential_columns(collection_ui, language, visible_count):
+    app, C, W, T, make = collection_ui
+    window = make(language=language)
+    window.resize(2200, 1400)
+    window.navigation.setCurrentRow(1)
+    T.QTest.qWait(250)
+    app.processEvents()
+    action_buttons = _history_action_buttons(window)
+    assert window.history_resume_button.text() == (
+        "Resume" if language == "en" else "Riprendi"
+    )
+    for button in action_buttons:
+        button.setVisible(True)
+    window.history_parse_review_button.setVisible(visible_count == 8)
+    T.QTest.qWait(30)
+    app.processEvents()
+    buttons = [button for button in action_buttons if not button.isHidden()]
+    assert len(buttons) == visible_count
+
+    actions = window.history_actions_widget.layout()
+    spacing = max(0, actions.horizontalSpacing())
+    wide_width = window.history_actions_scroll.viewport().width()
+    common_width = max(button.sizeHint().width() for button in buttons)
+    required_wide_width = visible_count * common_width + spacing * (visible_count - 1)
+    if wide_width < required_wide_width + 100:
+        window.resize(
+            window.width() + required_wide_width + 100 - wide_width,
+            window.height(),
+        )
+        T.QTest.qWait(50)
+        app.processEvents()
+        window._atlas_history_reflow.sync()
+        T.QTest.qWait(25)
+        app.processEvents()
+    wide_width = window.history_actions_scroll.viewport().width()
+    assert wide_width >= required_wide_width + 100
+    assert window.history_actions_widget.width() < wide_width
+    _assert_history_action_geometry(window, buttons, visible_count)
+
+    def resize_to_viewport(target_width):
+        for _attempt in range(10):
+            current_width = window.history_actions_scroll.viewport().width()
+            if abs(current_width - target_width) <= 1:
+                break
+            window.resize(
+                max(360, window.width() + target_width - current_width),
+                window.height(),
+            )
+            T.QTest.qWait(25)
+            app.processEvents()
+        window._atlas_history_reflow.sync()
+        T.QTest.qWait(25)
+        app.processEvents()
+        return window.history_actions_scroll.viewport().width()
+
+    for columns in (6, 5, 4, 3):
+        if columns >= visible_count:
             continue
-        assert button.geometry().left() >= rect.left(), (button.objectName(), button.geometry(), rect)
-        assert button.geometry().right() <= rect.right(), (button.objectName(), button.geometry(), rect)
-    if compact:
-        assert abs(window.history_delete_run_button.geometry().left() - rect.left()) <= 1
-        assert abs(window.history_delete_run_button.geometry().right() - rect.right()) <= 1
+        target_width = columns * common_width + (columns - 1) * spacing + 12
+        actual_width = resize_to_viewport(target_width)
+        assert abs(actual_width - target_width) <= 2, (target_width, actual_width)
+        assert actual_width < (columns + 1) * common_width + columns * spacing
+        _assert_history_action_geometry(window, buttons, columns)
+
+
+def test_history_action_reflows_after_visibility_and_font_changes(collection_ui):
+    app, C, W, T, make = collection_ui
+    window = make(language="it")
+    window.resize(900, 1200)
+    window.navigation.setCurrentRow(1)
+    T.QTest.qWait(250)
+    app.processEvents()
+    buttons = _history_action_buttons(window)
+    for button in buttons:
+        button.setVisible(True)
+    T.QTest.qWait(30)
+    app.processEvents()
+
+    window.history_parse_review_button.hide()
+    T.QTest.qWait(30)
+    app.processEvents()
+    visible = [button for button in buttons if not button.isHidden()]
+    assert len(visible) == 7
+    actions = window.history_actions_widget.layout()
+    spacing = max(0, actions.horizontalSpacing())
+    common_width = max(button.sizeHint().width() for button in visible)
+    columns = max(
+        candidate for candidate in range(1, len(visible) + 1)
+        if candidate * common_width + spacing * (candidate - 1)
+        <= window.history_actions_scroll.viewport().width()
+    )
+    _assert_history_action_geometry(window, visible, columns)
+
+    window._font_size = 22
+    window._apply_theme(False)
+    T.QTest.qWait(50)
+    app.processEvents()
+    visible = [button for button in buttons if not button.isHidden()]
+    common_width = max(button.sizeHint().width() for button in visible)
+    columns = max(
+        candidate for candidate in range(1, len(visible) + 1)
+        if candidate * common_width + spacing * (candidate - 1)
+        <= window.history_actions_scroll.viewport().width()
+    )
+    _assert_history_action_geometry(window, visible, columns)
+
+    original_labels = {button: button.text() for button in visible}
+    natural_width = max(button.sizeHint().width() for button in visible)
+    window.resize(380, 850)
+    T.QTest.qWait(50)
+    app.processEvents()
+    window._atlas_history_reflow.sync()
+    T.QTest.qWait(50)
+    app.processEvents()
+    visible = [button for button in buttons if not button.isHidden()]
+    assert window.pages.widget(1).width() < 640
+    viewport_width = window.history_actions_scroll.viewport().width()
+    assert viewport_width < natural_width
+    assert any("\n" in button.text() for button in visible)
+    _assert_history_action_geometry(window, visible, 1)
+    for button in visible:
+        assert " ".join(button.text().split()) == " ".join(original_labels[button].split())
+
+    window.resize(900, 1200)
+    T.QTest.qWait(50)
+    app.processEvents()
+    window._atlas_history_reflow.sync()
+    T.QTest.qWait(50)
+    app.processEvents()
+    for button in visible:
+        assert button.text() == original_labels[button]
+
+    for button in buttons:
+        button.show()
+    T.QTest.qWait(30)
+    app.processEvents()
+    visible = [button for button in buttons if not button.isHidden()]
+    assert len(visible) == 8
+    common_width = max(button.sizeHint().width() for button in visible)
+    columns = max(
+        candidate for candidate in range(1, len(visible) + 1)
+        if candidate * common_width + spacing * (candidate - 1)
+        <= window.history_actions_scroll.viewport().width()
+    )
+    _assert_history_action_geometry(window, visible, columns)
+
+    for index, button in enumerate(buttons):
+        button.setVisible(index < 3)
+    common_width = max(button.sizeHint().width() for button in buttons[:3])
+    required_compact_width = 3 * common_width + 2 * spacing + 100
+    window.resize(max(window.width(), required_compact_width + 600), 400)
+    T.QTest.qWait(50)
+    app.processEvents()
+    visible = [button for button in buttons if not button.isHidden()]
+    assert len(visible) == 3
+    assert window.pages.widget(1).height() < 480
+    _assert_history_action_geometry(window, visible, 3)
+    assert not window.history_actions_scroll.widgetResizable()
+    assert window.history_actions_widget.width() < window.history_actions_scroll.viewport().width()
 
 @pytest.mark.parametrize("dark", [False, True])
 @pytest.mark.parametrize("font_size", [16, 22])
