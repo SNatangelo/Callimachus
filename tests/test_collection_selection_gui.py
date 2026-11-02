@@ -272,8 +272,29 @@ def test_history_action_reflows_after_visibility_and_font_changes(collection_ui)
     )
     _assert_history_action_geometry(window, visible, columns)
 
-    original_labels = {button: button.text() for button in visible}
+    original_labels = {
+        button: button.property("_atlasOriginalText") or button.text()
+        for button in visible
+    }
+    for button, label in original_labels.items():
+        button.setText(label)
     natural_width = max(button.sizeHint().width() for button in visible)
+    for _attempt in range(10):
+        viewport_width = window.history_actions_scroll.viewport().width()
+        if viewport_width > natural_width:
+            break
+        window.resize(
+            window.width() + natural_width + 32 - viewport_width,
+            window.height(),
+        )
+        T.QTest.qWait(50)
+        app.processEvents()
+        window._atlas_history_reflow.sync()
+        T.QTest.qWait(50)
+        app.processEvents()
+    assert window.history_actions_scroll.viewport().width() > natural_width
+    assert all(button.text() == original_labels[button] for button in visible)
+    wide_window_width = window.width()
     window.resize(380, 850)
     T.QTest.qWait(50)
     app.processEvents()
@@ -289,7 +310,7 @@ def test_history_action_reflows_after_visibility_and_font_changes(collection_ui)
     for button in visible:
         assert " ".join(button.text().split()) == " ".join(original_labels[button].split())
 
-    window.resize(900, 1200)
+    window.resize(wide_window_width, 1200)
     T.QTest.qWait(50)
     app.processEvents()
     window._atlas_history_reflow.sync()

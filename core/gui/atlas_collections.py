@@ -697,8 +697,13 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
                     and "\n" in button.text()
                 ):
                     _fit_button_label(button, 16777215)
-            if window.history_actions_scroll.viewport().width() > 0:
-                available_width = window.history_actions_scroll.viewport().width()
+            viewport = window.history_actions_scroll.viewport()
+            viewport_is_live = (
+                window.history_actions_scroll.isVisible()
+                and viewport.width() > 0
+            )
+            if viewport_is_live:
+                available_width = viewport.width()
             else:
                 panel_margins = panel_layout.contentsMargins()
                 footer_margins = footer_layout.contentsMargins()
@@ -744,7 +749,11 @@ def _install_history(window, QtCore, QtGui, QtWidgets, text) -> None:
                     column_count = candidate
                     break
             wrapped = bool(visible_buttons) and not all_fit
-            if wrapped and column_count == 1 and common_width > available_width:
+            if (
+                wrapped and column_count == 1
+                and common_width > available_width
+                and viewport_is_live
+            ):
                 for button in visible_buttons:
                     _fit_button_label(button, available_width)
                 common_width = max(
