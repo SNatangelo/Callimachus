@@ -276,6 +276,7 @@ def test_history_action_reflows_after_visibility_and_font_changes(collection_ui)
         button: button.property("_atlasOriginalText") or button.text()
         for button in visible
     }
+    original_styles = {button: button.styleSheet() for button in visible}
     for button, label in original_labels.items():
         button.setText(label)
     natural_width = max(button.sizeHint().width() for button in visible)
@@ -294,7 +295,113 @@ def test_history_action_reflows_after_visibility_and_font_changes(collection_ui)
         app.processEvents()
     assert window.history_actions_scroll.viewport().width() > natural_width
     assert all(button.text() == original_labels[button] for button in visible)
+
+    font22_wide_window_width = window.width()
+    window.resize(380, 850)
+    T.QTest.qWait(50)
+    app.processEvents()
+    window._atlas_history_reflow.sync()
+    T.QTest.qWait(50)
+    app.processEvents()
+    assert window.pages.widget(1).width() < 640
+    narrow_viewport_width = window.history_actions_scroll.viewport().width()
+    assert narrow_viewport_width > 0
+
+    window.resize(font22_wide_window_width, 1200)
+    T.QTest.qWait(50)
+    app.processEvents()
+    window._atlas_history_reflow.sync()
+    T.QTest.qWait(50)
+    app.processEvents()
+
+    # Keep the real 22 px layout phase above, then force portable overflow with
+    # a temporary button-local font. Choose its size from the measured labels so
+    # the full caption exceeds the narrow viewport while each word still fits.
+    font_pixel_size = 64
+    natural_width = 0
+    widest_word_with_decoration = 0
+    found_wrapping_font = False
+    for _attempt in range(12):
+        for button in visible:
+            selector = (
+                f"QPushButton#{button.objectName()}"
+                if button.objectName() else "QPushButton"
+            )
+            base_style = original_styles[button].rstrip()
+            test_rule = f"{selector} {{ font-size: {font_pixel_size}px; }}"
+            button.setStyleSheet(
+                f"{base_style}\n{test_rule}" if base_style else test_rule
+            )
+        T.QTest.qWait(30)
+        app.processEvents()
+        for button, label in original_labels.items():
+            button.setText(label)
+        app.processEvents()
+
+        natural_width = max(
+            max(button.sizeHint().width(), button.minimumSizeHint().width())
+            for button in visible
+        )
+        widest_word_with_decoration = 0
+        for button, label in original_labels.items():
+            metrics = button.fontMetrics()
+            text_width = metrics.horizontalAdvance(label)
+            decoration_width = max(0, button.sizeHint().width() - text_width)
+            widest_word_with_decoration = max(
+                widest_word_with_decoration,
+                *(metrics.horizontalAdvance(word) + decoration_width
+                  for word in label.split()),
+            )
+        if (
+            natural_width > narrow_viewport_width
+            and widest_word_with_decoration <= narrow_viewport_width
+        ):
+            found_wrapping_font = True
+            break
+        if natural_width <= narrow_viewport_width:
+            font_pixel_size = min(
+                256,
+                max(
+                    font_pixel_size + 1,
+                    font_pixel_size * (narrow_viewport_width + 16)
+                    // max(1, natural_width) + 1,
+                ),
+            )
+        else:
+            font_pixel_size = max(
+                8,
+                min(
+                    font_pixel_size - 1,
+                    font_pixel_size * max(1, narrow_viewport_width - 16)
+                    // max(1, widest_word_with_decoration),
+                ),
+            )
+    assert found_wrapping_font, (
+        font_pixel_size, narrow_viewport_width, natural_width,
+        widest_word_with_decoration,
+    )
+    assert natural_width > narrow_viewport_width
+    assert widest_word_with_decoration <= narrow_viewport_width
+
+    for _attempt in range(10):
+        for button, label in original_labels.items():
+            button.setText(label)
+        viewport_width = window.history_actions_scroll.viewport().width()
+        if viewport_width > natural_width:
+            break
+        window.resize(
+            window.width() + natural_width + 32 - viewport_width,
+            window.height(),
+        )
+        T.QTest.qWait(50)
+        app.processEvents()
+        window._atlas_history_reflow.sync()
+        T.QTest.qWait(50)
+        app.processEvents()
+    assert window.history_actions_scroll.viewport().width() > natural_width
+    assert all(button.text() == original_labels[button] for button in visible)
     wide_window_width = window.width()
+
     window.resize(380, 850)
     T.QTest.qWait(50)
     app.processEvents()
@@ -305,6 +412,7 @@ def test_history_action_reflows_after_visibility_and_font_changes(collection_ui)
     assert window.pages.widget(1).width() < 640
     viewport_width = window.history_actions_scroll.viewport().width()
     assert viewport_width < natural_width
+    assert widest_word_with_decoration <= viewport_width
     assert any("\n" in button.text() for button in visible)
     _assert_history_action_geometry(window, visible, 1)
     for button in visible:
@@ -312,6 +420,16 @@ def test_history_action_reflows_after_visibility_and_font_changes(collection_ui)
 
     window.resize(wide_window_width, 1200)
     T.QTest.qWait(50)
+    app.processEvents()
+    window._atlas_history_reflow.sync()
+    T.QTest.qWait(50)
+    app.processEvents()
+    for button in visible:
+        assert button.text() == original_labels[button]
+
+    for button, style in original_styles.items():
+        button.setStyleSheet(style)
+    T.QTest.qWait(30)
     app.processEvents()
     window._atlas_history_reflow.sync()
     T.QTest.qWait(50)
