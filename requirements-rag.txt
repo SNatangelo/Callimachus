@@ -3,4 +3,4 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Optional deterministic in-document BM25 ranking for Verify extractive RAG.
 # Install only when selecting a RAG context mode/profile.
-bm25s==0.3.10
+bm25s==0.3.16
