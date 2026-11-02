@@ -1706,6 +1706,121 @@ def test_static_openssl_license_is_added_with_valid_cryptography_wheel_record(tm
         assert record in archive.namelist()
 
 
+def _macos_cryptography_otool_load_commands(*dylib_commands):
+    commands = [
+        ("LC_ID_DYLIB", "@rpath/cryptography.hazmat.bindings._rust.abi3.so"),
+        ("LC_BUILD_VERSION", None),
+        *dylib_commands,
+    ]
+    lines = ["_rust.abi3.so:"]
+    for index, (command, name) in enumerate(commands):
+        lines.extend([f"Load command {index}", f"      cmd {command}", "  cmdsize 56"])
+        if name is not None:
+            lines.append(f"         name {name} (offset 24)")
+        if command == "LC_BUILD_VERSION":
+            lines.extend([" platform MACOS", " minos 14.4", " sdk 26.0"])
+    return "\n".join(lines) + "\n"
+
+
+def _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output):
+    helper = _load("macos_cryptography_load_command_inspector", "prepare_macos_cryptography.py")
+    smoke = _load("macos_cryptography_load_command_smoke", "smoke_desktop.py")
+    extension = tmp_path / "_rust.abi3.so"
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        if args[:2] == ["xcrun", "lipo"]:
+            return "x86_64"
+        assert args == ["/usr/bin/otool", "-arch", "x86_64", "-l", str(extension)]
+        return output
+
+    monkeypatch.setattr(helper, "run", fake_run)
+    monkeypatch.setattr(
+        helper.runpy,
+        "run_path",
+        lambda _path: {"_macos_minimum_versions": smoke._macos_minimum_versions},
+    )
+    return helper.inspect_extension(extension, ROOT), calls
+
+
+def test_macos_cryptography_inspector_ignores_only_dylib_id_for_dependencies(
+    tmp_path, monkeypatch,
+):
+    output = _macos_cryptography_otool_load_commands(
+        ("LC_LOAD_DYLIB", "/usr/lib/libSystem.B.dylib"),
+    )
+
+    proof, calls = _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output)
+
+    assert proof[0] == "14.4"
+    assert proof[2] == ["/usr/lib/libSystem.B.dylib"]
+    assert calls == [
+        ["xcrun", "lipo", "-archs", str(tmp_path / "_rust.abi3.so")],
+        ["/usr/bin/otool", "-arch", "x86_64", "-l", str(tmp_path / "_rust.abi3.so")],
+    ]
+
+
+@pytest.mark.parametrize(
+    "load_command",
+    [
+        "LC_LOAD_DYLIB",
+        "LC_LOAD_WEAK_DYLIB",
+        "LC_REEXPORT_DYLIB",
+        "LC_LAZY_LOAD_DYLIB",
+        "LC_LOAD_UPWARD_DYLIB",
+    ],
+)
+@pytest.mark.parametrize(
+    "dependency",
+    [
+        pytest.param("@rpath/libexternal.dylib", id="external"),
+        pytest.param(
+            "@rpath/cryptography.hazmat.bindings._rust.abi3.so",
+            id="same-as-dylib-id",
+        ),
+    ],
+)
+def test_macos_cryptography_rejects_non_system_dylib_load_commands(
+    tmp_path, monkeypatch, load_command, dependency,
+):
+    output = _macos_cryptography_otool_load_commands((load_command, dependency))
+
+    with pytest.raises(RuntimeError, match="non-system dynamic dependency"):
+        _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output)
+
+
+def test_macos_cryptography_rejects_dynamic_system_openssl_load(tmp_path, monkeypatch):
+    output = _macos_cryptography_otool_load_commands(
+        ("LC_LOAD_DYLIB", "/usr/lib/libcrypto.dylib"),
+    )
+
+    with pytest.raises(RuntimeError, match="dynamically links OpenSSL"):
+        _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output)
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    ["missing-command-type", "missing-dylib-name", "missing-dylib-id-name"],
+)
+def test_macos_cryptography_rejects_malformed_dylib_load_commands(
+    tmp_path, monkeypatch, malformation,
+):
+    if malformation == "missing-command-type":
+        output = _macos_cryptography_otool_load_commands() + "Load command 2\n  cmdsize 8\n"
+    elif malformation == "missing-dylib-name":
+        output = _macos_cryptography_otool_load_commands(("LC_LOAD_DYLIB", None))
+    else:
+        output = _macos_cryptography_otool_load_commands().replace(
+            "         name @rpath/cryptography.hazmat.bindings._rust.abi3.so (offset 24)\n",
+            "",
+            1,
+        )
+
+    with pytest.raises(RuntimeError, match="malformed Mach-O"):
+        _inspect_macos_cryptography_load_commands(monkeypatch, tmp_path, output)
+
+
 def test_macos_cryptography_wheel_build_prepends_venv_bin_to_rust_path(tmp_path, monkeypatch):
     helper = _load("macos_cryptography_wheel_path", "prepare_macos_cryptography.py")
     build_venv = tmp_path / "build-venv"

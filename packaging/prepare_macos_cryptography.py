@@ -396,6 +396,48 @@ def add_openssl_license(wheel: Path, license_body: bytes) -> None:
     verify_wheel_record(wheel)
 
 
+_MACOS_DYLIB_LOAD_COMMANDS = frozenset({
+    "LC_LOAD_DYLIB",
+    "LC_LOAD_WEAK_DYLIB",
+    "LC_REEXPORT_DYLIB",
+    "LC_LAZY_LOAD_DYLIB",
+    "LC_LOAD_UPWARD_DYLIB",
+})
+_MACOS_DYLIB_COMMANDS = _MACOS_DYLIB_LOAD_COMMANDS | {"LC_ID_DYLIB"}
+
+
+def _macos_dynamic_dependencies(load_commands: str) -> list[str]:
+    """Extract dependent dylibs from actual Mach-O load commands."""
+    sections = list(re.finditer(r"(?m)^\s*Load command\s+\d+\s*$", load_commands))
+    if not sections:
+        raise RuntimeError("otool load-command output contains no Mach-O load commands")
+
+    dependencies = []
+    for index, section in enumerate(sections):
+        end = sections[index + 1].start() if index + 1 < len(sections) else len(load_commands)
+        block = load_commands[section.end():end]
+        commands = re.findall(r"(?m)^\s*cmd\s+([A-Za-z0-9_]+)\s*$", block)
+        if len(commands) != 1:
+            raise RuntimeError(
+                "malformed Mach-O load-command output: expected exactly one cmd field"
+            )
+        command = commands[0]
+        if command not in _MACOS_DYLIB_COMMANDS:
+            continue
+
+        names = re.findall(
+            r"(?m)^\s*name\s+(.+?)\s+\(offset\s+\d+\)\s*$",
+            block,
+        )
+        if len(names) != 1 or not names[0].strip():
+            raise RuntimeError(
+                f"malformed Mach-O {command} load command: expected exactly one name field"
+            )
+        if command != "LC_ID_DYLIB":
+            dependencies.append(names[0].strip())
+    return dependencies
+
+
 def inspect_extension(path: Path, root: Path) -> tuple[str, str, list[str]]:
     if run(["xcrun", "lipo", "-archs", str(path)]) != "x86_64":
         raise RuntimeError("cryptography extension is not a single-architecture Intel binary")
@@ -403,13 +445,8 @@ def inspect_extension(path: Path, root: Path) -> tuple[str, str, list[str]]:
     load_commands = run(["/usr/bin/otool", "-arch", "x86_64", "-l", str(path)])
     minimums = audit["_macos_minimum_versions"](load_commands)
     validate_macos_minimums(minimums)
-    linkage = run(["/usr/bin/otool", "-L", str(path)])
-    dependencies = []
-    for line in linkage.splitlines()[1:]:
-        item = line.strip().split(" (compatibility", 1)[0]
-        if not item:
-            continue
-        dependencies.append(item)
+    dependencies = _macos_dynamic_dependencies(load_commands)
+    for item in dependencies:
         if not item.startswith(("/usr/lib/", "/System/Library/")):
             raise RuntimeError(f"cryptography extension has non-system dynamic dependency: {item}")
     if any(re.search(r"lib(?:ssl|crypto)(?:\.|$)", Path(item).name) for item in dependencies):
