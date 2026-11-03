@@ -3,7 +3,7 @@ Cython==3.3.0
 Pygments==2.21.0
 build==1.6.1
 cffi==2.1.1
-cmake==4.4.3
+cmake==4.4.4
 colorama==0.4.6
 coloredlogs==15.0.1
 delvewheel==1.13.2
