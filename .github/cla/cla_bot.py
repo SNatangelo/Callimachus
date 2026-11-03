@@ -21,6 +21,9 @@ from urllib.request import Request, urlopen
 SOURCE = "SNatangelo/Callimachus"
 ARCHIVE = "SNatangelo/callimachus-legal"
 OWNER_ID = 248719534
+DEPENDABOT_ID = 49699333
+DEPENDABOT_LOGIN = "dependabot[bot]"
+DEPENDABOT_EXEMPTION_REASON = "verified_same_source_repository_dependabot_pr_opener"
 VERSION = "1.1"
 AGREEMENT_PATH = ".github/cla/agreements/CLA-v1.1.md"
 AGREEMENT_SHA256 = "f89491e1cf64c52a5119adabe9928c665af0392c23af76258ce4446f003d9634"
@@ -127,9 +130,49 @@ def valid_signature(record, user_id):
             and bool(record.get("accepted_at")))
 
 
-def contributor_ids(api: API, pr_number: int, opener):
-    """Include the submitter and every GitHub-linked author/coauthor, not just committer."""
-    people = {opener["id"]: opener["login"]}
+def trusted_dependabot_exemption(pr):
+    """Return an auditable exemption only for the exact same-repository bot PR."""
+    if not isinstance(pr, dict):
+        return None
+    opener = pr.get("user") or {}
+    head_repo = ((pr.get("head") or {}).get("repo") or {})
+    base_repo = ((pr.get("base") or {}).get("repo") or {})
+    head_name = head_repo.get("full_name")
+    base_name = base_repo.get("full_name")
+    if (
+        opener.get("id") != DEPENDABOT_ID
+        or opener.get("login") != DEPENDABOT_LOGIN
+        or opener.get("type") != "Bot"
+        or not isinstance(head_name, str)
+        or head_name.lower() != SOURCE.lower()
+        or head_repo.get("fork") is not False
+        or not isinstance(base_name, str)
+        or base_name.lower() != SOURCE.lower()
+    ):
+        return None
+    return {
+        "github_user_id": DEPENDABOT_ID,
+        "github_username": DEPENDABOT_LOGIN,
+        "identity_type": "Bot",
+        "reason": DEPENDABOT_EXEMPTION_REASON,
+        "head_repository": head_name,
+        "base_repository": base_name,
+    }
+
+
+def contributor_ids(api: API, pr_number: int, opener, pr_context=None):
+    """Include the submitter and every GitHub-linked author/coauthor.
+
+    A bot opener is excluded only when the full GitHub PR context independently
+    verifies the exact Dependabot bot and same-source-repository head. All commit
+    authors are still enumerated, and unlinked authors remain a hard failure.
+    """
+    automation_exemption = trusted_dependabot_exemption(pr_context)
+    if pr_context is not None:
+        context_opener = pr_context.get("user") or {}
+        if any(opener.get(key) != context_opener.get(key) for key in ("id", "login", "type")):
+            raise Failure("Pull request opener context mismatch; manual review required")
+    people = {} if automation_exemption else {opener["id"]: opener["login"]}
     query = """query($number:Int!, $after:String) {
       repository(owner:"SNatangelo", name:"Callimachus") {
         pullRequest(number:$number) { commits(first:100, after:$after) {
@@ -154,7 +197,13 @@ def contributor_ids(api: API, pr_number: int, opener):
                 user = actor.get("user")
                 if not user or not isinstance(user.get("databaseId"), int):
                     raise Failure("An author/coauthor is not linked to GitHub; resolve attribution before merge")
-                people[user["databaseId"]] = user["login"]
+                uid = user["databaseId"]
+                login = user.get("login")
+                if automation_exemption and uid == DEPENDABOT_ID:
+                    if login != DEPENDABOT_LOGIN:
+                        raise Failure("Dependabot author identity differs from the verified PR opener")
+                    continue
+                people[uid] = login
         if not connection["pageInfo"]["hasNextPage"]:
             # The original maintainer already owns his own contributions. No bot wildcard exemptions.
             people.pop(OWNER_ID, None)
@@ -202,7 +251,8 @@ def execute(public: API, private: API, event: dict, env: dict):
             "schema": 1, "version": VERSION, "sha256": AGREEMENT_SHA256,
             "source_repository": SOURCE, "source_path": AGREEMENT_PATH,
             "archive_path": archive_path, "signature_text": SIGN}))
-        people = contributor_ids(public, number, pr["user"])
+        automation_exemption = trusted_dependabot_exemption(pr)
+        people = contributor_ids(public, number, pr["user"], pr_context=pr)
         comments = list(public.pages(f"/repos/{SOURCE}/issues/{number}/comments"))
         prompts = [c for c in comments if MARKER in (c.get("body") or "")
                    and (c.get("user") or {}).get("login") == "github-actions[bot]"
@@ -265,10 +315,13 @@ def execute(public: API, private: API, event: dict, env: dict):
             status("failure", "CLA acceptance missing; follow the bot comment")
             return
         # This record binds the successful check to the exact PR head and version.
-        put_once(private, f"checks/v{VERSION}/pr-{number}/{sha}.json", json_bytes({
+        check_record = {
             "schema": 1, "agreement_sha256": AGREEMENT_SHA256,
             "repository": SOURCE, "pull_request": number, "head_sha": sha,
-            "github_user_ids": sorted(people), "maintainer_exemption_id": OWNER_ID}))
+            "github_user_ids": sorted(people), "maintainer_exemption_id": OWNER_ID}
+        if automation_exemption:
+            check_record["automation_exemptions"] = [automation_exemption]
+        put_once(private, f"checks/v{VERSION}/pr-{number}/{sha}.json", json_bytes(check_record))
         status("success", "CLA acceptance verified; versioned evidence preserved privately")
     except Exception:
         status("failure", "CLA check/archive unavailable; inspect workflow configuration")
