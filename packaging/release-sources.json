@@ -29,20 +29,20 @@
   {
     "name": "PyMuPDF",
     "constraint": "PyMuPDF",
-    "package_version": "1.28.0",
-    "version": "1.28.0",
-    "filename": "pymupdf-1.28.0.tar.gz",
-    "url": "https://files.pythonhosted.org/packages/8e/e9/6d6c5d6c0a3551bffd47681a6240caf941727f195b45593cf20ab36f018f/pymupdf-1.28.0.tar.gz",
-    "sha256": "e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d"
+    "package_version": "1.28.2",
+    "version": "1.28.2",
+    "filename": "pymupdf-1.28.2.tar.gz",
+    "url": "https://files.pythonhosted.org/packages/a3/fb/b6761fa2d5266f2cdb24c3b91f4023070ab7848381417678e7a289a1d52a/pymupdf-1.28.2.tar.gz",
+    "sha256": "5e0be7908a715aa20333caddd73f1d6f01e4cd0c26e869fa2dd0b7f344da2249"
   },
   {
     "name": "MuPDF",
     "constraint": "PyMuPDF",
-    "package_version": "1.28.0",
-    "version": "1.28.0",
-    "filename": "mupdf-1.28.0-source.tar.gz",
-    "url": "https://github.com/ArtifexSoftware/mupdf-downloads/releases/download/1.28.0/mupdf-1.28.0-source.tar.gz",
-    "sha256": "21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2"
+    "package_version": "1.28.2",
+    "version": "1.28.2",
+    "filename": "mupdf-1.28.2-source.tar.gz",
+    "url": "https://github.com/ArtifexSoftware/mupdf-downloads/releases/download/1.28.2/mupdf-1.28.2-source.tar.gz",
+    "sha256": "44075a84e329db55b9bef5f342a70fd26d69e48ad1d33cb89d9664581c641156"
   },
   {
     "name": "OpenCV Python",

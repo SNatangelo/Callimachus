@@ -1,5 +1,5 @@
 altgraph==0.17.5
-bm25s==0.3.16
+bm25s==0.3.10
 certifi==2026.10.23
 colorama==0.4.6
 colorlog==6.12.0

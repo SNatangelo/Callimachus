@@ -415,7 +415,7 @@ def test_staged_recipe_reads_active_constraints_from_project_root():
 
     active = recipe.validated_active_constraints(expected)
     assert active == {
-        "certifi": "2026.10.19",
+        "certifi": "2026.10.23",
         "pip": "26.2.2",
         "setuptools": "84.1.0",
         "wheel": "0.46.3",
