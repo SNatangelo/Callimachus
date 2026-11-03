@@ -9,7 +9,7 @@ updates:
       - /packaging/store/native-recipes
     schedule:
       interval: daily
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     groups:
       security-patches:
         applies-to: security-updates
