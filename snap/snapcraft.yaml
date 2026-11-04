@@ -1,0 +1,60 @@
+name: callimachus
+title: Callimachus
+base: core22
+version: '2.0.2'
+summary: Verify citations and source evidence in scientific manuscripts
+description: |
+  Callimachus is an open-source citation verification workspace for scientific
+  writing. It checks references, identifies potentially unsupported claims,
+  retrieves source evidence, and produces traceable verification reports.
+
+  The desktop interface includes guided source retrieval, PDF handling, and
+  configurable language-model checks. Results remain reviewable by the user.
+
+  To store provider credentials in the Linux Secret Service, connect the
+  password-manager-service interface after installation:
+    sudo snap connect callimachus:password-manager-service
+
+  Files on removable drives require the removable-media connection.
+website: https://callimachus.science
+source-code: https://github.com/SNatangelo/Callimachus
+issues: https://github.com/SNatangelo/Callimachus/issues
+license: AGPL-3.0-only
+grade: stable
+confinement: strict
+architectures:
+  - build-on: amd64
+    build-for: amd64
+icon: snap/gui/callimachus.png
+
+apps:
+  callimachus:
+    command: Callimachus/Callimachus
+    plugs:
+      - desktop
+      - desktop-legacy
+      - home
+      - network
+      - opengl
+      - password-manager-service
+      - removable-media
+      - wayland
+      - x11
+
+parts:
+  callimachus:
+    plugin: dump
+    # Use the audited, prebuilt Linux bundle from the GitHub release rather
+    # than rebuilding the Qt/PySide/PyInstaller toolchain a second time.
+    # packaging/prepare_snap_release.py updates all three pinned values for CI.
+    source: https://github.com/SNatangelo/Callimachus/releases/download/v2.0.2/Callimachus-linux-x64.tar.gz
+    source-type: tar
+    source-checksum: sha256/19567db4ecc13835753f25b9977224a78d5d2ef379197ae4c32be7b302eb154d
+    stage-packages:
+      - libegl1
+      - libfontconfig1
+      - libfreetype6
+      - libgl1
+      - libgtk-3-0
+      - libxcb1
+      - libxkbcommon-x11-0
