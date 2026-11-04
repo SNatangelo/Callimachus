@@ -1,0 +1,53 @@
+# Build Callimachus from its checksum-verified, prebuilt Linux release archive.
+name: Snap package
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published Callimachus release (e.g. v2.0.2)
+        type: string
+        required: true
+        default: v2.0.2
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  snap:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Pin the exact GitHub release and Linux asset checksum
+        env:
+          CALLIMACHUS_RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: python packaging/prepare_snap_release.py "$CALLIMACHUS_RELEASE_TAG"
+      - name: Build Snap package
+        id: build
+        uses: canonical/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
+      - name: Retain built package for testing
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: callimachus-snap
+          path: ${{ steps.build.outputs.snap }}
+          if-no-files-found: error
+      - name: Check whether store publishing is configured
+        id: creds
+        env:
+          STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        run: |
+          if [ -n "$STORE_CREDENTIALS" ]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload to Snap Store edge channel
+        if: steps.creds.outputs.available == 'true'
+        uses: canonical/action-publish@214b86e5ca036ead1668c79afb81e550e6c54d40 # v1.2.0
+        env:
+          SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+        with:
+          snap: ${{ steps.build.outputs.snap }}
+          release: edge

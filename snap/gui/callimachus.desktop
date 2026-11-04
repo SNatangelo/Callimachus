@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Callimachus
+GenericName=Citation Verifier
+Comment=Verify citations and trace source evidence
+Exec=callimachus
+Icon=${SNAP}/meta/gui/callimachus.png
+Terminal=false
+Categories=Science;Education;Office;
+StartupNotify=true
